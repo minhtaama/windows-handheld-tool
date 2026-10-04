@@ -3,7 +3,7 @@ import '../core/config.dart';
 import '../services/overlay_controller.dart';
 import 'quick_panel.dart';
 
-/// Màn hình Side Dock Panel có hoạt cảnh trượt mượt mà từ mép phải màn hình.
+/// Màn hình Side Dock Panel có hoạt cảnh Fade mượt mà (chống tràn pixel tuyệt đối).
 class OverlayScreen extends StatefulWidget {
   final ConfigManager config;
 
@@ -16,38 +16,42 @@ class OverlayScreen extends StatefulWidget {
 class _OverlayScreenState extends State<OverlayScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _animController;
-  late final Animation<Offset> _slideAnimation;
+  late final Animation<double> _fadeAnimation;
 
   @override
   void initState() {
     super.initState();
 
-    final durationMs = widget.config.get("overlay.animation_duration_ms", 200);
+    final durationMs = widget.config.get("overlay.animation_duration_ms", 150);
 
     _animController = AnimationController(
       vsync: this,
       duration: Duration(milliseconds: durationMs),
-      reverseDuration: const Duration(milliseconds: 180),
+      reverseDuration: const Duration(milliseconds: 120),
       value: 1.0, // Ban đầu đã ở vị trí sẵn sàng
     );
 
-    // Hoạt cảnh trượt: từ mép phải (Offset(1.0, 0.0)) vào vị trí hiển thị (Offset.zero)
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(1.0, 0.0),
-      end: Offset.zero,
+    // Hoạt cảnh Fade: mờ dần - sáng dần (không can thiệp tọa độ X/Y, chống lệch ma trận render)
+    _fadeAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
     ).animate(CurvedAnimation(
       parent: _animController,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeInCubic,
+      curve: Curves.easeOut,
+      reverseCurve: Curves.easeIn,
     ));
 
-    // Đăng ký bộ kích hoạt hoạt cảnh trượt với OverlayController
+    // Đăng ký bộ kích hoạt hoạt cảnh với OverlayController
     OverlayController.instance.onAnimateShow = () async {
-      await _animController.forward(from: 0.0);
+      try {
+        await _animController.forward(from: 0.0);
+      } catch (_) {}
     };
 
     OverlayController.instance.onAnimateHide = () async {
-      await _animController.reverse();
+      try {
+        await _animController.reverse();
+      } catch (_) {}
     };
   }
 
@@ -63,8 +67,8 @@ class _OverlayScreenState extends State<OverlayScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent,
-      body: SlideTransition(
-        position: _slideAnimation,
+      body: FadeTransition(
+        opacity: _fadeAnimation,
         child: QuickSettingsPanel(config: widget.config),
       ),
     );

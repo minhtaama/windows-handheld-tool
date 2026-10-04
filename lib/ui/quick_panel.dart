@@ -193,6 +193,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   @override
   Widget build(BuildContext context) {
     return Container(
+      width: double.infinity,
+      height: double.infinity,
       decoration: const BoxDecoration(
         color: AppTheme.background,
         border: Border(
@@ -224,17 +226,20 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text("QUICK SETTINGS", style: AppTheme.headerTitle),
-                      Text(
-                        "${DeviceInfoService.currentDevice.displayName} & Handheld Tool",
-                        style: AppTheme.headerSubtitle,
-                      ),
-                    ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("QUICK SETTINGS", style: AppTheme.headerTitle),
+                        Text(
+                          "${DeviceInfoService.currentDevice.displayName} & Handheld Tool",
+                          style: AppTheme.headerSubtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
                   ),
-                  const Spacer(),
                   IconButton(
                     icon: const Icon(Icons.close, color: Colors.white70),
                     splashRadius: 20,

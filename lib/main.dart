@@ -25,6 +25,7 @@ void main() async {
   await TouchscreenService.init();
   await RtssService.instance.ensureRunning();
   final config = ConfigManager();
+  OverlayController.instance.config = config;
 
   // 1. Cấu hình Cửa sổ Side-Panel (Áp sát mép phải màn hình)
   await windowManager.ensureInitialized();
@@ -32,7 +33,8 @@ void main() async {
   final primaryDisplay = await screenRetriever.getPrimaryDisplay();
   final screenHeight = primaryDisplay.size.height;
   final screenWidth = primaryDisplay.size.width;
-  final panelWidth = config.get("overlay.width", 380).toDouble();
+  final widthPercent = config.get("overlay.width_percent", 28).toDouble();
+  final panelWidth = (screenWidth * (widthPercent / 100.0)).clamp(280.0, screenWidth * 0.6);
 
   final windowOptions = WindowOptions(
     title: 'Handheld Quick Settings',

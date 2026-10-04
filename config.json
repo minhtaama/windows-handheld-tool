@@ -1,6 +1,7 @@
 {
     "overlay": {
         "width": 360,
+        "width_percent": 28,
         "animation_duration_ms": 220,
         "side": "right"
     },
@@ -34,7 +35,7 @@
             "min": 0,
             "max": 100,
             "step": 5,
-            "current": 40
+            "current": 20
         },
         "volume": {
             "min": 0,
@@ -43,7 +44,7 @@
             "current": 50
         },
         "audio": {
-            "current": 52
+            "current": 44
         },
         "rtss": {
             "fps_limit": 60
