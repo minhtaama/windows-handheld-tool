@@ -34,7 +34,7 @@
             "min": 0,
             "max": 100,
             "step": 5,
-            "current": 60
+            "current": 40
         },
         "volume": {
             "min": 0,
@@ -43,7 +43,7 @@
             "current": 50
         },
         "audio": {
-            "current": 42
+            "current": 52
         }
     }
 }

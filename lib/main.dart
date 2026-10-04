@@ -31,7 +31,7 @@ void main() async {
   final windowOptions = WindowOptions(
     title: 'Handheld Quick Settings',
     size: Size(panelWidth, screenHeight),
-    backgroundColor: AppTheme.background,
+    backgroundColor: Colors.transparent,
     skipTaskbar: true,
     alwaysOnTop: true,
     titleBarStyle: TitleBarStyle.hidden,
@@ -39,6 +39,7 @@ void main() async {
 
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAsFrameless();
+    await windowManager.setBackgroundColor(Colors.transparent);
     await windowManager.setSize(Size(panelWidth, screenHeight));
     await windowManager.setPosition(Offset(screenWidth - panelWidth, 0));
     await windowManager.setAlwaysOnTop(true);
