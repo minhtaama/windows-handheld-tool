@@ -44,6 +44,9 @@
         },
         "audio": {
             "current": 52
+        },
+        "rtss": {
+            "fps_limit": 60
         }
     }
 }

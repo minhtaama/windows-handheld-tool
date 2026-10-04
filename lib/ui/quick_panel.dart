@@ -7,6 +7,7 @@ import '../hardware/tdp_service.dart';
 import '../hardware/fan_service.dart';
 import '../hardware/brightness_service.dart';
 import '../hardware/audio_service.dart';
+import '../hardware/rtss_service.dart';
 import '../services/virtual_keyboard_service.dart';
 import '../services/overlay_controller.dart';
 import 'widgets/setting_slider.dart';
@@ -27,16 +28,21 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late final FanController _fanCtrl;
   late final BrightnessController _brightnessCtrl;
   late final AudioController _audioCtrl;
+  late final RtssFpsController _rtssCtrl;
 
   late int _tdp;
   late int _fan;
   late bool _fanAuto;
   late int _brightness;
   late int _audio;
+  late int _fpsLimit;
 
   // Dữ liệu đo cảm biến thực tế tức thời (Hardware Telemetry)
   late int _liveTdp;
   late int _liveFan;
+  int? _liveFps;
+  String? _activeGame;
+  bool _isRtssRunning = false;
   Timer? _telemetryTimer;
 
   @override
@@ -67,6 +73,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       step: widget.config.get("hardware.audio.step", 2),
       defaultVal: widget.config.get("hardware.audio.current", 50),
     );
+    _rtssCtrl = RtssFpsController();
 
     _tdp = _tdpCtrl.getValue();
     _fan = _fanCtrl.getValue();
@@ -74,11 +81,16 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _brightness = _brightnessCtrl.getValue();
     _audio = _audioCtrl.getValue();
 
+    // Lấy cấu hình FPS limit từ file profile của RTSS hoặc từ config.json
+    final savedFps = widget.config.get("hardware.rtss.fps_limit", 60);
+    _fpsLimit = _rtssCtrl.isAvailable() ? _rtssCtrl.getValue() : savedFps;
+
     _liveTdp = (_tdp * 0.85).round().clamp(_tdpCtrl.minVal, _tdp);
     _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
+    _isRtssRunning = _rtssCtrl.isAvailable();
 
-    // Kích hoạt Timer quét cảm biến phần cứng thực tế định kỳ 1.2s khi panel mở
-    _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1200), (timer) {
+    // Kích hoạt Timer quét cảm biến phần cứng thực tế định kỳ 1s khi panel mở
+    _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1000), (timer) {
       if (!mounted) return;
       setState(() {
         // Cập nhật dao động công suất thực tế tức thời theo tải chip
@@ -89,6 +101,16 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           _liveFan = (_liveTdp * 2.6).round().clamp(30, 95);
         } else {
           _liveFan = _fan;
+        }
+
+        // Đọc dữ liệu Telemetry từ RTSS (FPS và tên game)
+        _isRtssRunning = _rtssCtrl.isAvailable();
+        if (_isRtssRunning) {
+          _liveFps = _rtssCtrl.getLiveFps();
+          _activeGame = _rtssCtrl.getActiveGame();
+        } else {
+          _liveFps = null;
+          _activeGame = null;
         }
       });
     });
@@ -125,6 +147,12 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     setState(() => _fanAuto = nextAuto);
     _fanCtrl.setAuto(nextAuto);
     widget.config.set("hardware.fan.auto", nextAuto);
+  }
+
+  void _updateFpsLimit(int val) {
+    setState(() => _fpsLimit = val);
+    _rtssCtrl.setValue(val);
+    widget.config.set("hardware.rtss.fps_limit", val);
   }
 
   void _updateBrightness(int val) {
@@ -196,7 +224,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
                 children: [
-                  // Nhóm 1: Hiệu năng & Năng lượng (Có thanh đo kép Live vs Target)
+                  // Nhóm 1: Năng lượng & Tản nhiệt (Coaxial Dual-Gauge)
                   _buildSectionLabel("NĂNG LƯỢNG & TẢN NHIỆT"),
                   SettingSlider(
                     icon: Icons.bolt,
@@ -223,15 +251,15 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                     currentColor: const Color(0xFF00D2FF), // Màu xanh Neon làm mát
                     onChanged: _updateFan,
                     trailing: InkWell(
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(4),
                       onTap: _toggleFanAuto,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
                           color: _fanAuto
                               ? AppTheme.primaryNeon.withValues(alpha: 0.15)
                               : Colors.white.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(4),
                           border: Border.all(
                             color: _fanAuto
                                 ? AppTheme.primaryNeon.withValues(alpha: 0.4)
@@ -251,7 +279,39 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                   ),
                   const SizedBox(height: 18),
 
-                  // Nhóm 2: Màn hình & Âm thanh
+                  // Nhóm 2: Hiệu năng & RTSS Framerate Limiter
+                  _buildSectionLabel("HIỆU NĂNG & KHUNG HÌNH (RTSS)"),
+                  SettingSlider(
+                    icon: Icons.speed,
+                    title: _activeGame != null
+                        ? "Giới hạn FPS ($_activeGame)"
+                        : "Giới hạn FPS",
+                    value: _fpsLimit,
+                    min: _rtssCtrl.minVal,
+                    max: _rtssCtrl.maxVal,
+                    step: _rtssCtrl.step,
+                    unit: _rtssCtrl.unit,
+                    currentValue: _liveFps,
+                    currentColor: const Color(0xFF2ECC71), // Màu xanh lá tốc độ mượt mà
+                    quickPresets: const [0, 30, 40, 60],
+                    onChanged: _updateFpsLimit,
+                    trailing: !_isRtssRunning
+                        ? Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.06),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              "RTSS Tắt",
+                              style: TextStyle(fontSize: 10, color: Colors.white38),
+                            ),
+                          )
+                        : null,
+                  ),
+                  const SizedBox(height: 18),
+
+                  // Nhóm 3: Màn hình & Âm thanh
                   _buildSectionLabel("MÀN HÌNH & ÂM THANH"),
                   SettingSlider(
                     icon: Icons.brightness_6,
@@ -276,7 +336,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                   ),
                   const SizedBox(height: 18),
 
-                  // Nhóm 3: Phím tắt nhanh dạng Lưới
+                  // Nhóm 4: Thao tác nhanh
                   _buildSectionLabel("THAO TÁC NHANH"),
                   Row(
                     children: [
