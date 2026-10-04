@@ -1,5 +1,7 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
+
 import '../core/app_theme.dart';
 import '../core/config.dart';
 import '../hardware/tdp_service.dart';
@@ -109,25 +111,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     return Container(
       decoration: BoxDecoration(
         color: AppTheme.background,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(AppTheme.panelRadius),
-          bottomLeft: Radius.circular(AppTheme.panelRadius),
-        ),
         border: Border(
-          left: BorderSide(
-            color: AppTheme.primaryNeon.withOpacity(0.4),
-            width: 2,
-          ),
-          top: BorderSide(color: Colors.white.withOpacity(0.08)),
-          bottom: BorderSide(color: Colors.white.withOpacity(0.08)),
+          left: BorderSide(color: AppTheme.primaryNeon, width: 2.0),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.primaryNeon.withOpacity(0.05),
-            blurRadius: 30,
-            spreadRadius: 5,
-          ),
-        ],
       ),
       child: SafeArea(
         child: Column(
@@ -155,7 +141,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text("QUICK SETTINGS", style: AppTheme.headerTitle),
-                      Text("GPD Win 4 & Handheld Tool", style: AppTheme.headerSubtitle),
+                      Text(
+                        "GPD Win 4 & Handheld Tool",
+                        style: AppTheme.headerSubtitle,
+                      ),
                     ],
                   ),
                   const Spacer(),
@@ -172,7 +161,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             // 2. Nội dung cuộn chính
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 14,
+                ),
                 children: [
                   // Nhóm 1: Hiệu năng & Năng lượng
                   _buildSectionLabel("NĂNG LƯỢNG & TẢN NHIỆT"),
@@ -202,12 +194,14 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
-                          color: _fanAuto ? AppTheme.primaryNeon : Colors.white70,
+                          color: _fanAuto
+                              ? AppTheme.primaryNeon
+                              : Colors.white70,
                         ),
                       ),
                       backgroundColor: _fanAuto
-                          ? AppTheme.primaryNeon.withOpacity(0.15)
-                          : Colors.white.withOpacity(0.08),
+                          ? AppTheme.primaryNeon.withValues(alpha: 0.15)
+                          : Colors.white.withValues(alpha: 0.08),
                       padding: EdgeInsets.zero,
                       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       onPressed: _toggleFanAuto,
@@ -279,7 +273,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                           subtitle: "Đổi độ phân giải",
                           onTap: () {
                             OverlayController.instance.hideOverlay();
-                            Process.start('explorer.exe', ['ms-settings:display'], runInShell: true);
+                            Process.start('explorer.exe', [
+                              'ms-settings:display',
+                            ], runInShell: true);
                           },
                         ),
                       ),

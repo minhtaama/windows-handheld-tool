@@ -1,37 +1,77 @@
 import 'dart:io';
 import '../core/logger.dart';
 
-/// Dịch vụ kích hoạt bàn phím cảm ứng ảo trên máy Handheld Windows (GPD Win 4, ROG Ally).
+/// Dịch vụ điều khiển Bàn phím ảo Windows Touch Keyboard (TabTip)
+/// Sử dụng phương thức chuẩn ITipInvocation.Toggle() tương tự như Handheld Companion.
 class VirtualKeyboardService {
   static const _logger = AppLogger('VirtualKeyboard');
 
-  static final List<String> _tabTipCandidates = [
-    r'C:\Program Files\Common Files\microsoft shared\ink\TabTip.exe',
-    r'C:\Program Files (x86)\Common Files\microsoft shared\ink\TabTip.exe',
-  ];
-
+  /// Kích hoạt Toggle bàn phím ảo (Touch Keyboard) của Windows 10/11.
   static Future<bool> toggleKeyboard() async {
-    // 1. Thử gọi TabTip.exe của Windows
-    for (final path in _tabTipCandidates) {
+    _logger.info('Đang gửi lệnh ITipInvocation.Toggle() để đóng/mở bàn phím ảo...');
+
+    // Lệnh PowerShell chuẩn kích hoạt COM Interface ITipInvocation::Toggle
+    const psScript = '''
+\$code = @"
+using System;
+using System.Runtime.InteropServices;
+[ComImport, Guid("37c994e7-432b-4834-a2f7-dce1f13b834b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface ITipInvocation {
+    [PreserveSig]
+    int Toggle(IntPtr hwndDesktop);
+}
+public class TouchKeyboard {
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDesktopWindow();
+    public static int Toggle() {
+        try {
+            var clsid = new Guid("4ce576fa-83dc-4f88-951c-9d0782b4e376");
+            var type = Type.GetTypeFromCLSID(clsid);
+            var instance = (ITipInvocation)Activator.CreateInstance(type);
+            return instance.Toggle(GetDesktopWindow());
+        } catch {
+            return -1;
+        }
+    }
+}
+"@
+Add-Type -TypeDefinition \$code
+[TouchKeyboard]::Toggle()
+''';
+
+    try {
+      final result = await Process.run(
+        'powershell',
+        ['-NoProfile', '-NonInteractive', '-Command', psScript],
+      );
+
+      final output = result.stdout.toString().trim();
+      if (output == '0') {
+        _logger.info('Đã gọi thành công ITipInvocation.Toggle() (Mã: S_OK).');
+        return true;
+      } else {
+        _logger.warning('Lệnh ITipInvocation trả về mã lỗi: $output. Thử fallback TabTip.');
+      }
+    } catch (e) {
+      _logger.error('Lỗi khi kích hoạt ITipInvocation qua PowerShell', e);
+    }
+
+    // Fallback: Chạy trực tiếp TabTip.exe nếu COM chưa kích hoạt
+    final tabTipPaths = [
+      r'C:\Program Files\Common Files\microsoft shared\ink\TabTip.exe',
+      r'C:\Program Files (x86)\Common Files\microsoft shared\ink\TabTip.exe',
+    ];
+
+    for (final path in tabTipPaths) {
       if (File(path).existsSync()) {
         try {
           await Process.start(path, [], runInShell: true);
-          _logger.info('Đã khởi chạy bàn phím ảo TabTip: $path');
+          _logger.info('Đã chạy fallback TabTip.exe: $path');
           return true;
-        } catch (e) {
-          _logger.warning('Không thể khởi chạy $path: $e');
-        }
+        } catch (_) {}
       }
     }
 
-    // 2. Fallback sang bàn phím osk.exe tiêu chuẩn của Windows
-    try {
-      await Process.start(r'C:\Windows\System32\osk.exe', [], runInShell: true);
-      _logger.info('Đã khởi chạy bàn phím ảo dự phòng osk.exe.');
-      return true;
-    } catch (e) {
-      _logger.error('Lỗi khi mở bàn phím ảo', e);
-      return false;
-    }
+    return false;
   }
 }

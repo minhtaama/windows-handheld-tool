@@ -36,7 +36,7 @@ class ActionButton extends StatelessWidget {
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: AppTheme.primaryNeon.withOpacity(0.12),
+                  color: AppTheme.primaryNeon.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(icon, size: 20, color: AppTheme.primaryNeon),

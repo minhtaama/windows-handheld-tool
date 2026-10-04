@@ -1,7 +1,9 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
+import 'package:screen_retriever/screen_retriever.dart';
 
 import 'core/app_theme.dart';
 import 'core/config.dart';
@@ -18,25 +20,35 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final config = ConfigManager();
 
-  // 1. Cấu hình Cửa sổ Windows (Window Manager)
+  // 1. Cấu hình Cửa sổ Side-Panel (Áp sát mép phải màn hình)
   await windowManager.ensureInitialized();
 
-  const windowOptions = WindowOptions(
+  final primaryDisplay = await screenRetriever.getPrimaryDisplay();
+  final screenHeight = primaryDisplay.size.height;
+  final screenWidth = primaryDisplay.size.width;
+  final panelWidth = config.get("overlay.width", 380).toDouble();
+
+  final windowOptions = WindowOptions(
     title: 'Handheld Quick Settings',
-    backgroundColor: Colors.transparent,
+    size: Size(panelWidth, screenHeight),
+    backgroundColor: AppTheme.background,
     skipTaskbar: true,
     alwaysOnTop: true,
+    titleBarStyle: TitleBarStyle.hidden,
   );
 
-  await windowManager.waitUntilReadyToShow(windowOptions, () async {
+  windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAsFrameless();
-    await windowManager.setFullScreen(true);
-    await windowManager.setBackgroundColor(Colors.transparent);
-    // Khởi động ở trạng thái ẩn sẵn sàng chạy ngầm
-    await windowManager.hide();
+    await windowManager.setSize(Size(panelWidth, screenHeight));
+    await windowManager.setPosition(Offset(screenWidth - panelWidth, 0));
+    await windowManager.setAlwaysOnTop(true);
+    // Để Flutter Engine vẽ hoàn thành frame đầu tiên vào DirectX buffer trước khi ẩn
   });
 
-  // 2. Khởi tạo Khay hệ thống (System Tray)
+  // Tự động đóng panel khi người dùng click ra ngoài (mất focus sang game/desktop)
+  windowManager.addListener(_WindowBlurListener());
+
+  // 2. Khởi tạo Khay hệ thống (System Tray) với đường dẫn icon tuyệt đối
   await _initSystemTray();
 
   // 3. Khởi tạo Phím tắt toàn cục (Global Hotkeys)
@@ -59,11 +71,26 @@ void main() async {
   runApp(HandheldApp(config: config));
 }
 
+/// Tự động ẩn cửa sổ khi người dùng click chuột sang game hoặc ứng dụng khác
+class _WindowBlurListener extends WindowListener {
+  @override
+  void onWindowBlur() {
+    OverlayController.instance.handleWindowBlur();
+  }
+}
+
 Future<void> _initSystemTray() async {
   try {
-    await trayManager.setIcon(
-      Platform.isWindows ? 'windows/runner/resources/app_icon.ico' : '',
-    );
+    final iconFile = File('windows/runner/resources/app_icon.ico');
+    final iconPath = iconFile.existsSync() ? iconFile.absolute.path : '';
+
+    if (iconPath.isNotEmpty) {
+      await trayManager.setIcon(iconPath);
+      _logger.info('Đã tải System Tray icon từ: $iconPath');
+    } else {
+      _logger.warning('Không tìm thấy file app_icon.ico');
+    }
+
     await trayManager.setToolTip('Handheld Quick Settings (GPD Win 4)');
 
     final menu = Menu(
@@ -72,15 +99,9 @@ Future<void> _initSystemTray() async {
           key: 'toggle_overlay',
           label: 'Mở Quick Settings (Ctrl+Shift+Q)',
         ),
-        MenuItem(
-          key: 'virtual_keyboard',
-          label: 'Bàn phím ảo (Ctrl+Shift+K)',
-        ),
+        MenuItem(key: 'virtual_keyboard', label: 'Bàn phím ảo (Ctrl+Shift+K)'),
         MenuItem.separator(),
-        MenuItem(
-          key: 'exit_app',
-          label: 'Thoát ứng dụng',
-        ),
+        MenuItem(key: 'exit_app', label: 'Thoát ứng dụng'),
       ],
     );
     await trayManager.setContextMenu(menu);
@@ -115,10 +136,25 @@ class _TrayListener extends TrayListener {
   }
 }
 
-class HandheldApp extends StatelessWidget {
+class HandheldApp extends StatefulWidget {
   final ConfigManager config;
 
   const HandheldApp({super.key, required this.config});
+
+  @override
+  State<HandheldApp> createState() => _HandheldAppState();
+}
+
+class _HandheldAppState extends State<HandheldApp> {
+  @override
+  void initState() {
+    super.initState();
+    // Đợi frame đầu tiên vẽ xong hoàn toàn vào DirectX rồi mới ẩn xuống chạy ngầm
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await Future.delayed(const Duration(milliseconds: 150));
+      await windowManager.hide();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -126,7 +162,7 @@ class HandheldApp extends StatelessWidget {
       title: 'Handheld Quick Settings',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.themeData,
-      home: OverlayScreen(config: config),
+      home: OverlayScreen(config: widget.config),
     );
   }
 }

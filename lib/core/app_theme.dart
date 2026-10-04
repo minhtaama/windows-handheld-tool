@@ -4,10 +4,10 @@ import 'package:flutter/material.dart';
 class AppTheme {
   AppTheme._();
 
-  // Bảng màu chính (Cyberpunk Neon / Deep Dark)
-  static const Color background = Color(0xFA12141D); // Nền tối 98%
-  static const Color cardBackground = Color(0xB31E2230); // Thẻ chức năng mờ
-  static const Color cardBorder = Color(0x1AFFFFFF); // Viền thẻ mờ
+  // Bảng màu chính (Cyberpunk Neon / Deep Dark - Đặt Alpha 0xFF để hiển thị rõ nét trên Windows Transparent Window)
+  static const Color background = Color(0xFF12141D); // Nền tối đặc 100%
+  static const Color cardBackground = Color(0xFF1E2230); // Thẻ chức năng đặc 100%
+  static const Color cardBorder = Color(0xFF2B3245); // Viền thẻ rõ nét
   static const Color primaryNeon = Color(0xFF00D2FF); // Xanh Neon chủ đạo
   static const Color secondaryNeon = Color(0xFF9D00FF); // Tím Cyberpunk
   static const Color textPrimary = Color(0xFFFFFFFF);

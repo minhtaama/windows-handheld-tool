@@ -69,10 +69,10 @@ class SettingSlider extends StatelessWidget {
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 6,
                     activeTrackColor: AppTheme.primaryNeon,
-                    inactiveTrackColor: Colors.white.withOpacity(0.12),
+                    inactiveTrackColor: Colors.white.withValues(alpha: 0.12),
                     thumbColor: Colors.white,
                     thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9),
-                    overlayColor: AppTheme.primaryNeon.withOpacity(0.2),
+                    overlayColor: AppTheme.primaryNeon.withValues(alpha: 0.2),
                   ),
                   child: Slider(
                     value: value.toDouble().clamp(min.toDouble(), max.toDouble()),
@@ -117,7 +117,7 @@ class _StepButton extends StatelessWidget {
           height: 32,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.06),
+            color: Colors.white.withValues(alpha: 0.06),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(icon, size: 16, color: Colors.white70),
