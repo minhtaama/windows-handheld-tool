@@ -217,31 +217,39 @@ class OverlayController extends ChangeNotifier {
   /// Callback kích hoạt hoạt cảnh đóng từ UI
   AsyncCallback? onAnimateHide;
 
-  /// Mở Side Dock Panel với kích thước tự thích ứng với độ phân giải màn hình tức thời.
-  Future<void> showOverlay() async {
+  /// Tính toán và đồng bộ hình học (Geometry) của Side Dock Panel với màn hình chính.
+  /// Tự động thích ứng với độ phân giải tức thời và hỗ trợ co giãn dynamic width theo thời gian thực.
+  Future<void> syncWindowGeometry([double? customWidthPercent]) async {
     try {
-      // 1. Đọc độ phân giải tức thời từ màn hình chính (Tự động thích ứng khi game đổi 720p/900p/1080p)
       final display = await screenRetriever.getPrimaryDisplay();
       final screenWidth = display.size.width;
       final screenHeight = display.size.height;
 
-      // 2. Tính bề rộng panel theo tỷ lệ phần trăm tùy biến (overlay.width_percent)
-      final widthPercent = (config?.get("overlay.width_percent", 28) ?? 28)
-          .toDouble();
+      final widthPercent = customWidthPercent ??
+          (config?.get("overlay.width_percent", 28) ?? 28).toDouble();
       final panelWidth = (screenWidth * (widthPercent / 100.0)).clamp(
         280.0,
         screenWidth * 0.6,
       );
       final targetX = screenWidth - panelWidth;
 
-      // 3. Cập nhật kích thước & vị trí cho Flutter WindowManager
       await windowManager.setSize(Size(panelWidth, screenHeight));
       await windowManager.setPosition(Offset(targetX, 0));
+    } catch (e) {
+      _logger.warning('Lỗi khi đồng bộ kích thước cửa sổ: $e');
+    }
+  }
+
+  /// Mở Side Dock Panel với kích thước tự thích ứng với độ phân giải màn hình tức thời.
+  Future<void> showOverlay() async {
+    try {
+      // 1. Cập nhật kích thước & vị trí bám sát mép phải theo độ phân giải tức thời
+      await syncWindowGeometry();
 
       _isVisible = true;
       notifyListeners();
 
-      // 4. Hiện cửa sổ và đưa lên trên cùng
+      // 2. Hiện cửa sổ và đưa lên trên cùng
       await windowManager.setAlwaysOnTop(true);
       await windowManager.show();
       await windowManager.focus();
@@ -249,14 +257,12 @@ class OverlayController extends ChangeNotifier {
       // Cưỡng chế đưa cửa sổ lên trên cùng của Exclusive Fullscreen bằng AttachThreadInput & SetWindowPos
       _forceForeground();
 
-      // 5. Kích hoạt hoạt cảnh Fade mờ dần sang rõ dần
+      // 3. Kích hoạt hoạt cảnh Fade mờ dần sang rõ dần
       if (onAnimateShow != null) {
         await onAnimateShow!();
       }
 
-      _logger.info(
-        'Đã mở Side Dock Panel (Res: ${screenWidth.round()}x${screenHeight.round()}, Panel: ${panelWidth.round()}x${screenHeight.round()}).',
-      );
+      _logger.info('Đã mở Side Dock Panel thành công.');
     } catch (e) {
       _logger.error('Lỗi khi mở Overlay', e);
     }

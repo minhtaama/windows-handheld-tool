@@ -42,7 +42,6 @@ void main() async {
     backgroundColor: Colors.transparent,
     skipTaskbar: true,
     alwaysOnTop: true,
-    titleBarStyle: TitleBarStyle.hidden,
   );
 
   windowManager.waitUntilReadyToShow(windowOptions, () async {
