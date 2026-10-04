@@ -35,7 +35,7 @@ class HotkeyService {
       );
       await hotKeyManager.register(
         keyboardHotKey,
-        keyDownHandler: (hotKey) {
+        keyUpHandler: (hotKey) {
           _logger.info('Nhận tín hiệu phím tắt: Ctrl + Shift + K');
           onToggleKeyboard();
         },

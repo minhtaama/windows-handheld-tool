@@ -8,6 +8,9 @@ import 'package:screen_retriever/screen_retriever.dart';
 import 'core/app_theme.dart';
 import 'core/config.dart';
 import 'core/logger.dart';
+import 'hardware/device_info_service.dart';
+import 'hardware/touchscreen_service.dart';
+import 'hardware/rtss_service.dart';
 import 'input/hotkey_service.dart';
 import 'input/gamepad_service.dart';
 import 'services/overlay_controller.dart';
@@ -18,6 +21,9 @@ const _logger = AppLogger('Main');
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await DeviceInfoService.init();
+  await TouchscreenService.init();
+  await RtssService.instance.ensureRunning();
   final config = ConfigManager();
 
   // 1. Cấu hình Cửa sổ Side-Panel (Áp sát mép phải màn hình)
@@ -92,7 +98,7 @@ Future<void> _initSystemTray() async {
       _logger.warning('Không tìm thấy file app_icon.ico');
     }
 
-    await trayManager.setToolTip('Handheld Quick Settings (GPD Win 4)');
+    await trayManager.setToolTip('Handheld Quick Settings (${DeviceInfoService.currentDevice.displayName})');
 
     final menu = Menu(
       items: [
@@ -101,6 +107,7 @@ Future<void> _initSystemTray() async {
           label: 'Mở Quick Settings (Ctrl+Shift+Q)',
         ),
         MenuItem(key: 'virtual_keyboard', label: 'Bàn phím ảo (Ctrl+Shift+K)'),
+        MenuItem(key: 'toggle_touchscreen', label: 'Bật/Tắt màn hình cảm ứng'),
         MenuItem.separator(),
         MenuItem(key: 'exit_app', label: 'Thoát ứng dụng'),
       ],
@@ -128,6 +135,9 @@ class _TrayListener extends TrayListener {
         break;
       case 'virtual_keyboard':
         VirtualKeyboardService.toggleKeyboard();
+        break;
+      case 'toggle_touchscreen':
+        TouchscreenService.toggleTouchscreen();
         break;
       case 'exit_app':
         GamepadService.stop();

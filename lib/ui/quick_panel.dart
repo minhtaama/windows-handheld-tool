@@ -8,6 +8,9 @@ import '../hardware/fan_service.dart';
 import '../hardware/brightness_service.dart';
 import '../hardware/audio_service.dart';
 import '../hardware/rtss_service.dart';
+import '../hardware/device_info_service.dart';
+import '../hardware/touchscreen_service.dart';
+import '../services/system_optimizer.dart';
 import '../services/virtual_keyboard_service.dart';
 import '../services/overlay_controller.dart';
 import 'widgets/setting_slider.dart';
@@ -36,6 +39,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late int _brightness;
   late int _audio;
   late int _fpsLimit;
+  late bool _touchEnabled;
 
   // Dữ liệu đo cảm biến thực tế tức thời (Hardware Telemetry)
   late int _liveTdp;
@@ -84,6 +88,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     // Lấy cấu hình FPS limit từ file profile của RTSS hoặc từ config.json
     final savedFps = widget.config.get("hardware.rtss.fps_limit", 60);
     _fpsLimit = _rtssCtrl.isAvailable() ? _rtssCtrl.getValue() : savedFps;
+    _touchEnabled = TouchscreenService.isEnabled;
 
     _liveTdp = (_tdp * 0.85).round().clamp(_tdpCtrl.minVal, _tdp);
     _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
@@ -167,6 +172,24 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     widget.config.set("hardware.audio.current", val);
   }
 
+  Future<void> _toggleTouchscreen() async {
+    final success = await TouchscreenService.toggleTouchscreen();
+    if (mounted) {
+      setState(() {
+        _touchEnabled = TouchscreenService.isEnabled;
+      });
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Cần quyền Administrator để bật/tắt cảm ứng!'),
+            duration: Duration(seconds: 2),
+            backgroundColor: Color(0xFFD63031),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -201,11 +224,14 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  const Column(
+                  Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text("QUICK SETTINGS", style: AppTheme.headerTitle),
-                      Text("GPD Win 4 & Handheld Tool", style: AppTheme.headerSubtitle),
+                      const Text("QUICK SETTINGS", style: AppTheme.headerTitle),
+                      Text(
+                        "${DeviceInfoService.currentDevice.displayName} & Handheld Tool",
+                        style: AppTheme.headerSubtitle,
+                      ),
                     ],
                   ),
                   const Spacer(),
@@ -354,12 +380,37 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: ActionButton(
+                          icon: _touchEnabled ? Icons.touch_app : Icons.do_not_touch,
+                          title: "Cảm ứng",
+                          subtitle: _touchEnabled ? "Đang Bật" : "Đã Tắt",
+                          onTap: _toggleTouchscreen,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ActionButton(
                           icon: Icons.memory,
                           title: "Task Manager",
                           subtitle: "Quản lý tiến trình",
                           onTap: () {
                             OverlayController.instance.hideOverlay();
                             Process.start('taskmgr.exe', [], runInShell: true);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ActionButton(
+                          icon: Icons.display_settings,
+                          title: "Màn hình",
+                          subtitle: "Đổi độ phân giải",
+                          onTap: () {
+                            OverlayController.instance.hideOverlay();
+                            Process.start('explorer.exe', ['ms-settings:display'], runInShell: true);
                           },
                         ),
                       ),
@@ -370,12 +421,17 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                     children: [
                       Expanded(
                         child: ActionButton(
-                          icon: Icons.display_settings,
-                          title: "Màn hình",
-                          subtitle: "Đổi độ phân giải",
+                          icon: Icons.cleaning_services,
+                          title: "Dọn dẹp RAM",
+                          subtitle: "Tối ưu bộ nhớ",
                           onTap: () {
-                            OverlayController.instance.hideOverlay();
-                            Process.start('explorer.exe', ['ms-settings:display'], runInShell: true);
+                            SystemOptimizer.trimMemory();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Đã giải phóng bộ nhớ RAM tiến trình!'),
+                                duration: Duration(seconds: 1),
+                              ),
+                            );
                           },
                         ),
                       ),

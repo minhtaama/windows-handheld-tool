@@ -1,6 +1,7 @@
 import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
+import '../core/logger.dart';
 import 'hardware_base.dart';
 
 // Định nghĩa con trỏ hàm Win32 API từ kernel32.dll
@@ -31,6 +32,7 @@ typedef _CloseHandleDart = int Function(Pointer<Void> hObject);
 /// Dịch vụ kết nối và điều khiển RivaTuner Statistics Server (RTSS).
 /// Sử dụng trực tiếp Win32 Named Shared Memory (RTSSSharedMemoryV2) qua Dart FFI (First Principles).
 class RtssService {
+  static const _logger = AppLogger('RtssService');
   static final RtssService instance = RtssService._();
   RtssService._() {
     _initFfi();
@@ -79,6 +81,37 @@ class RtssService {
     } finally {
       calloc.free(namePtr);
     }
+  }
+
+  /// Đảm bảo RTSS đang chạy. Nếu chưa chạy, tự động tìm và khởi động RTSS.exe
+  Future<bool> ensureRunning() async {
+    if (isRunning()) {
+      _logger.info('RTSS đang chạy ngầm.');
+      return true;
+    }
+
+    final candidateExePaths = [
+      r'C:\Program Files (x86)\RivaTuner Statistics Server\RTSS.exe',
+      r'C:\Program Files\RivaTuner Statistics Server\RTSS.exe',
+      r'D:\Program Files (x86)\RivaTuner Statistics Server\RTSS.exe',
+      r'D:\Program Files\RivaTuner Statistics Server\RTSS.exe',
+    ];
+
+    for (final path in candidateExePaths) {
+      if (File(path).existsSync()) {
+        try {
+          await Process.start(path, [], runInShell: true, mode: ProcessStartMode.detached);
+          _logger.info('Đã tự động khởi chạy RTSS từ: $path');
+          await Future.delayed(const Duration(milliseconds: 1500));
+          return isRunning();
+        } catch (e) {
+          _logger.warning('Lỗi khi khởi chạy RTSS: $e');
+        }
+      }
+    }
+
+    _logger.warning('Không tìm thấy file RTSS.exe để tự động khởi động.');
+    return false;
   }
 
   /// Đọc tốc độ khung hình (FPS) tức thời của trò chơi đang được RTSS hook.
