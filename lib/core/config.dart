@@ -80,7 +80,7 @@ class ConfigManager {
   Map<String, dynamic> _defaultConfig() => {
         "overlay": {
           "width": 360,
-          "width_percent": 28,
+          "width_percent": 35,
           "animation_duration_ms": 220,
           "side": "right",
         },

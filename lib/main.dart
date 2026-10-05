@@ -27,18 +27,18 @@ void main() async {
   final config = ConfigManager();
   OverlayController.instance.config = config;
 
-  // 1. Cấu hình Cửa sổ Side-Panel (Áp sát mép phải màn hình)
+  // 1. Cấu hình Cửa sổ Fullscreen Transparent Overlay (Chuẩn Steam / Xbox Overlay)
   await windowManager.ensureInitialized();
 
   final primaryDisplay = await screenRetriever.getPrimaryDisplay();
   final screenHeight = primaryDisplay.size.height;
   final screenWidth = primaryDisplay.size.width;
-  final widthPercent = config.get("overlay.width_percent", 28).toDouble();
-  final panelWidth = (screenWidth * (widthPercent / 100.0)).clamp(280.0, screenWidth * 0.6);
+
+  _logger.info('DEBUG-MAIN-INIT: PrimaryDisplay Size = ${primaryDisplay.size}');
 
   final windowOptions = WindowOptions(
     title: 'Handheld Quick Settings',
-    size: Size(panelWidth, screenHeight),
+    size: Size(screenWidth, screenHeight),
     backgroundColor: Colors.transparent,
     skipTaskbar: true,
     alwaysOnTop: true,
@@ -48,8 +48,8 @@ void main() async {
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAsFrameless();
     await windowManager.setBackgroundColor(Colors.transparent);
-    await windowManager.setSize(Size(panelWidth, screenHeight));
-    await windowManager.setPosition(Offset(screenWidth - panelWidth, 0));
+    await windowManager.setSize(Size(screenWidth, screenHeight));
+    await windowManager.setPosition(const Offset(0, 0));
     await windowManager.setAlwaysOnTop(true);
     // Để Flutter Engine vẽ hoàn thành frame đầu tiên vào DirectX buffer trước khi ẩn
   });
@@ -164,8 +164,10 @@ class _HandheldAppState extends State<HandheldApp> {
     super.initState();
     // Đợi frame đầu tiên vẽ xong hoàn toàn vào DirectX rồi mới ẩn xuống chạy ngầm
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _logger.info('DEBUG-MAIN-INIT: PostFrameCallback fired (First frame rendered)');
       await Future.delayed(const Duration(milliseconds: 150));
       await windowManager.hide();
+      _logger.info('DEBUG-MAIN-INIT: Initial windowManager.hide() completed');
     });
   }
 

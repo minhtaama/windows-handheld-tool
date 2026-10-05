@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
+import 'preset_selector.dart';
 
 /// Widget thanh trượt điều khiển dùng chung (DRY) chuẩn Handheld Gaming với thanh đo kép đồng trục (Coaxial Dual-Gauge).
 class SettingSlider extends StatelessWidget {
@@ -185,50 +186,17 @@ class SettingSlider extends StatelessWidget {
 
           // 3. Dãy mốc lựa chọn nhanh (Presets) nếu có
           if (quickPresets != null && quickPresets!.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: quickPresets!.map((preset) {
-                final isSelected = (value == preset);
-                final label = (unit.toUpperCase() == 'FPS' && preset == 0)
-                    ? 'TẮT'
-                    : '$preset';
-
-                return InkWell(
-                  borderRadius: BorderRadius.circular(4),
-                  onTap: () => onChanged(preset),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? AppTheme.primaryNeon.withValues(alpha: 0.2)
-                          : Colors.white.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(
-                        color: isSelected
-                            ? AppTheme.primaryNeon.withValues(alpha: 0.6)
-                            : Colors.white.withValues(alpha: 0.08),
-                        width: 1,
-                      ),
-                    ),
-                    child: Text(
-                      label,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: isSelected
-                            ? FontWeight.bold
-                            : FontWeight.w500,
-                        color: isSelected
-                            ? AppTheme.primaryNeon
-                            : Colors.white60,
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
+            const SizedBox(height: 8),
+            PresetSelector<int>(
+              presets: quickPresets!,
+              selectedValue: value,
+              height: 28.0,
+              spacing: 6.0,
+              labelBuilder: (preset) =>
+                  (unit.toUpperCase() == 'FPS' && preset == 0)
+                      ? 'TẮT'
+                      : '$preset',
+              onSelected: onChanged,
             ),
           ],
         ],

@@ -15,6 +15,7 @@ import '../services/virtual_keyboard_service.dart';
 import '../services/overlay_controller.dart';
 import 'widgets/setting_slider.dart';
 import 'widgets/action_button.dart';
+import 'widgets/preset_selector.dart';
 
 /// Nội dung thanh Quick Settings dạng trượt dành cho máy Handheld.
 class QuickSettingsPanel extends StatefulWidget {
@@ -40,6 +41,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late int _audio;
   late int _fpsLimit;
   late bool _touchEnabled;
+  late int _widthPercent;
 
   // Dữ liệu đo cảm biến thực tế tức thời (Hardware Telemetry)
   late int _liveTdp;
@@ -89,6 +91,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     final savedFps = widget.config.get("hardware.rtss.fps_limit", 60);
     _fpsLimit = _rtssCtrl.isAvailable() ? _rtssCtrl.getValue() : savedFps;
     _touchEnabled = TouchscreenService.isEnabled;
+    _widthPercent = widget.config.get("overlay.width_percent", 35);
 
     _liveTdp = (_tdp * 0.85).round().clamp(_tdpCtrl.minVal, _tdp);
     _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
@@ -172,6 +175,11 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     widget.config.set("hardware.audio.current", val);
   }
 
+  void _updateWidthPercent(int val) {
+    setState(() => _widthPercent = val);
+    OverlayController.instance.updateWidthPercent(val);
+  }
+
   Future<void> _toggleTouchscreen() async {
     final success = await TouchscreenService.toggleTouchscreen();
     if (mounted) {
@@ -192,21 +200,26 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      height: double.infinity,
-      decoration: const BoxDecoration(
-        color: AppTheme.background,
-        border: Border(
-          left: BorderSide(
-            color: AppTheme.primaryNeon,
-            width: 2.0,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        OverlayController.logger.info(
+          'DEBUG-UI: QuickSettingsPanel LayoutBuilder -> maxW: ${constraints.maxWidth}, maxH: ${constraints.maxHeight}',
+        );
+        return Container(
+          width: double.infinity,
+          height: double.infinity,
+          decoration: const BoxDecoration(
+            color: AppTheme.background,
+            border: Border(
+              left: BorderSide(
+                color: AppTheme.primaryNeon,
+                width: 2.0,
+              ),
+            ),
           ),
-        ),
-      ),
-      child: SafeArea(
-        child: Column(
-          children: [
+          child: SafeArea(
+            child: Column(
+              children: [
             // 1. Header (Tiêu đề + Nút Đóng)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 16, 12),
@@ -367,7 +380,50 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                   ),
                   const SizedBox(height: 18),
 
-                  // Nhóm 4: Thao tác nhanh
+                  // Nhóm 4: Giao diện & Kích thước Panel
+                  _buildSectionLabel("GIAO DIỆN & KÍCH THƯỚC PANEL"),
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                    decoration: BoxDecoration(
+                      color: AppTheme.cardBackground,
+                      borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+                      border: Border.all(color: AppTheme.cardBorder),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.aspect_ratio,
+                              size: 18,
+                              color: AppTheme.primaryNeon,
+                            ),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                "Độ rộng Side Panel",
+                                style: AppTheme.cardTitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Text("$_widthPercent %", style: AppTheme.cardValue),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        PresetSelector<int>(
+                          presets: const [30, 35, 40, 45],
+                          selectedValue: _widthPercent,
+                          labelBuilder: (preset) => "$preset%",
+                          onSelected: _updateWidthPercent,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+
+                  // Nhóm 5: Thao tác nhanh
                   _buildSectionLabel("THAO TÁC NHANH"),
                   Row(
                     children: [
@@ -458,7 +514,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         ),
       ),
     );
-  }
+  },
+);
+}
 
   Widget _buildSectionLabel(String label) {
     return Padding(
