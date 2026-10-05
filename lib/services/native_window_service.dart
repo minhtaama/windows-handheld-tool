@@ -6,9 +6,6 @@ import '../core/logger.dart';
 typedef _FindWindowWC = IntPtr Function(Pointer<Utf16> lpClassName, Pointer<Utf16> lpWindowName);
 typedef _FindWindowWDart = int Function(Pointer<Utf16> lpClassName, Pointer<Utf16> lpWindowName);
 
-typedef _ShowWindowC = Int32 Function(IntPtr hWnd, Int32 nCmdShow);
-typedef _ShowWindowDart = int Function(int hWnd, int nCmdShow);
-
 typedef _SetWindowPosC = Int32 Function(
   IntPtr hWnd,
   IntPtr hWndInsertAfter,
@@ -31,11 +28,20 @@ typedef _SetWindowPosDart = int Function(
 typedef _GetSystemMetricsC = Int32 Function(Int32 nIndex);
 typedef _GetSystemMetricsDart = int Function(int nIndex);
 
+typedef _GetWindowLongPtrWC = IntPtr Function(IntPtr hWnd, Int32 nIndex);
+typedef _GetWindowLongPtrWDart = int Function(int hWnd, int nIndex);
+
+typedef _SetWindowLongPtrWC = IntPtr Function(IntPtr hWnd, Int32 nIndex, IntPtr dwNewLong);
+typedef _SetWindowLongPtrWDart = int Function(int hWnd, int nIndex, int dwNewLong);
+
 typedef _IsWindowVisibleC = Int32 Function(IntPtr hWnd);
 typedef _IsWindowVisibleDart = int Function(int hWnd);
 
 typedef _IsWindowC = Int32 Function(IntPtr hWnd);
 typedef _IsWindowDart = int Function(int hWnd);
+
+typedef _InvalidateRectC = Int32 Function(IntPtr hWnd, Pointer<Void> lpRect, Int32 bErase);
+typedef _InvalidateRectDart = int Function(int hWnd, Pointer<Void> lpRect, int bErase);
 
 /// Dịch vụ quản lý cửa sổ Native Win32 tối ưu cho Gaming Overlay.
 /// Điều khiển cửa sổ với SW_SHOWNOACTIVATE và SWP_NOACTIVATE
@@ -43,28 +49,35 @@ typedef _IsWindowDart = int Function(int hWnd);
 class NativeWindowService {
   static const _logger = AppLogger('NativeWindowService');
 
-  static const int swHide = 0;
-  static const int swShowNoActivate = 4;
-  static const int swShow = 5;
-
   static const int hwndTopMost = -1;
 
   static const int swpNoSize = 0x0001;
   static const int swpNoMove = 0x0002;
   static const int swpNoZOrder = 0x0004;
   static const int swpNoActivate = 0x0010;
+  static const int swpFrameChanged = 0x0020;
   static const int swpShowWindow = 0x0040;
   static const int swpHideWindow = 0x0080;
+
+  static const int gwlExStyle = -20;
+  static const int wsExTopMost = 0x00000008;
+  static const int wsExToolWindow = 0x00000080;
+  static const int wsExNoActivate = 0x08000000;
+  static const int wsExLayered = 0x00080000;
+
+  static const int lwaAlpha = 2;
 
   static const int smCxScreen = 0;
   static const int smCyScreen = 1;
 
   static _FindWindowWDart? _findWindowW;
-  static _ShowWindowDart? _showWindow;
   static _SetWindowPosDart? _setWindowPos;
   static _GetSystemMetricsDart? _getSystemMetrics;
   static _IsWindowVisibleDart? _isWindowVisible;
   static _IsWindowDart? _isWindow;
+  static _InvalidateRectDart? _invalidateRect;
+  static _GetWindowLongPtrWDart? _getWindowLongPtrW;
+  static _SetWindowLongPtrWDart? _setWindowLongPtrW;
 
   static int? _cachedHwnd;
 
@@ -73,11 +86,19 @@ class NativeWindowService {
     try {
       final user32 = DynamicLibrary.open('user32.dll');
       _findWindowW = user32.lookupFunction<_FindWindowWC, _FindWindowWDart>('FindWindowW');
-      _showWindow = user32.lookupFunction<_ShowWindowC, _ShowWindowDart>('ShowWindow');
       _setWindowPos = user32.lookupFunction<_SetWindowPosC, _SetWindowPosDart>('SetWindowPos');
       _getSystemMetrics = user32.lookupFunction<_GetSystemMetricsC, _GetSystemMetricsDart>('GetSystemMetrics');
       _isWindowVisible = user32.lookupFunction<_IsWindowVisibleC, _IsWindowVisibleDart>('IsWindowVisible');
       _isWindow = user32.lookupFunction<_IsWindowC, _IsWindowDart>('IsWindow');
+      _invalidateRect = user32.lookupFunction<_InvalidateRectC, _InvalidateRectDart>('InvalidateRect');
+
+      try {
+        _getWindowLongPtrW = user32.lookupFunction<_GetWindowLongPtrWC, _GetWindowLongPtrWDart>('GetWindowLongPtrW');
+        _setWindowLongPtrW = user32.lookupFunction<_SetWindowLongPtrWC, _SetWindowLongPtrWDart>('SetWindowLongPtrW');
+      } catch (_) {
+        _getWindowLongPtrW = user32.lookupFunction<_GetWindowLongPtrWC, _GetWindowLongPtrWDart>('GetWindowLongW');
+        _setWindowLongPtrW = user32.lookupFunction<_SetWindowLongPtrWC, _SetWindowLongPtrWDart>('SetWindowLongW');
+      }
     } catch (e) {
       _logger.error('Lỗi khi nạp API user32.dll', e);
     }
@@ -148,7 +169,19 @@ class NativeWindowService {
     final width = targetSize.width.toInt();
     final height = targetSize.height.toInt();
 
-    // 1. Đặt vị trí, kích thước và đưa lên Topmost mà không kích hoạt cửa sổ
+    // 1. Cưỡng bức gắn các cờ Win32 Extended Styles: Layered Window, Không kích hoạt, ToolWindow và Always on Top
+    if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
+      try {
+        final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
+        _setWindowLongPtrW!(
+          hwnd,
+          gwlExStyle,
+          currentExStyle | wsExLayered | wsExNoActivate | wsExTopMost | wsExToolWindow,
+        );
+      } catch (_) {}
+    }
+
+    // 2. Đặt vị trí, kích thước và đưa lên Topmost mà không kích hoạt cửa sổ
     _setWindowPos?.call(
       hwnd,
       hwndTopMost,
@@ -156,24 +189,32 @@ class NativeWindowService {
       posY,
       width,
       height,
-      swpNoActivate | swpShowWindow,
+      swpNoActivate | swpShowWindow | swpFrameChanged,
     );
 
-    // 2. Hiển thị cửa sổ mà không cướp tiêu điểm (Focus)
-    _showWindow?.call(hwnd, swShowNoActivate);
+    // 3. Ép Windows DWM vẽ lại ngay lập tức frame Flutter
+    _invalidateRect?.call(hwnd, nullptr, 1);
 
-    _logger.info('Đã hiển thị Overlay (SW_SHOWNOACTIVATE, Size: ${width}x$height)');
+    _logger.info('Đã hiển thị Overlay (SWP_NOACTIVATE, Pos: ($posX, $posY), Size: ${width}x$height)');
     return true;
   }
 
-  /// Ẩn cửa sổ Overlay
+  /// Ẩn cửa sổ Overlay bằng cách di chuyển ra khỏi màn hình (giữ nguyên DWM Surface và buffer kích thước để không ngắt VSync)
   static bool hideOverlayWindow() {
     _ensureInitialized();
     final hwnd = getWindowHandle();
     if (hwnd == 0) return false;
 
-    _showWindow?.call(hwnd, swHide);
-    _logger.info('Đã ẩn Overlay (SW_HIDE)');
+    _setWindowPos?.call(
+      hwnd,
+      0,
+      -10000,
+      -10000,
+      0,
+      0,
+      swpNoSize | swpNoZOrder | swpNoActivate,
+    );
+    _logger.info('Đã ẩn Overlay (Dời tọa độ Off-Screen -10000, -10000)');
     return true;
   }
 

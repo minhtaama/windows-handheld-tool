@@ -1036,22 +1036,32 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   /// Thanh gợi ý thao tác tay cầm Gamepad phong cách Console dưới đáy Panel
   Widget _buildGamepadFooter() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
         color: AppTheme.cardBackground.withValues(alpha: 0.9),
         border: const Border(
           top: BorderSide(color: AppTheme.cardBorder, width: 1.0),
         ),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _buildHintBadge("LB/RB", "Tab"),
-          _buildHintBadge("D-Pad", "Chọn/Chỉnh"),
-          _buildHintBadge("A", "Chọn"),
-          if (_selectedTabIndex == 0) _buildHintBadge("X", "Auto"),
-          _buildHintBadge("B", "Đóng"),
-        ],
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildHintBadge("LB/RB", "Tab"),
+            const SizedBox(width: 8),
+            _buildHintBadge("D-Pad", "Chọn/Chỉnh"),
+            const SizedBox(width: 8),
+            _buildHintBadge("A", "Chọn"),
+            if (_selectedTabIndex == 0) ...[
+              const SizedBox(width: 8),
+              _buildHintBadge("X", "Auto"),
+            ],
+            const SizedBox(width: 8),
+            _buildHintBadge("B", "Đóng"),
+          ],
+        ),
       ),
     );
   }

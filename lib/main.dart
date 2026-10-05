@@ -31,14 +31,13 @@ void main() async {
   await windowManager.ensureInitialized();
 
   final physicalSize = NativeWindowService.getPhysicalScreenSize();
-  final screenWidth = physicalSize.width;
   final screenHeight = physicalSize.height;
 
   _logger.info('DEBUG-MAIN-INIT: Physical Screen Size = $physicalSize');
 
   final windowOptions = WindowOptions(
     title: 'Handheld Quick Settings',
-    size: Size(screenWidth, screenHeight),
+    size: Size(450, screenHeight),
     backgroundColor: AppTheme.transparent,
     skipTaskbar: true,
     alwaysOnTop: true,
@@ -48,10 +47,10 @@ void main() async {
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAsFrameless();
     await windowManager.setBackgroundColor(AppTheme.transparent);
-    await windowManager.setSize(Size(screenWidth, screenHeight));
-    await windowManager.setPosition(const Offset(0, 0));
+    await windowManager.setSize(Size(450, screenHeight));
+    await windowManager.setPosition(const Offset(99999, 0));
     await windowManager.setAlwaysOnTop(true);
-    // Để Flutter Engine vẽ hoàn thành frame đầu tiên vào DirectX buffer trước khi ẩn
+    // Để Flutter Engine vẽ hoàn thành frame đầu tiên vào DirectX buffer trước khi dời off-screen
   });
 
   // Tự động đóng panel khi người dùng click ra ngoài (mất focus sang game/desktop)
@@ -162,12 +161,12 @@ class _HandheldAppState extends State<HandheldApp> {
   @override
   void initState() {
     super.initState();
-    // Đợi frame đầu tiên vẽ xong hoàn toàn vào DirectX rồi mới ẩn xuống chạy ngầm
+    // Đợi frame đầu tiên vẽ xong hoàn toàn vào DirectX rồi dời off-screen chạy ngầm
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _logger.info('DEBUG-MAIN-INIT: PostFrameCallback fired (First frame rendered)');
       await Future.delayed(const Duration(milliseconds: 150));
-      await windowManager.hide();
-      _logger.info('DEBUG-MAIN-INIT: Initial windowManager.hide() completed');
+      NativeWindowService.hideOverlayWindow();
+      _logger.info('DEBUG-MAIN-INIT: Initial NativeWindowService.hideOverlayWindow() completed');
     });
   }
 

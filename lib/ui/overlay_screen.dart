@@ -19,7 +19,6 @@ class _OverlayScreenState extends State<OverlayScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _animController;
   late final Animation<Offset> _slideAnimation;
-  late final Animation<double> _backdropFadeAnimation;
   late final Animation<double> _panelFadeAnimation;
 
   @override
@@ -44,15 +43,6 @@ class _OverlayScreenState extends State<OverlayScreen>
             reverseCurve: Curves.easeInCubic,
           ),
         );
-
-    // Hoạt cảnh làm mờ nền tối Backdrop phía sau
-    _backdropFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _animController,
-        curve: Curves.easeOut,
-        reverseCurve: Curves.easeIn,
-      ),
-    );
 
     // Hoạt cảnh mờ dần (Fade In / Fade Out) đồng bộ cho Side Panel
     _panelFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
@@ -87,65 +77,27 @@ class _OverlayScreenState extends State<OverlayScreen>
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: OverlayController.instance,
-      builder: (context, _) {
-        final widthPercent = OverlayController.instance.widthPercent;
-
-        return Scaffold(
-          backgroundColor: AppTheme.transparent,
-          body: LayoutBuilder(
-            builder: (context, constraints) {
-              final screenWidth = constraints.maxWidth;
-              final panelWidth = (screenWidth * (widthPercent / 100.0)).clamp(
-                280.0,
-                screenWidth * 0.6,
-              );
-
-              return Stack(
-                children: [
-                  // 1. Nền trong suốt (Backdrop): Chạm/click ra ngoài để đóng Side Panel
-                  Positioned.fill(
-                    child: FadeTransition(
-                      opacity: _backdropFadeAnimation,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => OverlayController.instance.hideOverlay(),
-                        child: Container(
-                          color: Colors.black.withValues(alpha: 0.7),
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // 2. Floating Panel dạng thẻ nổi (vừa trượt vừa làm mờ)
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: SlideTransition(
-                      position: _slideAnimation,
-                      child: FadeTransition(
-                        opacity: _panelFadeAnimation,
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 180),
-                          curve: Curves.easeOutCubic,
-                          width: panelWidth,
-                          height: double.infinity,
-                          padding: const EdgeInsets.only(
-                            top: 24,
-                            bottom: 24,
-                            right: 20,
-                          ),
-                          child: QuickSettingsPanel(config: widget.config),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            },
+    return Scaffold(
+      backgroundColor: AppTheme.transparent,
+      body: Align(
+        alignment: Alignment.centerRight,
+        child: SlideTransition(
+          position: _slideAnimation,
+          child: FadeTransition(
+            opacity: _panelFadeAnimation,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 520),
+              padding: const EdgeInsets.only(
+                top: 20,
+                bottom: 20,
+                right: 16,
+                left: 8,
+              ),
+              child: QuickSettingsPanel(config: widget.config),
+            ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

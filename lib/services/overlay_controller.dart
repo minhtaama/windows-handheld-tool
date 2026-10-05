@@ -6,7 +6,6 @@ import 'package:window_manager/window_manager.dart';
 import '../core/config.dart';
 import '../core/logger.dart';
 import 'native_window_service.dart';
-import 'system_optimizer.dart';
 
 /// Quản lý trạng thái và hành vi ẩn/hiện của Side Dock Panel trên Windows.
 /// Áp dụng mô hình Fullscreen Transparent Overlay (chuẩn Handheld Gaming Overlay)
@@ -49,24 +48,32 @@ class OverlayController extends ChangeNotifier {
       // 1. Lấy độ phân giải vật lý thực tế hiện hành của màn hình (hỗ trợ in-game 720p/800p/RSR)
       final currentScreenSize = NativeWindowService.getPhysicalScreenSize();
 
-      // 2. Hiển thị cửa sổ ở chế độ SW_SHOWNOACTIVATE & Always-on-Top (KHÔNG cướp Focus của Game)
+      // 2. Tính toán kích thước Side-Dock Panel (chuẩn kiến trúc GPD Tool / Handheld Sidebar)
+      // Không bao phủ (0, 0) toàn màn hình để Windows DWM không coi đây là Fullscreen Replacement
+      final panelWidth = (currentScreenSize.width * (widthPercent / 100.0)).clamp(
+        320.0,
+        520.0,
+      );
+      final posX = currentScreenSize.width - panelWidth;
+
+      // 3. Hiển thị cửa sổ neo sát mép phải ở chế độ SW_SHOWNOACTIVATE & Always-on-Top (KHÔNG cướp Focus của Game)
       final shown = NativeWindowService.showOverlayNoActivate(
-        size: currentScreenSize,
-        position: const Offset(0, 0),
+        size: Size(panelWidth, currentScreenSize.height),
+        position: Offset(posX, 0),
       );
 
       // Fallback an toàn qua windowManager nếu cần
       if (!shown) {
+        await windowManager.setPosition(Offset(posX, 0));
+        await windowManager.setSize(Size(panelWidth, currentScreenSize.height));
         await windowManager.setAlwaysOnTop(true);
         await windowManager.show(inactive: true);
       }
 
-      // 3. Kích hoạt hoạt cảnh trượt từ mép phải vào
-      if (onAnimateShow != null) {
-        await onAnimateShow!();
-      }
+      // 4. Kích hoạt hoạt cảnh trượt từ mép phải vào (chạy bất đồng bộ, không nghẽn luồng)
+      onAnimateShow?.call();
 
-      logger.info('Đã mở Side Dock Panel (Resolution: ${currentScreenSize.width}x${currentScreenSize.height}).');
+      logger.info('Đã mở Side Dock Panel (Pos: $posX, Width: $panelWidth, Height: ${currentScreenSize.height}).');
     } catch (e) {
       logger.error('Lỗi khi mở Overlay', e);
     }
@@ -83,16 +90,10 @@ class OverlayController extends ChangeNotifier {
         await onAnimateHide!();
       }
 
-      // 2. Ẩn cửa sổ qua Win32 API và windowManager sau khi hoạt cảnh hoàn tất
+      // 2. Dời cửa sổ ra off-screen để giữ nguyên DWM composition surface
       NativeWindowService.hideOverlayWindow();
-      try {
-        await windowManager.hide();
-      } catch (_) {}
 
       logger.info('Đã đóng Side Dock Panel.');
-
-      // 3. Giải phóng bộ nhớ RAM
-      SystemOptimizer.trimMemory();
     } catch (e) {
       logger.error('Lỗi khi ẩn Overlay', e);
     }

@@ -135,7 +135,7 @@ bool Win32Window::Create(const std::wstring& title,
   double scale_factor = dpi / 96.0;
 
   HWND window = CreateWindowEx(
-      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
       window_class, title.c_str(), WS_POPUP,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
@@ -144,6 +144,8 @@ bool Win32Window::Create(const std::wstring& title,
   if (!window) {
     return false;
   }
+
+  SetLayeredWindowAttributes(window, 0, 255, LWA_ALPHA);
 
   UpdateTheme(window);
 
@@ -203,18 +205,10 @@ Win32Window::MessageHandler(HWND hwnd,
 
     case WM_DISPLAYCHANGE:
     case WM_DPICHANGED: {
-      HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-      MONITORINFO monitor_info = {sizeof(MONITORINFO)};
-      if (GetMonitorInfo(monitor, &monitor_info)) {
-        int width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
-        int height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
-        SetWindowPos(hwnd, HWND_TOPMOST,
-                     monitor_info.rcMonitor.left, monitor_info.rcMonitor.top,
-                     width, height,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
-        if (child_content_ != nullptr) {
-          MoveWindow(child_content_, 0, 0, width, height, TRUE);
-        }
+      RECT rect = GetClientArea();
+      if (child_content_ != nullptr) {
+        MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
+                   rect.bottom - rect.top, TRUE);
       }
       return 0;
     }
@@ -242,10 +236,16 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
     }
 
+    case WM_MOUSEACTIVATE:
+      return MA_NOACTIVATE;
+
     case WM_ACTIVATE:
-      if (LOWORD(wparam) != WA_INACTIVE && child_content_ != nullptr) {
-        SetFocus(child_content_);
-      }
+      return 0;
+
+    case WM_NCACTIVATE:
+      return TRUE;
+
+    case WM_SETFOCUS:
       return 0;
 
     case WM_DWMCOLORIZATIONCOLORCHANGED:
@@ -280,8 +280,6 @@ void Win32Window::SetChildContent(HWND content) {
 
   MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
              frame.bottom - frame.top, true);
-
-  SetFocus(child_content_);
 }
 
 RECT Win32Window::GetClientArea() {
