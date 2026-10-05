@@ -40,7 +40,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late int _audio;
   late int _fpsLimit;
   late bool _touchEnabled;
-  late int _widthPercent;
 
   // Dữ liệu đo cảm biến thực tế tức thời (Hardware Telemetry)
   late int _liveTdp;
@@ -90,7 +89,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     final savedFps = widget.config.get("hardware.rtss.fps_limit", 60);
     _fpsLimit = _rtssCtrl.isAvailable() ? _rtssCtrl.getValue() : savedFps;
     _touchEnabled = TouchscreenService.isEnabled;
-    _widthPercent = widget.config.get("overlay.width_percent", 28);
 
     _liveTdp = (_tdp * 0.85).round().clamp(_tdpCtrl.minVal, _tdp);
     _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
@@ -172,12 +170,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     setState(() => _audio = val);
     _audioCtrl.setValue(val);
     widget.config.set("hardware.audio.current", val);
-  }
-
-  void _updateWidthPercent(int val) {
-    setState(() => _widthPercent = val);
-    widget.config.set("overlay.width_percent", val);
-    OverlayController.instance.syncWindowGeometry(val.toDouble());
   }
 
   Future<void> _toggleTouchscreen() async {
@@ -372,21 +364,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                     step: _audioCtrl.step,
                     unit: _audioCtrl.unit,
                     onChanged: _updateAudio,
-                  ),
-                  const SizedBox(height: 18),
-
-                  // Nhóm: Tùy biến thanh bên (Side Dock)
-                  _buildSectionLabel("TÙY BIẾN THANH BÊN (SIDE DOCK)"),
-                  SettingSlider(
-                    icon: Icons.view_sidebar_outlined,
-                    title: "Độ rộng thanh bên",
-                    value: _widthPercent,
-                    min: 20,
-                    max: 50,
-                    step: 1,
-                    unit: "%",
-                    quickPresets: const [22, 28, 35, 45],
-                    onChanged: _updateWidthPercent,
                   ),
                   const SizedBox(height: 18),
 
