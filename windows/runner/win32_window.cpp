@@ -134,7 +134,8 @@ bool Win32Window::Create(const std::wstring& title,
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
-  HWND window = CreateWindow(
+  HWND window = CreateWindowEx(
+      WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
       window_class, title.c_str(), WS_POPUP,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
@@ -150,7 +151,9 @@ bool Win32Window::Create(const std::wstring& title,
 }
 
 bool Win32Window::Show() {
-  return ShowWindow(window_handle_, SW_SHOWNORMAL);
+  SetWindowPos(window_handle_, HWND_TOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+  return ShowWindow(window_handle_, SW_SHOW);
 }
 
 // static

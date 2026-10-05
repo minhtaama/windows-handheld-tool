@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 
@@ -11,6 +12,7 @@ import '../hardware/brightness_service.dart';
 import '../hardware/audio_service.dart';
 import '../hardware/rtss_service.dart';
 import '../hardware/touchscreen_service.dart';
+import '../input/gamepad_service.dart';
 import '../services/system_optimizer.dart';
 import '../services/virtual_keyboard_service.dart';
 import '../services/overlay_controller.dart';
@@ -20,7 +22,7 @@ import 'widgets/action_button.dart';
 import 'widgets/preset_selector.dart';
 import 'widgets/tab_bar.dart';
 
-/// Nội dung thanh Quick Settings cho máy Handheld.
+/// Nội dung thanh Quick Settings cho máy Handheld hỗ trợ đầy đủ cảm ứng & tay cầm Gamepad.
 class QuickSettingsPanel extends StatefulWidget {
   final ConfigManager config;
 
@@ -49,6 +51,11 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   // Tab đang được chọn (0: Hiệu năng, 1: Thiết bị, 2: Tiện ích)
   int _selectedTabIndex = 0;
+
+  // Vị trí điều khiển đang được chọn bằng Gamepad trong Tab hiện tại
+  int _focusedIndex = 0;
+  final ScrollController _scrollController = ScrollController();
+  StreamSubscription<GamepadButton>? _gamepadSub;
 
   // Dữ liệu đo cảm biến thực tế tức thời (Hardware Telemetry)
   late int _liveTdp;
@@ -108,6 +115,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
     _isRtssRunning = _rtssCtrl.isAvailable();
 
+    // Lắng nghe sự kiện điều hướng từ Gamepad
+    _gamepadSub = GamepadService.buttonEvents.listen(_onGamepadButton);
+
     // Kích hoạt Timer quét cảm biến phần cứng định kỳ 1s khi panel mở
     _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1000), (
       timer,
@@ -144,8 +154,235 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   @override
   void dispose() {
+    _gamepadSub?.cancel();
     _telemetryTimer?.cancel();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  int _getMaxIndexForTab(int tabIndex) {
+    switch (tabIndex) {
+      case 0:
+        return 2; // TDP (0), Quạt (1), RTSS (2)
+      case 1:
+        return 3; // Độ sáng (0), Âm lượng (1), Cảm ứng (2), Độ rộng (3)
+      case 2:
+        return 4; // Bàn phím (0), TaskMgr (1), Màn hình (2), Dọn RAM (3), Đóng panel (4)
+      default:
+        return 0;
+    }
+  }
+
+  void _switchTab(int newIndex) {
+    if (_selectedTabIndex != newIndex) {
+      setState(() {
+        _selectedTabIndex = newIndex;
+        _focusedIndex = 0;
+      });
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(0);
+      }
+    }
+  }
+
+  void _moveFocus(int delta) {
+    final maxIdx = _getMaxIndexForTab(_selectedTabIndex);
+    final nextIdx = (_focusedIndex + delta).clamp(0, maxIdx);
+    if (nextIdx != _focusedIndex) {
+      setState(() => _focusedIndex = nextIdx);
+      _autoScrollToFocused();
+    }
+  }
+
+  void _autoScrollToFocused() {
+    if (!_scrollController.hasClients) return;
+    final targetOffset = (_focusedIndex * 135.0).clamp(
+      0.0,
+      _scrollController.position.maxScrollExtent,
+    );
+    _scrollController.animateTo(
+      targetOffset,
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _cyclePreset<T>(
+    List<T> presets,
+    T current,
+    int direction,
+    ValueChanged<T> onSelect,
+  ) {
+    final idx = presets.indexOf(current);
+    if (idx == -1) {
+      onSelect(presets.first);
+    } else {
+      final nextIdx = (idx + direction + presets.length) % presets.length;
+      onSelect(presets[nextIdx]);
+    }
+  }
+
+  void _onGamepadButton(GamepadButton button) {
+    if (!mounted || !OverlayController.instance.isVisible) return;
+
+    switch (button) {
+      case GamepadButton.lb:
+        _switchTab((_selectedTabIndex - 1 + 3) % 3);
+        break;
+      case GamepadButton.rb:
+        _switchTab((_selectedTabIndex + 1) % 3);
+        break;
+      case GamepadButton.dpadUp:
+        _moveFocus(-1);
+        break;
+      case GamepadButton.dpadDown:
+        _moveFocus(1);
+        break;
+      case GamepadButton.dpadLeft:
+        _handleGamepadLeft();
+        break;
+      case GamepadButton.dpadRight:
+        _handleGamepadRight();
+        break;
+      case GamepadButton.a:
+        _handleGamepadA();
+        break;
+      case GamepadButton.b:
+        OverlayController.instance.hideOverlay();
+        break;
+      case GamepadButton.x:
+        _handleGamepadX();
+        break;
+      default:
+        break;
+    }
+  }
+
+  void _handleGamepadLeft() {
+    switch (_selectedTabIndex) {
+      case 0:
+        if (_focusedIndex == 0) {
+          _updateTdp(max(_tdpCtrl.minVal, _tdp - _tdpCtrl.step));
+        } else if (_focusedIndex == 1) {
+          _updateFan(max(_fanCtrl.minVal, _fan - _fanCtrl.step));
+        } else if (_focusedIndex == 2 && RtssInstallerService.isInstalled()) {
+          _cyclePreset(const [0, 30, 40, 60], _fpsLimit, -1, _updateFpsLimit);
+        }
+        break;
+      case 1:
+        if (_focusedIndex == 0) {
+          _updateBrightness(
+            max(_brightnessCtrl.minVal, _brightness - _brightnessCtrl.step),
+          );
+        } else if (_focusedIndex == 1) {
+          _updateAudio(max(_audioCtrl.minVal, _audio - _audioCtrl.step));
+        } else if (_focusedIndex == 2) {
+          _toggleTouchscreen();
+        } else if (_focusedIndex == 3) {
+          _cyclePreset(const [30, 35, 40, 45], _widthPercent, -1, _updateWidthPercent);
+        }
+        break;
+      case 2:
+        if (_focusedIndex > 0) {
+          _moveFocus(-1);
+        }
+        break;
+    }
+  }
+
+  void _handleGamepadRight() {
+    switch (_selectedTabIndex) {
+      case 0:
+        if (_focusedIndex == 0) {
+          _updateTdp(min(_tdpCtrl.maxVal, _tdp + _tdpCtrl.step));
+        } else if (_focusedIndex == 1) {
+          _updateFan(min(_fanCtrl.maxVal, _fan + _fanCtrl.step));
+        } else if (_focusedIndex == 2 && RtssInstallerService.isInstalled()) {
+          _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
+        }
+        break;
+      case 1:
+        if (_focusedIndex == 0) {
+          _updateBrightness(
+            min(_brightnessCtrl.maxVal, _brightness + _brightnessCtrl.step),
+          );
+        } else if (_focusedIndex == 1) {
+          _updateAudio(min(_audioCtrl.maxVal, _audio + _audioCtrl.step));
+        } else if (_focusedIndex == 2) {
+          _toggleTouchscreen();
+        } else if (_focusedIndex == 3) {
+          _cyclePreset(const [30, 35, 40, 45], _widthPercent, 1, _updateWidthPercent);
+        }
+        break;
+      case 2:
+        if (_focusedIndex < _getMaxIndexForTab(2)) {
+          _moveFocus(1);
+        }
+        break;
+    }
+  }
+
+  void _handleGamepadA() {
+    switch (_selectedTabIndex) {
+      case 0:
+        if (_focusedIndex == 0) {
+          _cyclePreset(const [10, 15, 20, 25, 30], _tdp, 1, _updateTdp);
+        } else if (_focusedIndex == 1) {
+          _cyclePreset(const [30, 50, 75, 100], _fan, 1, _updateFan);
+        } else if (_focusedIndex == 2) {
+          if (!RtssInstallerService.isInstalled()) {
+            _handleInstallRtss();
+          } else if (!_isRtssRunning) {
+            _startRtss();
+          } else {
+            _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
+          }
+        }
+        break;
+      case 1:
+        if (_focusedIndex == 0) {
+          _cyclePreset(const [25, 50, 75, 100], _brightness, 1, _updateBrightness);
+        } else if (_focusedIndex == 1) {
+          _cyclePreset(const [0, 30, 60, 100], _audio, 1, _updateAudio);
+        } else if (_focusedIndex == 2) {
+          _toggleTouchscreen();
+        } else if (_focusedIndex == 3) {
+          _cyclePreset(const [30, 35, 40, 45], _widthPercent, 1, _updateWidthPercent);
+        }
+        break;
+      case 2:
+        if (_focusedIndex == 0) {
+          OverlayController.instance.hideOverlay();
+          VirtualKeyboardService.toggleKeyboard();
+        } else if (_focusedIndex == 1) {
+          OverlayController.instance.hideOverlay();
+          Process.start('taskmgr.exe', [], runInShell: true);
+        } else if (_focusedIndex == 2) {
+          OverlayController.instance.hideOverlay();
+          Process.start('explorer.exe', ['ms-settings:display'], runInShell: true);
+        } else if (_focusedIndex == 3) {
+          SystemOptimizer.trimMemory();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Đã giải phóng bộ nhớ RAM tiến trình!'),
+              duration: Duration(seconds: 1),
+            ),
+          );
+        } else if (_focusedIndex == 4) {
+          OverlayController.instance.hideOverlay();
+        }
+        break;
+    }
+  }
+
+  void _handleGamepadX() {
+    if (_selectedTabIndex == 0) {
+      if (_focusedIndex == 0) {
+        _toggleTdpAuto();
+      } else if (_focusedIndex == 1) {
+        _toggleFanAuto();
+      }
+    }
   }
 
   void _updateTdp(int val) {
@@ -286,9 +523,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             AppTabItem(icon: Icons.tune_rounded, label: 'Thiết bị'),
             AppTabItem(icon: Icons.apps_rounded, label: 'Tiện ích'),
           ],
-          onTabSelected: (index) {
-            setState(() => _selectedTabIndex = index);
-          },
+          onTabSelected: _switchTab,
         ),
         const SizedBox(height: 12),
 
@@ -310,15 +545,22 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
               ],
             ),
             clipBehavior: Clip.antiAlias,
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 180),
-              layoutBuilder: (currentChild, previousChildren) {
-                return Stack(
-                  fit: StackFit.expand,
-                  children: [...previousChildren, ?currentChild],
-                );
-              },
-              child: _buildSelectedTabContent(),
+            child: Column(
+              children: [
+                Expanded(
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    layoutBuilder: (currentChild, previousChildren) {
+                      return Stack(
+                        fit: StackFit.expand,
+                        children: [...previousChildren, ?currentChild],
+                      );
+                    },
+                    child: _buildSelectedTabContent(),
+                  ),
+                ),
+                _buildGamepadFooter(),
+              ],
             ),
           ),
         ),
@@ -344,6 +586,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   Widget _buildPerformanceTab() {
     return ListView(
       key: const ValueKey('tab_performance'),
+      controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       children: [
         _buildSectionLabel("NĂNG LƯỢNG (TDP)"),
@@ -360,6 +603,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           quickPresets: const [10, 15, 20, 25, 30],
           onChanged: _updateTdp,
           shouldShowSlider: !_tdpAuto,
+          isFocused: _focusedIndex == 0,
           trailing: InkWell(
             borderRadius: BorderRadius.circular(4),
             onTap: _toggleTdpAuto,
@@ -403,6 +647,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           quickPresets: const [30, 50, 75, 100],
           onChanged: _updateFan,
           shouldShowSlider: !_fanAuto,
+          isFocused: _focusedIndex == 1,
           trailing: InkWell(
             borderRadius: BorderRadius.circular(4),
             onTap: _toggleFanAuto,
@@ -434,12 +679,26 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
         _buildSectionLabel("KHUNG HÌNH (RTSS)"),
         if (!RtssInstallerService.isInstalled())
-          Container(
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               color: AppTheme.cardBackground,
               borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-              border: Border.all(color: AppTheme.cardBorder),
+              border: Border.all(
+                color: _focusedIndex == 2 ? AppTheme.accent : AppTheme.cardBorder,
+                width: _focusedIndex == 2 ? 1.8 : 1.0,
+              ),
+              boxShadow: _focusedIndex == 2
+                  ? [
+                      BoxShadow(
+                        color: AppTheme.primary.withValues(alpha: 0.4),
+                        blurRadius: 14,
+                        spreadRadius: 1,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -471,7 +730,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  _rtssInstallMsg ?? "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
+                  _rtssInstallMsg ??
+                      "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
                   style: const TextStyle(
                     fontSize: 11,
                     color: AppTheme.textSecondary,
@@ -530,6 +790,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             currentColor: AppTheme.accent,
             quickPresets: const [0, 30, 40, 60],
             onChanged: _updateFpsLimit,
+            isFocused: _focusedIndex == 2,
             trailing: !_isRtssRunning
                 ? InkWell(
                     onTap: _startRtss,
@@ -577,6 +838,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   Widget _buildDeviceTab() {
     return ListView(
       key: const ValueKey('tab_device'),
+      controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       children: [
         _buildSectionLabel("HIỂN THỊ"),
@@ -590,6 +852,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           unit: _brightnessCtrl.unit,
           quickPresets: const [25, 50, 75, 100],
           onChanged: _updateBrightness,
+          isFocused: _focusedIndex == 0,
         ),
         const SizedBox(height: 16),
 
@@ -604,6 +867,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           unit: _audioCtrl.unit,
           quickPresets: const [0, 30, 60, 100],
           onChanged: _updateAudio,
+          isFocused: _focusedIndex == 1,
         ),
         const SizedBox(height: 16),
 
@@ -618,17 +882,32 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 title: "Cảm ứng",
                 subtitle: _touchEnabled ? "Đang Bật" : "Đã Tắt",
                 onTap: _toggleTouchscreen,
+                isFocused: _focusedIndex == 2,
               ),
             ),
           ],
         ),
         const SizedBox(height: 12),
-        Container(
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
           decoration: BoxDecoration(
             color: AppTheme.cardBackground,
             borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-            border: Border.all(color: AppTheme.cardBorder),
+            border: Border.all(
+              color: _focusedIndex == 3 ? AppTheme.accent : AppTheme.cardBorder,
+              width: _focusedIndex == 3 ? 1.8 : 1.0,
+            ),
+            boxShadow: _focusedIndex == 3
+                ? [
+                    BoxShadow(
+                      color: AppTheme.primary.withValues(alpha: 0.4),
+                      blurRadius: 14,
+                      spreadRadius: 1,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -670,6 +949,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   Widget _buildUtilitiesTab() {
     return ListView(
       key: const ValueKey('tab_utilities'),
+      controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       children: [
         _buildSectionLabel("CÔNG CỤ HỆ THỐNG"),
@@ -680,6 +960,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 icon: Icons.keyboard_alt_rounded,
                 title: "Bàn phím ảo",
                 subtitle: "Mở TabTip OSK",
+                isFocused: _focusedIndex == 0,
                 onTap: () {
                   OverlayController.instance.hideOverlay();
                   VirtualKeyboardService.toggleKeyboard();
@@ -692,6 +973,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 icon: Icons.analytics_outlined,
                 title: "Task Manager",
                 subtitle: "Quản lý tiến trình",
+                isFocused: _focusedIndex == 1,
                 onTap: () {
                   OverlayController.instance.hideOverlay();
                   Process.start('taskmgr.exe', [], runInShell: true);
@@ -708,6 +990,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 icon: Icons.monitor_rounded,
                 title: "Màn hình",
                 subtitle: "Đổi độ phân giải",
+                isFocused: _focusedIndex == 2,
                 onTap: () {
                   OverlayController.instance.hideOverlay();
                   Process.start('explorer.exe', [
@@ -722,6 +1005,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 icon: Icons.cleaning_services_rounded,
                 title: "Dọn dẹp RAM",
                 subtitle: "Tối ưu bộ nhớ",
+                isFocused: _focusedIndex == 3,
                 onTap: () {
                   SystemOptimizer.trimMemory();
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -741,8 +1025,69 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         ActionButton(
           icon: Icons.fullscreen_exit_rounded,
           title: "Đóng Quick Panel",
-          subtitle: "Phím tắt: Back + RB hoặc nhấn bên ngoài",
+          subtitle: "Phím tắt: B / Back + RB",
+          isFocused: _focusedIndex == 4,
           onTap: () => OverlayController.instance.hideOverlay(),
+        ),
+      ],
+    );
+  }
+
+  /// Thanh gợi ý thao tác tay cầm Gamepad phong cách Console dưới đáy Panel
+  Widget _buildGamepadFooter() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: AppTheme.cardBackground.withValues(alpha: 0.9),
+        border: const Border(
+          top: BorderSide(color: AppTheme.cardBorder, width: 1.0),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildHintBadge("LB/RB", "Tab"),
+          _buildHintBadge("D-Pad", "Chọn/Chỉnh"),
+          _buildHintBadge("A", "Chọn"),
+          if (_selectedTabIndex == 0) _buildHintBadge("X", "Auto"),
+          _buildHintBadge("B", "Đóng"),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHintBadge(String keyText, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+          decoration: BoxDecoration(
+            color: AppTheme.primary.withValues(alpha: 0.18),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(
+              color: AppTheme.primary.withValues(alpha: 0.4),
+              width: 0.8,
+            ),
+          ),
+          child: Text(
+            keyText,
+            style: const TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              color: AppTheme.accent,
+              letterSpacing: 0.4,
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+            color: AppTheme.textSecondary,
+          ),
         ),
       ],
     );

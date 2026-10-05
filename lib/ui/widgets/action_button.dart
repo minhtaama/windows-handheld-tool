@@ -8,6 +8,7 @@ class ActionButton extends StatelessWidget {
   final String title;
   final String subtitle;
   final VoidCallback onTap;
+  final bool isFocused;
 
   const ActionButton({
     super.key,
@@ -15,6 +16,7 @@ class ActionButton extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.onTap,
+    this.isFocused = false,
   });
 
   @override
@@ -24,12 +26,26 @@ class ActionButton extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
             color: AppTheme.cardBackground,
             borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-            border: Border.all(color: AppTheme.cardBorder),
+            border: Border.all(
+              color: isFocused ? AppTheme.accent : AppTheme.cardBorder,
+              width: isFocused ? 1.8 : 1.0,
+            ),
+            boxShadow: isFocused
+                ? [
+                    BoxShadow(
+                      color: AppTheme.primary.withValues(alpha: 0.4),
+                      blurRadius: 14,
+                      spreadRadius: 1,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
           ),
           child: Row(
             children: [

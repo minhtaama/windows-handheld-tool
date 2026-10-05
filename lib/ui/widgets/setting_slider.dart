@@ -27,6 +27,9 @@ class SettingSlider extends StatelessWidget {
   /// Boolean ẩn thanh slider, ví dụ khi quạt chạy auto thì không hiện.
   final bool shouldShowSlider;
 
+  /// Trạng thái đang được trỏ/focus bởi tay cầm Gamepad
+  final bool isFocused;
+
   const SettingSlider({
     super.key,
     required this.icon,
@@ -42,6 +45,7 @@ class SettingSlider extends StatelessWidget {
     this.currentColor,
     this.quickPresets,
     this.shouldShowSlider = true,
+    this.isFocused = false,
   });
 
   String _formatTargetValue(int val) {
@@ -55,12 +59,26 @@ class SettingSlider extends StatelessWidget {
   Widget build(BuildContext context) {
     final liveColor = currentColor ?? AppTheme.secondary;
 
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
       decoration: BoxDecoration(
         color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-        border: Border.all(color: AppTheme.cardBorder),
+        border: Border.all(
+          color: isFocused ? AppTheme.accent : AppTheme.cardBorder,
+          width: isFocused ? 1.8 : 1.0,
+        ),
+        boxShadow: isFocused
+            ? [
+                BoxShadow(
+                  color: AppTheme.primary.withValues(alpha: 0.4),
+                  blurRadius: 14,
+                  spreadRadius: 1,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

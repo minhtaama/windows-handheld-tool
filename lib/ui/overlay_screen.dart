@@ -31,7 +31,7 @@ class _OverlayScreenState extends State<OverlayScreen>
     _animController = AnimationController(
       vsync: this,
       duration: Duration(milliseconds: durationMs),
-      reverseDuration: const Duration(milliseconds: 140),
+      reverseDuration: Duration(milliseconds: durationMs),
       value: 1.0, // Ban đầu ở trạng thái sẵn sàng
     );
 
@@ -112,7 +112,7 @@ class _OverlayScreenState extends State<OverlayScreen>
                         behavior: HitTestBehavior.opaque,
                         onTap: () => OverlayController.instance.hideOverlay(),
                         child: Container(
-                          color: Colors.black.withValues(alpha: 0.5),
+                          color: Colors.black.withValues(alpha: 0.7),
                         ),
                       ),
                     ),

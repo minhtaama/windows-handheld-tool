@@ -1,8 +1,8 @@
 {
     "overlay": {
         "width": 360,
-        "width_percent": 30,
-        "animation_duration_ms": 220,
+        "width_percent": 35,
+        "animation_duration_ms": 400,
         "side": "right"
     },
     "hotkey": {
@@ -22,14 +22,14 @@
             "min": 5,
             "max": 35,
             "step": 1,
-            "current": 19,
+            "current": 20,
             "auto": false
         },
         "fan": {
             "min": 0,
             "max": 100,
             "step": 5,
-            "current": 50,
+            "current": 75,
             "auto": true
         },
         "brightness": {
@@ -45,7 +45,7 @@
             "current": 50
         },
         "audio": {
-            "current": 50
+            "current": 60
         },
         "rtss": {
             "fps_limit": 60
