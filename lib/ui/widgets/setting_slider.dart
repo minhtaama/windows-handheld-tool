@@ -24,6 +24,9 @@ class SettingSlider extends StatelessWidget {
   /// Danh sách mốc chọn nhanh tùy chọn (ví dụ: [0, 30, 40, 60] cho FPS)
   final List<int>? quickPresets;
 
+  /// Boolean ẩn thanh slider, ví dụ khi quạt chạy auto thì không hiện.
+  final bool shouldShowSlider;
+
   const SettingSlider({
     super.key,
     required this.icon,
@@ -38,6 +41,7 @@ class SettingSlider extends StatelessWidget {
     this.currentValue,
     this.currentColor,
     this.quickPresets,
+    this.shouldShowSlider = true,
   });
 
   String _formatTargetValue(int val) {
@@ -118,27 +122,57 @@ class SettingSlider extends StatelessWidget {
                   ),
                 ),
 
-                // Lớp 2: Dải đo giá trị thực tế tức thời chạy ngầm (Live Telemetry)
+                // Lớp 2: Thanh trượt mục tiêu (Target Slider mượt mà)
+                if (shouldShowSlider)
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 2,
+                      padding: EdgeInsets.zero,
+                      activeTrackColor: AppTheme.primaryNeon.withValues(
+                        alpha: 0.85,
+                      ),
+                      inactiveTrackColor: Colors
+                          .transparent, // Trong suốt để lộ dải Live phía dưới
+                      thumbColor: Colors.white,
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 7,
+                        elevation: 2,
+                      ),
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 14,
+                      ),
+                      overlayColor: AppTheme.primaryNeon.withValues(
+                        alpha: 0.15,
+                      ),
+                    ),
+                    child: Slider(
+                      value: value.toDouble().clamp(
+                        min.toDouble(),
+                        max.toDouble(),
+                      ),
+                      min: min.toDouble(),
+                      max: max.toDouble(),
+                      divisions: max > min ? ((max - min) / step).round() : 1,
+                      onChanged: (val) => onChanged(val.round()),
+                    ),
+                  ),
+
+                // Lớp 3: Dải đo giá trị thực tế tức thời chạy ngầm (Live Telemetry)
                 if (currentValue != null)
                   LayoutBuilder(
                     builder: (context, constraints) {
                       final ratio = max == min
-                          ? 0.0
+                          ? 0.01
                           : ((currentValue! - min) / (max - min)).clamp(
-                              0.0,
+                              0.01,
                               1.0,
                             );
                       return Container(
-                        height: 6,
-                        width: constraints.maxWidth * ratio,
+                        height: 9,
+                        width: constraints.maxWidth * (ratio - 0.02),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(3),
-                          gradient: LinearGradient(
-                            colors: [
-                              liveColor.withValues(alpha: 0.5),
-                              liveColor,
-                            ],
-                          ),
+                          color: liveColor,
                           boxShadow: [
                             BoxShadow(
                               color: liveColor.withValues(alpha: 0.4),
@@ -149,37 +183,6 @@ class SettingSlider extends StatelessWidget {
                       );
                     },
                   ),
-
-                // Lớp 3: Thanh trượt mục tiêu (Target Slider mượt mà)
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 2,
-                    activeTrackColor: AppTheme.primaryNeon.withValues(
-                      alpha: 0.85,
-                    ),
-                    inactiveTrackColor: Colors
-                        .transparent, // Trong suốt để lộ dải Live phía dưới
-                    thumbColor: Colors.white,
-                    thumbShape: const RoundSliderThumbShape(
-                      enabledThumbRadius: 7,
-                      elevation: 2,
-                    ),
-                    overlayShape: const RoundSliderOverlayShape(
-                      overlayRadius: 14,
-                    ),
-                    overlayColor: AppTheme.primaryNeon.withValues(alpha: 0.15),
-                  ),
-                  child: Slider(
-                    value: value.toDouble().clamp(
-                      min.toDouble(),
-                      max.toDouble(),
-                    ),
-                    min: min.toDouble(),
-                    max: max.toDouble(),
-                    divisions: max > min ? ((max - min) / step).round() : 1,
-                    onChanged: (val) => onChanged(val.round()),
-                  ),
-                ),
               ],
             ),
           ),
@@ -194,8 +197,8 @@ class SettingSlider extends StatelessWidget {
               spacing: 6.0,
               labelBuilder: (preset) =>
                   (unit.toUpperCase() == 'FPS' && preset == 0)
-                      ? 'TẮT'
-                      : '$preset',
+                  ? 'TẮT'
+                  : '$preset',
               onSelected: onChanged,
             ),
           ],

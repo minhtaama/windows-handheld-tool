@@ -35,7 +35,7 @@
             "min": 0,
             "max": 100,
             "step": 5,
-            "current": 20
+            "current": 35
         },
         "volume": {
             "min": 0,
@@ -44,7 +44,7 @@
             "current": 50
         },
         "audio": {
-            "current": 32
+            "current": 60
         },
         "rtss": {
             "fps_limit": 60

@@ -36,11 +36,19 @@ class TdpController extends HardwareController {
   }
 
   void _initRyzenAdj() {
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
     final candidatePaths = [
       'bin/ryzenadj.dll',
+      'bin/libryzenadj.dll',
+      '$exeDir\\bin\\ryzenadj.dll',
+      '$exeDir\\bin\\libryzenadj.dll',
+      '$exeDir\\ryzenadj.dll',
+      '$exeDir\\libryzenadj.dll',
       'lib/ryzenadj.dll',
       'ryzenadj.dll',
+      'libryzenadj.dll',
       r'C:\Program Files\RyzenAdj\ryzenadj.dll',
+      r'C:\Program Files\RyzenAdj\libryzenadj.dll',
     ];
 
     String? foundPath;
@@ -67,6 +75,8 @@ class TdpController extends HardwareController {
         if (_ryzenHandle != null && _ryzenHandle != nullptr) {
           _isHardwareActive = true;
           _logger.info('Khởi tạo thành công kết nối phần cứng RyzenAdj DLL ($foundPath).');
+        } else {
+          _logger.warning('Đã tìm thấy $foundPath nhưng không thể mở handle (cần quyền Administrator để nạp Ring 0 Driver). Chuyển sang mô phỏng.');
         }
       } catch (e) {
         _logger.warning('Không thể nạp ryzenadj.dll: $e. Sử dụng chế độ mô phỏng.');

@@ -83,19 +83,27 @@ class RtssService {
     }
   }
 
+  static const List<String> candidateExePaths = [
+    r'C:\Program Files (x86)\RivaTuner Statistics Server\RTSS.exe',
+    r'C:\Program Files\RivaTuner Statistics Server\RTSS.exe',
+    r'D:\Program Files (x86)\RivaTuner Statistics Server\RTSS.exe',
+    r'D:\Program Files\RivaTuner Statistics Server\RTSS.exe',
+  ];
+
+  /// Kiểm tra xem RTSS đã được cài đặt trên ổ cứng hay chưa.
+  bool isInstalled() {
+    for (final path in candidateExePaths) {
+      if (File(path).existsSync()) return true;
+    }
+    return false;
+  }
+
   /// Đảm bảo RTSS đang chạy. Nếu chưa chạy, tự động tìm và khởi động RTSS.exe
   Future<bool> ensureRunning() async {
     if (isRunning()) {
       _logger.info('RTSS đang chạy ngầm.');
       return true;
     }
-
-    final candidateExePaths = [
-      r'C:\Program Files (x86)\RivaTuner Statistics Server\RTSS.exe',
-      r'C:\Program Files\RivaTuner Statistics Server\RTSS.exe',
-      r'D:\Program Files (x86)\RivaTuner Statistics Server\RTSS.exe',
-      r'D:\Program Files\RivaTuner Statistics Server\RTSS.exe',
-    ];
 
     for (final path in candidateExePaths) {
       if (File(path).existsSync()) {
@@ -145,21 +153,21 @@ class RtssService {
       // Duyệt qua mảng AppEntry để tìm game đang hoạt động có PID khác 0
       for (int i = 0; i < appArrSize; i++) {
         final entryOffset = appArrOffset + (i * appEntrySize);
-        final entryPtr = data.elementAt(entryOffset);
+        final entryPtr = data + entryOffset;
 
         // dwProcessID nằm ở offset 260 sau chuỗi szProcessPath (260 byte)
-        final pid = entryPtr.elementAt(260).cast<Uint32>()[0];
+        final pid = (entryPtr + 260).cast<Uint32>()[0];
         if (pid != 0) {
           // dwStatFramerate nằm ở offset 300 của AppEntry (đơn vị là fps * 10)
-          final statFramerate = entryPtr.elementAt(300).cast<Uint32>()[0];
+          final statFramerate = (entryPtr + 300).cast<Uint32>()[0];
           if (statFramerate > 0) {
             return (statFramerate / 10).round();
           }
 
           // Fallback: Tính từ dwStatFrames (offset 284) và delta time (offset 292 - 288)
-          final statFrames = entryPtr.elementAt(284).cast<Uint32>()[0];
-          final time0 = entryPtr.elementAt(288).cast<Uint32>()[0];
-          final time1 = entryPtr.elementAt(292).cast<Uint32>()[0];
+          final statFrames = (entryPtr + 284).cast<Uint32>()[0];
+          final time0 = (entryPtr + 288).cast<Uint32>()[0];
+          final time1 = (entryPtr + 292).cast<Uint32>()[0];
           final delta = time1 - time0;
           if (delta > 0 && statFrames > 0) {
             return ((statFrames * 1000) / delta).round();
@@ -202,14 +210,14 @@ class RtssService {
 
       for (int i = 0; i < appArrSize; i++) {
         final entryOffset = appArrOffset + (i * appEntrySize);
-        final entryPtr = data.elementAt(entryOffset);
-        final pid = entryPtr.elementAt(260).cast<Uint32>()[0];
+        final entryPtr = data + entryOffset;
+        final pid = (entryPtr + 260).cast<Uint32>()[0];
 
         if (pid != 0) {
           // szProcessPath là chuỗi ANSI 260 byte ở đầu struct
           final bytes = <int>[];
           for (int b = 0; b < 260; b++) {
-            final charCode = entryPtr.elementAt(b).cast<Uint8>().value;
+            final charCode = (entryPtr + b).cast<Uint8>().value;
             if (charCode == 0) break;
             bytes.add(charCode);
           }
