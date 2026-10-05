@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../core/config.dart';
 import '../services/overlay_controller.dart';
 import 'quick_panel.dart';
@@ -33,24 +34,23 @@ class _OverlayScreenState extends State<OverlayScreen>
     );
 
     // Hoạt cảnh trượt: từ ngoài mép phải vào sát mép phải
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(1.0, 0.0),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _animController,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeInCubic,
-    ));
+    _slideAnimation =
+        Tween<Offset>(begin: const Offset(1.0, 0.0), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _animController,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          ),
+        );
 
     // Hoạt cảnh làm mờ nền tối Backdrop phía sau
-    _backdropFadeAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _animController,
-      curve: Curves.easeOut,
-      reverseCurve: Curves.easeIn,
-    ));
+    _backdropFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _animController,
+        curve: Curves.easeOut,
+        reverseCurve: Curves.easeIn,
+      ),
+    );
 
     // Đăng ký bộ kích hoạt hoạt cảnh với OverlayController
     OverlayController.instance.onAnimateShow = () async {
@@ -101,13 +101,13 @@ class _OverlayScreenState extends State<OverlayScreen>
                         behavior: HitTestBehavior.opaque,
                         onTap: () => OverlayController.instance.hideOverlay(),
                         child: Container(
-                          color: Colors.black.withValues(alpha: 0.12),
+                          color: Colors.black.withValues(alpha: 0.32),
                         ),
                       ),
                     ),
                   ),
 
-                  // 2. Side Dock Panel nằm áp sát mép phải màn hình
+                  // 2. Floating Panel phong cách Xbox Game Bar (cách đều mép trên, dưới, phải)
                   Align(
                     alignment: Alignment.centerRight,
                     child: SlideTransition(
@@ -117,6 +117,11 @@ class _OverlayScreenState extends State<OverlayScreen>
                         curve: Curves.easeOutCubic,
                         width: panelWidth,
                         height: double.infinity,
+                        padding: const EdgeInsets.only(
+                          top: 24,
+                          bottom: 24,
+                          right: 20,
+                        ),
                         child: QuickSettingsPanel(config: widget.config),
                       ),
                     ),

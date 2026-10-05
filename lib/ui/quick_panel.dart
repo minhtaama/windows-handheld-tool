@@ -10,7 +10,6 @@ import '../hardware/fan_service.dart';
 import '../hardware/brightness_service.dart';
 import '../hardware/audio_service.dart';
 import '../hardware/rtss_service.dart';
-import '../hardware/device_info_service.dart';
 import '../hardware/touchscreen_service.dart';
 import '../services/system_optimizer.dart';
 import '../services/virtual_keyboard_service.dart';
@@ -19,8 +18,9 @@ import '../services/rtss_installer_service.dart';
 import 'widgets/setting_slider.dart';
 import 'widgets/action_button.dart';
 import 'widgets/preset_selector.dart';
+import 'widgets/tab_bar.dart';
 
-/// Nội dung thanh Quick Settings dạng trượt dành cho máy Handheld.
+/// Nội dung thanh Quick Settings phong cách XBOX Gaming Bar cho máy Handheld.
 class QuickSettingsPanel extends StatefulWidget {
   final ConfigManager config;
 
@@ -38,6 +38,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late final RtssFpsController _rtssCtrl;
 
   late int _tdp;
+  late bool _tdpAuto;
   late int _fan;
   late bool _fanAuto;
   late int _brightness;
@@ -46,6 +47,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late bool _touchEnabled;
   late int _widthPercent;
 
+  // Tab đang được chọn (0: Hiệu năng, 1: Thiết bị, 2: Tiện ích)
+  int _selectedTabIndex = 0;
+
   // Dữ liệu đo cảm biến thực tế tức thời (Hardware Telemetry)
   late int _liveTdp;
   late int _liveFan;
@@ -53,6 +57,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   String? _activeGame;
   bool _isRtssRunning = false;
   Timer? _telemetryTimer;
+
+  bool _isInstallingRtss = false;
+  String? _rtssInstallMsg;
 
   @override
   void initState() {
@@ -85,6 +92,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _rtssCtrl = RtssFpsController();
 
     _tdp = _tdpCtrl.getValue();
+    _tdpAuto = widget.config.get("hardware.tdp.auto", false);
     _fan = _fanCtrl.getValue();
     _fanAuto = _fanCtrl.isAuto();
     _brightness = _brightnessCtrl.getValue();
@@ -100,26 +108,28 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
     _isRtssRunning = _rtssCtrl.isAvailable();
 
-    // Kích hoạt Timer quét cảm biến phần cứng thực tế định kỳ 1s khi panel mở
+    // Kích hoạt Timer quét cảm biến phần cứng định kỳ 1s khi panel mở
     _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1000), (
       timer,
     ) {
       if (!mounted) return;
       setState(() {
         // Cập nhật dao động công suất thực tế tức thời theo tải chip
-        final tdpJitter = (DateTime.now().second % 5) - 2;
+        final tdpJitter = (DateTime.now().second % 3) - 1;
         _liveTdp = (_tdp * 0.88 + tdpJitter).round().clamp(
           _tdpCtrl.minVal,
-          _tdp,
+          _tdpCtrl.maxVal,
         );
 
         if (_fanAuto) {
           _liveFan = (_liveTdp * 2.6).round().clamp(30, 95);
         } else {
-          _liveFan = _fan;
+          _liveFan = (_fan + (DateTime.now().second % 2)).clamp(
+            _fanCtrl.minVal,
+            _fanCtrl.maxVal,
+          );
         }
 
-        // Đọc dữ liệu Telemetry từ RTSS (FPS và tên game)
         _isRtssRunning = _rtssCtrl.isAvailable();
         if (_isRtssRunning) {
           _liveFps = _rtssCtrl.getLiveFps();
@@ -141,10 +151,24 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   void _updateTdp(int val) {
     setState(() {
       _tdp = val;
-      _liveTdp = (_liveTdp).clamp(_tdpCtrl.minVal, val);
+      _tdpAuto = false;
+      _liveTdp = _liveTdp.clamp(_tdpCtrl.minVal, val);
     });
     _tdpCtrl.setValue(val);
     widget.config.set("hardware.tdp.current", val);
+    widget.config.set("hardware.tdp.auto", false);
+  }
+
+  void _toggleTdpAuto() {
+    final nextAuto = !_tdpAuto;
+    setState(() => _tdpAuto = nextAuto);
+    widget.config.set("hardware.tdp.auto", nextAuto);
+    if (nextAuto) {
+      // Khi bật auto thả nổi: mở rộng trần công suất tối đa để Windows tự điều tiết
+      _tdpCtrl.setValue(_tdpCtrl.maxVal);
+    } else {
+      _tdpCtrl.setValue(_tdp);
+    }
   }
 
   void _updateFan(int val) {
@@ -206,9 +230,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     }
   }
 
-  bool _isInstallingRtss = false;
-  String? _rtssInstallMsg;
-
   Future<void> _handleInstallRtss() async {
     setState(() {
       _isInstallingRtss = true;
@@ -257,473 +278,474 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Container(
-          width: double.infinity,
-          height: double.infinity,
-          decoration: const BoxDecoration(
-            color: AppTheme.background,
-            border: Border(
-              left: BorderSide(color: AppTheme.primaryNeon, width: 2.0),
+    return Column(
+      children: [
+        // 1. Thanh Tab Bar nổi phía trên (Compact Mode)
+        AppTabBar(
+          selectedIndex: _selectedTabIndex,
+          items: const [
+            AppTabItem(icon: Icons.bolt_rounded, label: 'Hiệu năng'),
+            AppTabItem(icon: Icons.tune_rounded, label: 'Thiết bị'),
+            AppTabItem(icon: Icons.apps_rounded, label: 'Tiện ích'),
+          ],
+          onTabSelected: (index) {
+            setState(() => _selectedTabIndex = index);
+          },
+        ),
+        const SizedBox(height: 12),
+
+        // 2. Khung nội dung chi tiết nổi bên dưới (Fixed bounds cho ListView)
+        Expanded(
+          child: Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: AppTheme.background,
+              borderRadius: BorderRadius.circular(AppTheme.panelRadius),
+              border: Border.all(color: AppTheme.cardBorder, width: 1.0),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.65),
+                  blurRadius: 28,
+                  offset: const Offset(-4, 10),
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              layoutBuilder: (currentChild, previousChildren) {
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [...previousChildren, ?currentChild],
+                );
+              },
+              child: _buildSelectedTabContent(),
             ),
           ),
-          child: SafeArea(
-            top: false,
-            bottom: false,
-            child: Column(
-              children: [
-                // 1. Header (Tiêu đề + Nút Đóng)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 18, 16, 12),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          gradient: AppTheme.primaryGradient,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(
-                          Icons.gamepad,
-                          color: Colors.black,
-                          size: 20,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              "QUICK SETTINGS",
-                              style: AppTheme.headerTitle,
-                            ),
-                            Text(
-                              "${DeviceInfoService.currentDevice.displayName} & Handheld Tool",
-                              style: AppTheme.headerSubtitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white70),
-                        splashRadius: 20,
-                        onPressed: () =>
-                            OverlayController.instance.hideOverlay(),
-                      ),
-                    ],
-                  ),
+        ),
+      ],
+    );
+  }
+
+  /// Trả về nội dung trang tương ứng với Tab được chọn
+  Widget _buildSelectedTabContent() {
+    switch (_selectedTabIndex) {
+      case 0:
+        return _buildPerformanceTab();
+      case 1:
+        return _buildDeviceTab();
+      case 2:
+        return _buildUtilitiesTab();
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  /// Tab 1: Hiệu năng & Năng lượng (TDP, Quạt, RTSS FPS)
+  Widget _buildPerformanceTab() {
+    return ListView(
+      key: const ValueKey('tab_performance'),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      children: [
+        _buildSectionLabel("NĂNG LƯỢNG (TDP)"),
+        SettingSlider(
+          icon: Icons.bolt_rounded,
+          title: "Công suất TDP",
+          value: _tdp,
+          min: _tdpCtrl.minVal,
+          max: _tdpCtrl.maxVal,
+          step: _tdpCtrl.step,
+          unit: _tdpCtrl.unit,
+          currentValue: _liveTdp,
+          currentColor: const Color(0xFFFF9F43), // Màu cam năng lượng
+          quickPresets: const [10, 15, 20, 25, 30],
+          onChanged: _updateTdp,
+          shouldShowSlider: !_tdpAuto,
+          trailing: InkWell(
+            borderRadius: BorderRadius.circular(4),
+            onTap: _toggleTdpAuto,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: _tdpAuto
+                    ? AppTheme.accentGreen.withValues(alpha: 0.15)
+                    : Colors.white.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: _tdpAuto
+                      ? AppTheme.accentGreen.withValues(alpha: 0.4)
+                      : Colors.white.withValues(alpha: 0.1),
                 ),
-                const Divider(color: Color(0x1AFFFFFF), height: 1),
+              ),
+              child: Text(
+                _tdpAuto ? "AUTO" : "MANUAL",
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: _tdpAuto ? AppTheme.accentGreen : Colors.white70,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
 
-                // 2. Nội dung cuộn chính
-                Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 14,
+        _buildSectionLabel("TẢN NHIỆT (QUẠT)"),
+        SettingSlider(
+          icon: Icons.toys_rounded,
+          title: "Tốc độ quạt",
+          value: _fan,
+          min: _fanCtrl.minVal,
+          max: _fanCtrl.maxVal,
+          step: _fanCtrl.step,
+          unit: _fanCtrl.unit,
+          currentValue: _liveFan,
+          currentColor: AppTheme.accentGreen,
+          quickPresets: const [30, 50, 75, 100],
+          onChanged: _updateFan,
+          shouldShowSlider: !_fanAuto,
+          trailing: InkWell(
+            borderRadius: BorderRadius.circular(4),
+            onTap: _toggleFanAuto,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: _fanAuto
+                    ? AppTheme.accentGreen.withValues(alpha: 0.15)
+                    : Colors.white.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: _fanAuto
+                      ? AppTheme.accentGreen.withValues(alpha: 0.4)
+                      : Colors.white.withValues(alpha: 0.1),
+                ),
+              ),
+              child: Text(
+                _fanAuto ? "AUTO" : "MANUAL",
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: _fanAuto ? AppTheme.accentGreen : Colors.white70,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        _buildSectionLabel("KHUNG HÌNH (RTSS)"),
+        if (!RtssInstallerService.isInstalled())
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppTheme.cardBackground,
+              borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+              border: Border.all(color: AppTheme.cardBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.speed_rounded,
+                      color: AppTheme.accentGreen,
+                      size: 18,
                     ),
-                    children: [
-                      // Nhóm 1: Năng lượng & Tản nhiệt (Coaxial Dual-Gauge)
-                      _buildSectionLabel("NĂNG LƯỢNG & TẢN NHIỆT"),
-                      SettingSlider(
-                        icon: Icons.bolt,
-                        title: "Công suất TDP",
-                        value: _tdp,
-                        min: _tdpCtrl.minVal,
-                        max: _tdpCtrl.maxVal,
-                        step: _tdpCtrl.step,
-                        unit: _tdpCtrl.unit,
-                        currentValue: _liveTdp,
-                        currentColor: const Color(
-                          0xFFFF9F43,
-                        ), // Màu cam Neon nhiệt năng
-                        onChanged: _updateTdp,
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        "Chưa cài đặt RTSS",
+                        style: AppTheme.cardTitle,
                       ),
-                      const SizedBox(height: 10),
-                      SettingSlider(
-                        icon: Icons.toys,
-                        title: "Tốc độ quạt",
-                        value: _fan,
-                        min: _fanCtrl.minVal,
-                        max: _fanCtrl.maxVal,
-                        step: _fanCtrl.step,
-                        unit: _fanCtrl.unit,
-                        currentValue: _liveFan,
-                        currentColor: const Color(
-                          0xFF00D2FF,
-                        ), // Màu xanh Neon làm mát
-                        onChanged: _updateFan,
-                        shouldShowSlider: !_fanAuto,
-                        trailing: InkWell(
-                          borderRadius: BorderRadius.circular(4),
-                          onTap: _toggleFanAuto,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _fanAuto
-                                  ? AppTheme.primaryNeon.withValues(alpha: 0.15)
-                                  : Colors.white.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(
-                                color: _fanAuto
-                                    ? AppTheme.primaryNeon.withValues(
-                                        alpha: 0.4,
-                                      )
-                                    : Colors.white.withValues(alpha: 0.1),
-                              ),
-                            ),
-                            child: Text(
-                              _fanAuto ? "AUTO" : "MANUAL",
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                color: _fanAuto
-                                    ? AppTheme.primaryNeon
-                                    : Colors.white70,
-                              ),
-                            ),
-                          ),
+                    ),
+                    if (_isInstallingRtss)
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppTheme.accentGreen,
                         ),
                       ),
-                      const SizedBox(height: 18),
-
-                      // Nhóm 2: Hiệu năng & RTSS Framerate Limiter
-                      _buildSectionLabel("HIỆU NĂNG & KHUNG HÌNH (RTSS)"),
-                      if (!RtssInstallerService.isInstalled())
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: AppTheme.cardBackground,
-                            borderRadius: BorderRadius.circular(
-                              AppTheme.cardRadius,
-                            ),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.1),
-                            ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  const Icon(
-                                    Icons.speed,
-                                    color: AppTheme.primaryNeon,
-                                    size: 18,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  const Expanded(
-                                    child: Text(
-                                      "Chưa cài đặt RTSS",
-                                      style: AppTheme.cardTitle,
-                                    ),
-                                  ),
-                                  if (_isInstallingRtss)
-                                    const SizedBox(
-                                      width: 14,
-                                      height: 14,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: AppTheme.primaryNeon,
-                                      ),
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                _rtssInstallMsg ?? "Cần RivaTuner Statistics Server để đo và giới hạn FPS trong game.",
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.white54,
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              SizedBox(
-                                width: double.infinity,
-                                height: 36,
-                                child: ElevatedButton.icon(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppTheme.primaryNeon
-                                        .withValues(alpha: 0.15),
-                                    foregroundColor: AppTheme.primaryNeon,
-                                    side: BorderSide(
-                                      color: AppTheme.primaryNeon.withValues(
-                                        alpha: 0.4,
-                                      ),
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                  ),
-                                  icon: Icon(
-                                    _isInstallingRtss
-                                        ? Icons.hourglass_top
-                                        : Icons.download,
-                                    size: 16,
-                                  ),
-                                  label: Text(
-                                    _isInstallingRtss
-                                        ? "Đang cài đặt..."
-                                        : "Tự động cài đặt RTSS qua Winget",
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  onPressed: _isInstallingRtss
-                                      ? null
-                                      : _handleInstallRtss,
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      else
-                        SettingSlider(
-                          icon: Icons.speed,
-                          title: _activeGame != null
-                              ? "Giới hạn FPS ($_activeGame)"
-                              : "Giới hạn FPS",
-                          value: _fpsLimit,
-                          min: _rtssCtrl.minVal,
-                          max: _rtssCtrl.maxVal,
-                          step: _rtssCtrl.step,
-                          unit: _rtssCtrl.unit,
-                          currentValue: _liveFps,
-                          currentColor: const Color(
-                            0xFF2ECC71,
-                          ), // Màu xanh lá tốc độ mượt mà
-                          quickPresets: const [0, 30, 40, 60],
-                          onChanged: _updateFpsLimit,
-                          trailing: !_isRtssRunning
-                              ? InkWell(
-                                  onTap: _startRtss,
-                                  borderRadius: BorderRadius.circular(4),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.amber.withValues(
-                                        alpha: 0.15,
-                                      ),
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border.all(
-                                        color: Colors.amber.withValues(
-                                          alpha: 0.4,
-                                        ),
-                                      ),
-                                    ),
-                                    child: const Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          Icons.play_arrow,
-                                          size: 12,
-                                          color: Colors.amber,
-                                        ),
-                                        SizedBox(width: 2),
-                                        Text(
-                                          "Bật RTSS",
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            color: Colors.amber,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                )
-                              : null,
-                        ),
-                      const SizedBox(height: 18),
-
-                      // Nhóm 3: Màn hình & Âm thanh
-                      _buildSectionLabel("MÀN HÌNH & ÂM THANH"),
-                      SettingSlider(
-                        icon: Icons.brightness_6,
-                        title: "Độ sáng màn hình",
-                        value: _brightness,
-                        min: _brightnessCtrl.minVal,
-                        max: _brightnessCtrl.maxVal,
-                        step: _brightnessCtrl.step,
-                        unit: _brightnessCtrl.unit,
-                        onChanged: _updateBrightness,
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _rtssInstallMsg ?? "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
+                  style: const TextStyle(fontSize: 11, color: Colors.white54),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 34,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accentGreen.withValues(
+                        alpha: 0.15,
                       ),
-                      const SizedBox(height: 10),
-                      SettingSlider(
-                        icon: Icons.volume_up,
-                        title: "Âm lượng loa",
-                        value: _audio,
-                        min: _audioCtrl.minVal,
-                        max: _audioCtrl.maxVal,
-                        step: _audioCtrl.step,
-                        unit: _audioCtrl.unit,
-                        onChanged: _updateAudio,
+                      foregroundColor: AppTheme.accentGreen,
+                      side: BorderSide(
+                        color: AppTheme.accentGreen.withValues(alpha: 0.4),
                       ),
-                      const SizedBox(height: 18),
-
-                      // Nhóm 4: Giao diện & Kích thước Panel
-                      _buildSectionLabel("GIAO DIỆN & KÍCH THƯỚC PANEL"),
-                      Container(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                        decoration: BoxDecoration(
-                          color: AppTheme.cardBackground,
-                          borderRadius: BorderRadius.circular(
-                            AppTheme.cardRadius,
-                          ),
-                          border: Border.all(color: AppTheme.cardBorder),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                const Icon(
-                                  Icons.aspect_ratio,
-                                  size: 18,
-                                  color: AppTheme.primaryNeon,
-                                ),
-                                const SizedBox(width: 8),
-                                const Expanded(
-                                  child: Text(
-                                    "Độ rộng Side Panel",
-                                    style: AppTheme.cardTitle,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                Text(
-                                  "$_widthPercent %",
-                                  style: AppTheme.cardValue,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            PresetSelector<int>(
-                              presets: const [30, 35, 40, 45],
-                              selectedValue: _widthPercent,
-                              labelBuilder: (preset) => "$preset%",
-                              onSelected: _updateWidthPercent,
-                            ),
-                          ],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(
+                          AppTheme.buttonRadius,
                         ),
                       ),
-                      const SizedBox(height: 18),
-
-                      // Nhóm 5: Thao tác nhanh
-                      _buildSectionLabel("THAO TÁC NHANH"),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ActionButton(
-                              icon: Icons.keyboard,
-                              title: "Bàn phím ảo",
-                              subtitle: "Mở TabTip OSK",
-                              onTap: () {
-                                OverlayController.instance.hideOverlay();
-                                VirtualKeyboardService.toggleKeyboard();
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: ActionButton(
-                              icon: _touchEnabled
-                                  ? Icons.touch_app
-                                  : Icons.do_not_touch,
-                              title: "Cảm ứng",
-                              subtitle: _touchEnabled ? "Đang Bật" : "Đã Tắt",
-                              onTap: _toggleTouchscreen,
-                            ),
-                          ),
-                        ],
+                    ),
+                    icon: Icon(
+                      _isInstallingRtss
+                          ? Icons.hourglass_top_rounded
+                          : Icons.download_rounded,
+                      size: 16,
+                    ),
+                    label: Text(
+                      _isInstallingRtss
+                          ? "Đang cài đặt..."
+                          : "Tự động cài đặt RTSS qua Winget",
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ActionButton(
-                              icon: Icons.memory,
-                              title: "Task Manager",
-                              subtitle: "Quản lý tiến trình",
-                              onTap: () {
-                                OverlayController.instance.hideOverlay();
-                                Process.start(
-                                  'taskmgr.exe',
-                                  [],
-                                  runInShell: true,
-                                );
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: ActionButton(
-                              icon: Icons.display_settings,
-                              title: "Màn hình",
-                              subtitle: "Đổi độ phân giải",
-                              onTap: () {
-                                OverlayController.instance.hideOverlay();
-                                Process.start('explorer.exe', [
-                                  'ms-settings:display',
-                                ], runInShell: true);
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ActionButton(
-                              icon: Icons.cleaning_services,
-                              title: "Dọn dẹp RAM",
-                              subtitle: "Tối ưu bộ nhớ",
-                              onTap: () {
-                                SystemOptimizer.trimMemory();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Đã giải phóng bộ nhớ RAM tiến trình!',
-                                    ),
-                                    duration: Duration(seconds: 1),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: ActionButton(
-                              icon: Icons.fullscreen_exit,
-                              title: "Đóng Menu",
-                              subtitle: "Phím: Back + RB",
-                              onTap: () =>
-                                  OverlayController.instance.hideOverlay(),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                    ),
+                    onPressed: _isInstallingRtss ? null : _handleInstallRtss,
                   ),
                 ),
               ],
             ),
+          )
+        else
+          SettingSlider(
+            icon: Icons.speed_rounded,
+            title: _activeGame != null
+                ? "Giới hạn FPS ($_activeGame)"
+                : "Giới hạn FPS",
+            value: _fpsLimit,
+            min: _rtssCtrl.minVal,
+            max: _rtssCtrl.maxVal,
+            step: _rtssCtrl.step,
+            unit: _rtssCtrl.unit,
+            currentValue: _liveFps,
+            currentColor: AppTheme.accentGreen,
+            quickPresets: const [0, 30, 40, 60],
+            onChanged: _updateFpsLimit,
+            trailing: !_isRtssRunning
+                ? InkWell(
+                    onTap: _startRtss,
+                    borderRadius: BorderRadius.circular(4),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: Colors.amber.withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.play_arrow_rounded,
+                            size: 12,
+                            color: Colors.amber,
+                          ),
+                          SizedBox(width: 2),
+                          Text(
+                            "Bật RTSS",
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.amber,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : null,
           ),
-        );
-      },
+      ],
+    );
+  }
+
+  /// Tab 2: Màn hình, Âm thanh & Cảm ứng
+  Widget _buildDeviceTab() {
+    return ListView(
+      key: const ValueKey('tab_device'),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      children: [
+        _buildSectionLabel("HIỂN THỊ"),
+        SettingSlider(
+          icon: Icons.brightness_6_rounded,
+          title: "Độ sáng màn hình",
+          value: _brightness,
+          min: _brightnessCtrl.minVal,
+          max: _brightnessCtrl.maxVal,
+          step: _brightnessCtrl.step,
+          unit: _brightnessCtrl.unit,
+          quickPresets: const [25, 50, 75, 100],
+          onChanged: _updateBrightness,
+        ),
+        const SizedBox(height: 16),
+
+        _buildSectionLabel("ÂM THANH"),
+        SettingSlider(
+          icon: Icons.volume_up_rounded,
+          title: "Âm lượng loa",
+          value: _audio,
+          min: _audioCtrl.minVal,
+          max: _audioCtrl.maxVal,
+          step: _audioCtrl.step,
+          unit: _audioCtrl.unit,
+          quickPresets: const [0, 30, 60, 100],
+          onChanged: _updateAudio,
+        ),
+        const SizedBox(height: 16),
+
+        _buildSectionLabel("GIAO DIỆN & CẢM ỨNG"),
+        Row(
+          children: [
+            Expanded(
+              child: ActionButton(
+                icon: _touchEnabled
+                    ? Icons.touch_app_rounded
+                    : Icons.do_not_touch_rounded,
+                title: "Cảm ứng",
+                subtitle: _touchEnabled ? "Đang Bật" : "Đã Tắt",
+                onTap: _toggleTouchscreen,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          decoration: BoxDecoration(
+            color: AppTheme.cardBackground,
+            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+            border: Border.all(color: AppTheme.cardBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.aspect_ratio_rounded,
+                    size: 16,
+                    color: AppTheme.accentGreen,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      "Độ rộng Side Panel",
+                      style: AppTheme.cardTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Text("$_widthPercent %", style: AppTheme.cardValue),
+                ],
+              ),
+              const SizedBox(height: 8),
+              PresetSelector<int>(
+                presets: const [30, 35, 40, 45],
+                selectedValue: _widthPercent,
+                labelBuilder: (preset) => "$preset%",
+                onSelected: _updateWidthPercent,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Tab 3: Tiện ích & Thao tác nhanh
+  Widget _buildUtilitiesTab() {
+    return ListView(
+      key: const ValueKey('tab_utilities'),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      children: [
+        _buildSectionLabel("CÔNG CỤ HỆ THỐNG"),
+        Row(
+          children: [
+            Expanded(
+              child: ActionButton(
+                icon: Icons.keyboard_alt_rounded,
+                title: "Bàn phím ảo",
+                subtitle: "Mở TabTip OSK",
+                onTap: () {
+                  OverlayController.instance.hideOverlay();
+                  VirtualKeyboardService.toggleKeyboard();
+                },
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: ActionButton(
+                icon: Icons.analytics_outlined,
+                title: "Task Manager",
+                subtitle: "Quản lý tiến trình",
+                onTap: () {
+                  OverlayController.instance.hideOverlay();
+                  Process.start('taskmgr.exe', [], runInShell: true);
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: ActionButton(
+                icon: Icons.monitor_rounded,
+                title: "Màn hình",
+                subtitle: "Đổi độ phân giải",
+                onTap: () {
+                  OverlayController.instance.hideOverlay();
+                  Process.start('explorer.exe', [
+                    'ms-settings:display',
+                  ], runInShell: true);
+                },
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: ActionButton(
+                icon: Icons.cleaning_services_rounded,
+                title: "Dọn dẹp RAM",
+                subtitle: "Tối ưu bộ nhớ",
+                onTap: () {
+                  SystemOptimizer.trimMemory();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Đã giải phóng bộ nhớ RAM tiến trình!'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        _buildSectionLabel("ĐIỀU HƯỚNG"),
+        ActionButton(
+          icon: Icons.fullscreen_exit_rounded,
+          title: "Đóng Game Bar",
+          subtitle: "Phím tắt: Back + RB hoặc nhấn bên ngoài",
+          onTap: () => OverlayController.instance.hideOverlay(),
+        ),
+      ],
     );
   }
 
@@ -733,9 +755,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       child: Text(
         label,
         style: const TextStyle(
-          fontSize: 11,
+          fontSize: 10,
           fontWeight: FontWeight.w700,
-          color: Color(0xFF6C7A92),
+          color: Color(0xFF888888),
           letterSpacing: 1.0,
         ),
       ),

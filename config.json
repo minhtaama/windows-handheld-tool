@@ -22,7 +22,8 @@
             "min": 5,
             "max": 35,
             "step": 1,
-            "current": 15
+            "current": 15,
+            "auto": false
         },
         "fan": {
             "min": 0,
@@ -35,7 +36,7 @@
             "min": 0,
             "max": 100,
             "step": 5,
-            "current": 35
+            "current": 50
         },
         "volume": {
             "min": 0,
