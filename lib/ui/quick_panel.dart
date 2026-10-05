@@ -218,6 +218,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             ),
           ),
           child: SafeArea(
+            top: false,
+            bottom: false,
             child: Column(
               children: [
             // 1. Header (Tiêu đề + Nút Đóng)

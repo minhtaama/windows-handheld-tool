@@ -135,7 +135,7 @@ bool Win32Window::Create(const std::wstring& title,
   double scale_factor = dpi / 96.0;
 
   HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
+      window_class, title.c_str(), WS_POPUP,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
       nullptr, nullptr, GetModuleHandle(nullptr), this);
@@ -195,6 +195,20 @@ Win32Window::MessageHandler(HWND hwnd,
       SetWindowPos(hwnd, nullptr, newRectSize->left, newRectSize->top, newWidth,
                    newHeight, SWP_NOZORDER | SWP_NOACTIVATE);
 
+      return 0;
+    }
+    case WM_GETMINMAXINFO: {
+      auto info = reinterpret_cast<MINMAXINFO*>(lparam);
+      HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      MONITORINFO monitor_info = {sizeof(MONITORINFO)};
+      if (GetMonitorInfo(monitor, &monitor_info)) {
+        info->ptMaxPosition.x = monitor_info.rcMonitor.left;
+        info->ptMaxPosition.y = monitor_info.rcMonitor.top;
+        info->ptMaxSize.x = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+        info->ptMaxSize.y = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+        info->ptMaxTrackSize.x = info->ptMaxSize.x;
+        info->ptMaxTrackSize.y = info->ptMaxSize.y;
+      }
       return 0;
     }
     case WM_SIZE: {
