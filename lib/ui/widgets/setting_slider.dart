@@ -53,7 +53,7 @@ class SettingSlider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final liveColor = currentColor ?? AppTheme.secondaryNeon;
+    final liveColor = currentColor ?? AppTheme.secondary;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
@@ -68,7 +68,7 @@ class SettingSlider extends StatelessWidget {
           // 1. Dòng tiêu đề và thông số (Gọn gàng, tinh tế, chống tràn pixel tuyệt đối)
           Row(
             children: [
-              Icon(icon, size: 18, color: AppTheme.primaryNeon),
+              Icon(icon, size: 18, color: AppTheme.primary),
               const SizedBox(width: 8),
               // Tiêu đề tự co giãn linh hoạt
               Expanded(
@@ -97,7 +97,7 @@ class SettingSlider extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w400,
-                    color: Colors.white.withValues(alpha: 0.35),
+                    color: AppTheme.textSecondary.withValues(alpha: 0.6),
                   ),
                 ),
               ],
@@ -114,26 +114,71 @@ class SettingSlider extends StatelessWidget {
               children: [
                 // Lớp 1: Rãnh nền của thanh trượt (Background Groove)
                 Container(
-                  height: 6,
+                  height: 4,
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.08),
+                    color: AppTheme.cardBorder.withValues(alpha: 0.3),
                     borderRadius: BorderRadius.circular(3),
                   ),
                 ),
 
-                // Lớp 2: Thanh trượt mục tiêu (Target Slider mượt mà)
+                // Lớp 2: Thanh giá trị mục tiêu màu xanh (Target Track)
+                if (shouldShowSlider)
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final targetRatio = max == min
+                          ? 0.0
+                          : ((value - min) / (max - min)).clamp(0.0, 1.0);
+                      return AnimatedContainer(
+                        duration: const Duration(milliseconds: 60),
+                        height: 5,
+                        width: constraints.maxWidth * targetRatio,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(3),
+                          color: AppTheme.primary.withValues(alpha: 0.85),
+                        ),
+                      );
+                    },
+                  ),
+
+                // Lớp 3: Dải đo giá trị thực tế tức thời chạy ngầm (Live Telemetry nằm trên thanh xanh)
+                if (currentValue != null)
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final ratio = max == min
+                          ? 0.01
+                          : ((currentValue! - min) / (max - min)).clamp(
+                              0.01,
+                              1.0,
+                            );
+                      return AnimatedContainer(
+                        duration: Durations.short4,
+                        height: 9,
+                        width: constraints.maxWidth * (ratio - 0.02),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(3),
+                          color: liveColor,
+                          boxShadow: [
+                            BoxShadow(
+                              color: liveColor.withValues(alpha: 0.6),
+                              blurRadius: 15,
+                              spreadRadius: 3,
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+
+                // Lớp 4: Con chạy điều khiển (Slider Thumb nổi trên cùng, track trong suốt)
                 if (shouldShowSlider)
                   SliderTheme(
                     data: SliderTheme.of(context).copyWith(
-                      trackHeight: 2,
+                      trackHeight: 5,
                       padding: EdgeInsets.zero,
-                      activeTrackColor: AppTheme.primaryNeon.withValues(
-                        alpha: 0.85,
-                      ),
-                      inactiveTrackColor: Colors
-                          .transparent, // Trong suốt để lộ dải Live phía dưới
-                      thumbColor: Colors.white,
+                      activeTrackColor: AppTheme.transparent,
+                      inactiveTrackColor: AppTheme.transparent,
+                      thumbColor: AppTheme.textPrimary,
                       thumbShape: const RoundSliderThumbShape(
                         enabledThumbRadius: 7,
                         elevation: 2,
@@ -141,9 +186,7 @@ class SettingSlider extends StatelessWidget {
                       overlayShape: const RoundSliderOverlayShape(
                         overlayRadius: 14,
                       ),
-                      overlayColor: AppTheme.primaryNeon.withValues(
-                        alpha: 0.15,
-                      ),
+                      overlayColor: AppTheme.primary.withValues(alpha: 0.15),
                     ),
                     child: Slider(
                       value: value.toDouble().clamp(
@@ -155,33 +198,6 @@ class SettingSlider extends StatelessWidget {
                       divisions: max > min ? ((max - min) / step).round() : 1,
                       onChanged: (val) => onChanged(val.round()),
                     ),
-                  ),
-
-                // Lớp 3: Dải đo giá trị thực tế tức thời chạy ngầm (Live Telemetry)
-                if (currentValue != null)
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      final ratio = max == min
-                          ? 0.01
-                          : ((currentValue! - min) / (max - min)).clamp(
-                              0.01,
-                              1.0,
-                            );
-                      return Container(
-                        height: 9,
-                        width: constraints.maxWidth * (ratio - 0.02),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(3),
-                          color: liveColor,
-                          boxShadow: [
-                            BoxShadow(
-                              color: liveColor.withValues(alpha: 0.4),
-                              blurRadius: 5,
-                            ),
-                          ],
-                        ),
-                      );
-                    },
                   ),
               ],
             ),

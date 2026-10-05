@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/app_theme.dart';
 import '../core/config.dart';
 import '../services/overlay_controller.dart';
 import 'quick_panel.dart';
@@ -19,6 +20,7 @@ class _OverlayScreenState extends State<OverlayScreen>
   late final AnimationController _animController;
   late final Animation<Offset> _slideAnimation;
   late final Animation<double> _backdropFadeAnimation;
+  late final Animation<double> _panelFadeAnimation;
 
   @override
   void initState() {
@@ -52,6 +54,15 @@ class _OverlayScreenState extends State<OverlayScreen>
       ),
     );
 
+    // Hoạt cảnh mờ dần (Fade In / Fade Out) đồng bộ cho Side Panel
+    _panelFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _animController,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      ),
+    );
+
     // Đăng ký bộ kích hoạt hoạt cảnh với OverlayController
     OverlayController.instance.onAnimateShow = () async {
       try {
@@ -82,7 +93,7 @@ class _OverlayScreenState extends State<OverlayScreen>
         final widthPercent = OverlayController.instance.widthPercent;
 
         return Scaffold(
-          backgroundColor: Colors.transparent,
+          backgroundColor: AppTheme.transparent,
           body: LayoutBuilder(
             builder: (context, constraints) {
               final screenWidth = constraints.maxWidth;
@@ -101,28 +112,31 @@ class _OverlayScreenState extends State<OverlayScreen>
                         behavior: HitTestBehavior.opaque,
                         onTap: () => OverlayController.instance.hideOverlay(),
                         child: Container(
-                          color: Colors.black.withValues(alpha: 0.32),
+                          color: Colors.black.withValues(alpha: 0.5),
                         ),
                       ),
                     ),
                   ),
 
-                  // 2. Floating Panel phong cách Xbox Game Bar (cách đều mép trên, dưới, phải)
+                  // 2. Floating Panel dạng thẻ nổi (vừa trượt vừa làm mờ)
                   Align(
                     alignment: Alignment.centerRight,
                     child: SlideTransition(
                       position: _slideAnimation,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 180),
-                        curve: Curves.easeOutCubic,
-                        width: panelWidth,
-                        height: double.infinity,
-                        padding: const EdgeInsets.only(
-                          top: 24,
-                          bottom: 24,
-                          right: 20,
+                      child: FadeTransition(
+                        opacity: _panelFadeAnimation,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOutCubic,
+                          width: panelWidth,
+                          height: double.infinity,
+                          padding: const EdgeInsets.only(
+                            top: 24,
+                            bottom: 24,
+                            right: 20,
+                          ),
+                          child: QuickSettingsPanel(config: widget.config),
                         ),
-                        child: QuickSettingsPanel(config: widget.config),
                       ),
                     ),
                   ),

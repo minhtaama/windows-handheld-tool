@@ -6,7 +6,7 @@ import '../core/logger.dart';
 import 'system_optimizer.dart';
 
 /// Quản lý trạng thái và hành vi ẩn/hiện của Side Dock Panel trên Windows.
-/// Áp dụng mô hình Fullscreen Transparent Overlay (chuẩn Steam Overlay / Xbox Game Bar)
+/// Áp dụng mô hình Fullscreen Transparent Overlay (chuẩn Handheld Gaming Overlay)
 /// để tránh phá vỡ DirectX SwapChain và loại trừ triệt để lỗi xung đột với GPU Driver.
 class OverlayController extends ChangeNotifier {
   static const logger = AppLogger('OverlayController');

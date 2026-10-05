@@ -27,7 +27,7 @@ void main() async {
   final config = ConfigManager();
   OverlayController.instance.config = config;
 
-  // 1. Cấu hình Cửa sổ Fullscreen Transparent Overlay (Chuẩn Steam / Xbox Overlay)
+  // 1. Cấu hình Cửa sổ Fullscreen Transparent Overlay (Chuẩn Handheld Gaming Overlay)
   await windowManager.ensureInitialized();
 
   final primaryDisplay = await screenRetriever.getPrimaryDisplay();
@@ -39,7 +39,7 @@ void main() async {
   final windowOptions = WindowOptions(
     title: 'Handheld Quick Settings',
     size: Size(screenWidth, screenHeight),
-    backgroundColor: Colors.transparent,
+    backgroundColor: AppTheme.transparent,
     skipTaskbar: true,
     alwaysOnTop: true,
     titleBarStyle: TitleBarStyle.hidden,
@@ -47,7 +47,7 @@ void main() async {
 
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAsFrameless();
-    await windowManager.setBackgroundColor(Colors.transparent);
+    await windowManager.setBackgroundColor(AppTheme.transparent);
     await windowManager.setSize(Size(screenWidth, screenHeight));
     await windowManager.setPosition(const Offset(0, 0));
     await windowManager.setAlwaysOnTop(true);

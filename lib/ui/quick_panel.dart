@@ -20,7 +20,7 @@ import 'widgets/action_button.dart';
 import 'widgets/preset_selector.dart';
 import 'widgets/tab_bar.dart';
 
-/// Nội dung thanh Quick Settings phong cách XBOX Gaming Bar cho máy Handheld.
+/// Nội dung thanh Quick Settings cho máy Handheld.
 class QuickSettingsPanel extends StatefulWidget {
   final ConfigManager config;
 
@@ -223,7 +223,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           const SnackBar(
             content: Text('Cần quyền Administrator để bật/tắt cảm ứng!'),
             duration: Duration(seconds: 2),
-            backgroundColor: Color(0xFFD63031),
+            backgroundColor: AppTheme.danger,
           ),
         );
       }
@@ -259,9 +259,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 ? 'Đã cài đặt và kết nối RTSS thành công!'
                 : 'Cài đặt RTSS thất bại hoặc bị hủy.',
           ),
-          backgroundColor: success
-              ? const Color(0xFF2ECC71)
-              : const Color(0xFFD63031),
+          backgroundColor: success ? AppTheme.accent : AppTheme.danger,
         ),
       );
     }
@@ -304,7 +302,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
               border: Border.all(color: AppTheme.cardBorder, width: 1.0),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.65),
+                  color: AppTheme.shadow.withValues(alpha: 0.65),
                   blurRadius: 28,
                   offset: const Offset(-4, 10),
                   spreadRadius: 2,
@@ -358,7 +356,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           step: _tdpCtrl.step,
           unit: _tdpCtrl.unit,
           currentValue: _liveTdp,
-          currentColor: const Color(0xFFFF9F43), // Màu cam năng lượng
+          currentColor: AppTheme.accent2, // Màu cam năng lượng
           quickPresets: const [10, 15, 20, 25, 30],
           onChanged: _updateTdp,
           shouldShowSlider: !_tdpAuto,
@@ -369,13 +367,13 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
                 color: _tdpAuto
-                    ? AppTheme.accentGreen.withValues(alpha: 0.15)
-                    : Colors.white.withValues(alpha: 0.08),
+                    ? AppTheme.accent.withValues(alpha: 0.15)
+                    : AppTheme.cardBorder.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(
                   color: _tdpAuto
-                      ? AppTheme.accentGreen.withValues(alpha: 0.4)
-                      : Colors.white.withValues(alpha: 0.1),
+                      ? AppTheme.accent.withValues(alpha: 0.4)
+                      : AppTheme.cardBorder,
                 ),
               ),
               child: Text(
@@ -383,7 +381,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
-                  color: _tdpAuto ? AppTheme.accentGreen : Colors.white70,
+                  color: _tdpAuto ? AppTheme.accent : AppTheme.textSecondary,
                 ),
               ),
             ),
@@ -401,7 +399,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           step: _fanCtrl.step,
           unit: _fanCtrl.unit,
           currentValue: _liveFan,
-          currentColor: AppTheme.accentGreen,
+          currentColor: AppTheme.accent,
           quickPresets: const [30, 50, 75, 100],
           onChanged: _updateFan,
           shouldShowSlider: !_fanAuto,
@@ -412,13 +410,13 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
                 color: _fanAuto
-                    ? AppTheme.accentGreen.withValues(alpha: 0.15)
-                    : Colors.white.withValues(alpha: 0.08),
+                    ? AppTheme.accent.withValues(alpha: 0.15)
+                    : AppTheme.cardBorder.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(
                   color: _fanAuto
-                      ? AppTheme.accentGreen.withValues(alpha: 0.4)
-                      : Colors.white.withValues(alpha: 0.1),
+                      ? AppTheme.accent.withValues(alpha: 0.4)
+                      : AppTheme.cardBorder,
                 ),
               ),
               child: Text(
@@ -426,7 +424,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
-                  color: _fanAuto ? AppTheme.accentGreen : Colors.white70,
+                  color: _fanAuto ? AppTheme.accent : AppTheme.textSecondary,
                 ),
               ),
             ),
@@ -450,7 +448,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                   children: [
                     const Icon(
                       Icons.speed_rounded,
-                      color: AppTheme.accentGreen,
+                      color: AppTheme.accent,
                       size: 18,
                     ),
                     const SizedBox(width: 8),
@@ -466,7 +464,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                         height: 14,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: AppTheme.accentGreen,
+                          color: AppTheme.accent,
                         ),
                       ),
                   ],
@@ -474,7 +472,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 const SizedBox(height: 6),
                 Text(
                   _rtssInstallMsg ?? "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
-                  style: const TextStyle(fontSize: 11, color: Colors.white54),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppTheme.textSecondary,
+                  ),
                 ),
                 const SizedBox(height: 10),
                 SizedBox(
@@ -482,12 +483,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                   height: 34,
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.accentGreen.withValues(
-                        alpha: 0.15,
-                      ),
-                      foregroundColor: AppTheme.accentGreen,
+                      backgroundColor: AppTheme.accent.withValues(alpha: 0.15),
+                      foregroundColor: AppTheme.accent,
                       side: BorderSide(
-                        color: AppTheme.accentGreen.withValues(alpha: 0.4),
+                        color: AppTheme.accent.withValues(alpha: 0.4),
                       ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(
@@ -528,7 +527,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             step: _rtssCtrl.step,
             unit: _rtssCtrl.unit,
             currentValue: _liveFps,
-            currentColor: AppTheme.accentGreen,
+            currentColor: AppTheme.accent,
             quickPresets: const [0, 30, 40, 60],
             onChanged: _updateFpsLimit,
             trailing: !_isRtssRunning
@@ -541,10 +540,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.amber.withValues(alpha: 0.15),
+                        color: AppTheme.warning.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(4),
                         border: Border.all(
-                          color: Colors.amber.withValues(alpha: 0.4),
+                          color: AppTheme.warning.withValues(alpha: 0.4),
                         ),
                       ),
                       child: const Row(
@@ -553,14 +552,14 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                           Icon(
                             Icons.play_arrow_rounded,
                             size: 12,
-                            color: Colors.amber,
+                            color: AppTheme.warning,
                           ),
                           SizedBox(width: 2),
                           Text(
                             "Bật RTSS",
                             style: TextStyle(
                               fontSize: 10,
-                              color: Colors.amber,
+                              color: AppTheme.warning,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -639,7 +638,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                   const Icon(
                     Icons.aspect_ratio_rounded,
                     size: 16,
-                    color: AppTheme.accentGreen,
+                    color: AppTheme.accent,
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -741,7 +740,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         _buildSectionLabel("ĐIỀU HƯỚNG"),
         ActionButton(
           icon: Icons.fullscreen_exit_rounded,
-          title: "Đóng Game Bar",
+          title: "Đóng Quick Panel",
           subtitle: "Phím tắt: Back + RB hoặc nhấn bên ngoài",
           onTap: () => OverlayController.instance.hideOverlay(),
         ),
@@ -757,7 +756,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         style: const TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w700,
-          color: Color(0xFF888888),
+          color: AppTheme.textSecondary,
           letterSpacing: 1.0,
         ),
       ),

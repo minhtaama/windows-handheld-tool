@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../../core/app_theme.dart';
 
 /// Widget nút thao tác nhanh (Action Button) dùng chung dạng lưới.
@@ -19,7 +20,7 @@ class ActionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.transparent,
+      color: AppTheme.transparent,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
@@ -36,10 +37,10 @@ class ActionButton extends StatelessWidget {
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: AppTheme.primaryNeon.withValues(alpha: 0.12),
+                  color: AppTheme.primary.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(icon, size: 20, color: AppTheme.primaryNeon),
+                child: Icon(icon, size: 20, color: AppTheme.primary),
               ),
               const SizedBox(width: 10),
               Expanded(

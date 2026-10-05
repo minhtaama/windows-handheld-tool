@@ -22,7 +22,7 @@
             "min": 5,
             "max": 35,
             "step": 1,
-            "current": 15,
+            "current": 19,
             "auto": false
         },
         "fan": {
@@ -45,7 +45,7 @@
             "current": 50
         },
         "audio": {
-            "current": 60
+            "current": 50
         },
         "rtss": {
             "fps_limit": 60

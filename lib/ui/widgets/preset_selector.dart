@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../../core/app_theme.dart';
 
 /// Widget bộ chọn mốc giá trị dùng chung (Preset Selector / Segmented Group).
@@ -33,7 +34,7 @@ class PresetSelector<T> extends StatelessWidget {
       final label = labelBuilder(preset);
 
       final button = Material(
-        color: Colors.transparent,
+        color: AppTheme.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
           onTap: () => onSelected(preset),
@@ -45,19 +46,19 @@ class PresetSelector<T> extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 4),
             decoration: BoxDecoration(
               color: isSelected
-                  ? AppTheme.primaryNeon.withValues(alpha: 0.22)
-                  : Colors.white.withValues(alpha: 0.05),
+                  ? AppTheme.primary.withValues(alpha: 0.22)
+                  : AppTheme.cardBorder.withValues(alpha: 0.25),
               borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
               border: Border.all(
                 color: isSelected
-                    ? AppTheme.primaryNeon
-                    : Colors.white.withValues(alpha: 0.08),
-                width: isSelected ? 1.5 : 1.0,
+                    ? AppTheme.accent.withValues(alpha: 0.8)
+                    : AppTheme.cardBorder,
+                width: isSelected ? 1.2 : 1.0,
               ),
               boxShadow: isSelected
                   ? [
                       BoxShadow(
-                        color: AppTheme.primaryNeon.withValues(alpha: 0.25),
+                        color: AppTheme.primary.withValues(alpha: 0.25),
                         blurRadius: 8,
                         spreadRadius: 1,
                       ),
@@ -69,7 +70,7 @@ class PresetSelector<T> extends StatelessWidget {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                color: isSelected ? AppTheme.primaryNeon : AppTheme.textSecondary,
+                color: isSelected ? AppTheme.accent : AppTheme.textSecondary,
                 letterSpacing: 0.5,
               ),
               maxLines: 1,
