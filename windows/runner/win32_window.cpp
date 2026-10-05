@@ -135,7 +135,7 @@ bool Win32Window::Create(const std::wstring& title,
   double scale_factor = dpi / 96.0;
 
   HWND window = CreateWindowEx(
-      WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
       window_class, title.c_str(), WS_POPUP,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
@@ -151,9 +151,20 @@ bool Win32Window::Create(const std::wstring& title,
 }
 
 bool Win32Window::Show() {
-  SetWindowPos(window_handle_, HWND_TOPMOST, 0, 0, 0, 0,
-               SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-  return ShowWindow(window_handle_, SW_SHOW);
+  HMONITOR monitor = MonitorFromWindow(window_handle_, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO monitor_info = {sizeof(MONITORINFO)};
+  if (GetMonitorInfo(monitor, &monitor_info)) {
+    int width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+    int height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+    SetWindowPos(window_handle_, HWND_TOPMOST,
+                 monitor_info.rcMonitor.left, monitor_info.rcMonitor.top,
+                 width, height,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  } else {
+    SetWindowPos(window_handle_, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  }
+  return ShowWindow(window_handle_, SW_SHOWNOACTIVATE);
 }
 
 // static
@@ -190,14 +201,21 @@ Win32Window::MessageHandler(HWND hwnd,
       }
       return 0;
 
+    case WM_DISPLAYCHANGE:
     case WM_DPICHANGED: {
-      auto newRectSize = reinterpret_cast<RECT*>(lparam);
-      LONG newWidth = newRectSize->right - newRectSize->left;
-      LONG newHeight = newRectSize->bottom - newRectSize->top;
-
-      SetWindowPos(hwnd, nullptr, newRectSize->left, newRectSize->top, newWidth,
-                   newHeight, SWP_NOZORDER | SWP_NOACTIVATE);
-
+      HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      MONITORINFO monitor_info = {sizeof(MONITORINFO)};
+      if (GetMonitorInfo(monitor, &monitor_info)) {
+        int width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+        int height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+        SetWindowPos(hwnd, HWND_TOPMOST,
+                     monitor_info.rcMonitor.left, monitor_info.rcMonitor.top,
+                     width, height,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        if (child_content_ != nullptr) {
+          MoveWindow(child_content_, 0, 0, width, height, TRUE);
+        }
+      }
       return 0;
     }
     case WM_GETMINMAXINFO: {
@@ -225,7 +243,7 @@ Win32Window::MessageHandler(HWND hwnd,
     }
 
     case WM_ACTIVATE:
-      if (child_content_ != nullptr) {
+      if (LOWORD(wparam) != WA_INACTIVE && child_content_ != nullptr) {
         SetFocus(child_content_);
       }
       return 0;

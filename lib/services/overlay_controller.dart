@@ -1,13 +1,16 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+
 import 'package:window_manager/window_manager.dart';
 
 import '../core/config.dart';
 import '../core/logger.dart';
+import 'native_window_service.dart';
 import 'system_optimizer.dart';
 
 /// Quản lý trạng thái và hành vi ẩn/hiện của Side Dock Panel trên Windows.
 /// Áp dụng mô hình Fullscreen Transparent Overlay (chuẩn Handheld Gaming Overlay)
-/// để tránh phá vỡ DirectX SwapChain và loại trừ triệt để lỗi xung đột với GPU Driver.
+/// kết hợp Native Win32 SW_SHOWNOACTIVATE để tránh cướp Focus và không làm văng game DirectX.
 class OverlayController extends ChangeNotifier {
   static const logger = AppLogger('OverlayController');
   static final OverlayController instance = OverlayController._();
@@ -16,6 +19,8 @@ class OverlayController extends ChangeNotifier {
 
   bool _isVisible = false;
   bool get isVisible => _isVisible;
+
+  DateTime _lastToggleTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   ConfigManager? config;
 
@@ -41,17 +46,27 @@ class OverlayController extends ChangeNotifier {
       _isVisible = true;
       notifyListeners();
 
-      // Hiện cửa sổ toàn màn hình trong suốt và đưa lên trên cùng
-      await windowManager.setAlwaysOnTop(true);
-      await windowManager.show();
-      await windowManager.focus();
+      // 1. Lấy độ phân giải vật lý thực tế hiện hành của màn hình (hỗ trợ in-game 720p/800p/RSR)
+      final currentScreenSize = NativeWindowService.getPhysicalScreenSize();
 
-      // Kích hoạt hoạt cảnh trượt từ mép phải vào
+      // 2. Hiển thị cửa sổ ở chế độ SW_SHOWNOACTIVATE & Always-on-Top (KHÔNG cướp Focus của Game)
+      final shown = NativeWindowService.showOverlayNoActivate(
+        size: currentScreenSize,
+        position: const Offset(0, 0),
+      );
+
+      // Fallback an toàn qua windowManager nếu cần
+      if (!shown) {
+        await windowManager.setAlwaysOnTop(true);
+        await windowManager.show(inactive: true);
+      }
+
+      // 3. Kích hoạt hoạt cảnh trượt từ mép phải vào
       if (onAnimateShow != null) {
         await onAnimateShow!();
       }
 
-      logger.info('Đã mở Side Dock Panel.');
+      logger.info('Đã mở Side Dock Panel (Resolution: ${currentScreenSize.width}x${currentScreenSize.height}).');
     } catch (e) {
       logger.error('Lỗi khi mở Overlay', e);
     }
@@ -68,8 +83,12 @@ class OverlayController extends ChangeNotifier {
         await onAnimateHide!();
       }
 
-      // 2. Ẩn cửa sổ sau khi hoạt cảnh hoàn tất
-      await windowManager.hide();
+      // 2. Ẩn cửa sổ qua Win32 API và windowManager sau khi hoạt cảnh hoàn tất
+      NativeWindowService.hideOverlayWindow();
+      try {
+        await windowManager.hide();
+      } catch (_) {}
+
       logger.info('Đã đóng Side Dock Panel.');
 
       // 3. Giải phóng bộ nhớ RAM
@@ -79,21 +98,19 @@ class OverlayController extends ChangeNotifier {
     }
   }
 
-  /// Bật/tắt trạng thái Side Dock Panel
+  /// Bật/tắt trạng thái Side Dock Panel với Debounce chống kích hoạt trùng lặp
   Future<void> toggleOverlay() async {
-    try {
-      final isWindowVisible = await windowManager.isVisible();
-      if (isWindowVisible) {
-        await hideOverlay();
-      } else {
-        await showOverlay();
-      }
-    } catch (e) {
-      if (_isVisible) {
-        await hideOverlay();
-      } else {
-        await showOverlay();
-      }
+    final now = DateTime.now();
+    if (now.difference(_lastToggleTime).inMilliseconds < 350) {
+      logger.info('Bỏ qua toggleOverlay do debounce (< 350ms).');
+      return;
+    }
+    _lastToggleTime = now;
+
+    if (_isVisible) {
+      await hideOverlay();
+    } else {
+      await showOverlay();
     }
   }
 

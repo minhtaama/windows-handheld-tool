@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
-import 'package:screen_retriever/screen_retriever.dart';
 
 import 'core/app_theme.dart';
 import 'core/config.dart';
@@ -13,6 +12,7 @@ import 'hardware/touchscreen_service.dart';
 import 'hardware/rtss_service.dart';
 import 'input/hotkey_service.dart';
 import 'input/gamepad_service.dart';
+import 'services/native_window_service.dart';
 import 'services/overlay_controller.dart';
 import 'services/virtual_keyboard_service.dart';
 import 'ui/overlay_screen.dart';
@@ -30,11 +30,11 @@ void main() async {
   // 1. Cấu hình Cửa sổ Fullscreen Transparent Overlay (Chuẩn Handheld Gaming Overlay)
   await windowManager.ensureInitialized();
 
-  final primaryDisplay = await screenRetriever.getPrimaryDisplay();
-  final screenHeight = primaryDisplay.size.height;
-  final screenWidth = primaryDisplay.size.width;
+  final physicalSize = NativeWindowService.getPhysicalScreenSize();
+  final screenWidth = physicalSize.width;
+  final screenHeight = physicalSize.height;
 
-  _logger.info('DEBUG-MAIN-INIT: PrimaryDisplay Size = ${primaryDisplay.size}');
+  _logger.info('DEBUG-MAIN-INIT: Physical Screen Size = $physicalSize');
 
   final windowOptions = WindowOptions(
     title: 'Handheld Quick Settings',
