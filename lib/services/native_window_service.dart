@@ -43,6 +43,9 @@ typedef _IsWindowDart = int Function(int hWnd);
 typedef _InvalidateRectC = Int32 Function(IntPtr hWnd, Pointer<Void> lpRect, Int32 bErase);
 typedef _InvalidateRectDart = int Function(int hWnd, Pointer<Void> lpRect, int bErase);
 
+typedef _SetWindowBandC = Int32 Function(IntPtr hWnd, IntPtr hwndInsertAfter, Uint32 dwBand);
+typedef _SetWindowBandDart = int Function(int hWnd, int hwndInsertAfter, int dwBand);
+
 /// Dịch vụ quản lý cửa sổ Native Win32 tối ưu cho Gaming Overlay.
 /// Điều khiển cửa sổ với SW_SHOWNOACTIVATE và SWP_NOACTIVATE
 /// để đảm bảo không cướp Focus của Game (chống văng/minimize game DirectX).
@@ -50,6 +53,7 @@ class NativeWindowService {
   static const _logger = AppLogger('NativeWindowService');
 
   static const int hwndTopMost = -1;
+  static const int zbidSystemTools = 2;
 
   static const int swpNoSize = 0x0001;
   static const int swpNoMove = 0x0002;
@@ -76,6 +80,7 @@ class NativeWindowService {
   static _IsWindowVisibleDart? _isWindowVisible;
   static _IsWindowDart? _isWindow;
   static _InvalidateRectDart? _invalidateRect;
+  static _SetWindowBandDart? _setWindowBand;
   static _GetWindowLongPtrWDart? _getWindowLongPtrW;
   static _SetWindowLongPtrWDart? _setWindowLongPtrW;
 
@@ -91,6 +96,10 @@ class NativeWindowService {
       _isWindowVisible = user32.lookupFunction<_IsWindowVisibleC, _IsWindowVisibleDart>('IsWindowVisible');
       _isWindow = user32.lookupFunction<_IsWindowC, _IsWindowDart>('IsWindow');
       _invalidateRect = user32.lookupFunction<_InvalidateRectC, _InvalidateRectDart>('InvalidateRect');
+
+      try {
+        _setWindowBand = user32.lookupFunction<_SetWindowBandC, _SetWindowBandDart>('SetWindowBand');
+      } catch (_) {}
 
       try {
         _getWindowLongPtrW = user32.lookupFunction<_GetWindowLongPtrWC, _GetWindowLongPtrWDart>('GetWindowLongPtrW');
@@ -192,7 +201,10 @@ class NativeWindowService {
       swpNoActivate | swpShowWindow | swpFrameChanged,
     );
 
-    // 3. Ép Windows DWM vẽ lại ngay lập tức frame Flutter
+    // 3. Đảm bảo cửa sổ luôn nằm trong phân lớp Hệ thống (Windows System Z-Band)
+    _setWindowBand?.call(hwnd, hwndTopMost, zbidSystemTools);
+
+    // 4. Ép Windows DWM vẽ lại ngay lập tức frame Flutter
     _invalidateRect?.call(hwnd, nullptr, 1);
 
     _logger.info('Đã hiển thị Overlay (SWP_NOACTIVATE, Pos: ($posX, $posY), Size: ${width}x$height)');

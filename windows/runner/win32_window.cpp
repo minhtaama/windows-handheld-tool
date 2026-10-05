@@ -120,6 +120,37 @@ Win32Window::~Win32Window() {
   Destroy();
 }
 
+// Windows Z-Order Bands (user32.dll internal APIs for System Overlays)
+enum ZBID {
+  ZBID_DEFAULT = 0,
+  ZBID_DESKTOP = 1,
+  ZBID_SYSTEM_TOOLS = 2,
+  ZBID_LOCK = 3,
+  ZBID_ABOVELOCK_APP = 4,
+  ZBID_ALWAYSONTOP = 5,
+  ZBID_IMMERSIVE_BACKGROUND = 6,
+  ZBID_IMMERSIVE_APPCHROME = 15,
+  ZBID_IMMERSIVE_MOMENT = 16,
+  ZBID_GENUINE_WINDOWS = 17,
+};
+
+typedef HWND(WINAPI* fnCreateWindowInBand)(
+    DWORD dwExStyle,
+    LPCWSTR lpClassName,
+    LPCWSTR lpWindowName,
+    DWORD dwStyle,
+    int X,
+    int Y,
+    int nWidth,
+    int nHeight,
+    HWND hWndParent,
+    HMENU hMenu,
+    HINSTANCE hInstance,
+    LPVOID lpParam,
+    DWORD dwBand);
+
+typedef BOOL(WINAPI* fnSetWindowBand)(HWND hWnd, HWND hwndInsertAfter, DWORD dwBand);
+
 bool Win32Window::Create(const std::wstring& title,
                          const Point& origin,
                          const Size& size) {
@@ -134,12 +165,38 @@ bool Win32Window::Create(const std::wstring& title,
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
-  HWND window = CreateWindowEx(
-      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
-      window_class, title.c_str(), WS_POPUP,
-      Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
-      Scale(size.width, scale_factor), Scale(size.height, scale_factor),
-      nullptr, nullptr, GetModuleHandle(nullptr), this);
+  HWND window = nullptr;
+  HMODULE user32_module = GetModuleHandleA("user32.dll");
+  if (!user32_module) {
+    user32_module = LoadLibraryA("user32.dll");
+  }
+
+  if (user32_module) {
+    auto pCreateWindowInBand = reinterpret_cast<fnCreateWindowInBand>(
+        GetProcAddress(user32_module, "CreateWindowInBand"));
+    if (!pCreateWindowInBand) {
+      pCreateWindowInBand = reinterpret_cast<fnCreateWindowInBand>(
+          GetProcAddress(user32_module, MAKEINTRESOURCEA(2503)));
+    }
+    if (pCreateWindowInBand) {
+      window = pCreateWindowInBand(
+          WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+          window_class, title.c_str(), WS_POPUP,
+          Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
+          Scale(size.width, scale_factor), Scale(size.height, scale_factor),
+          nullptr, nullptr, GetModuleHandle(nullptr), this,
+          ZBID_SYSTEM_TOOLS);
+    }
+  }
+
+  if (!window) {
+    window = CreateWindowEx(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+        window_class, title.c_str(), WS_POPUP,
+        Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
+        Scale(size.width, scale_factor), Scale(size.height, scale_factor),
+        nullptr, nullptr, GetModuleHandle(nullptr), this);
+  }
 
   if (!window) {
     return false;

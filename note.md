@@ -12,7 +12,7 @@ Trong hệ điều hành Windows, việc hiển thị hình ảnh từ card đ�
    - Chuỗi bộ đệm của game (SwapChain) được ánh xạ trực tiếp 1:1 tới bộ điều khiển quét tín hiệu phần cứng (Display Controller Scanout) nhằm triệt tiêu độ trễ xử lý (Latency) và loại bỏ chi phí hợp thành khung hình của DWM.
 
 ```mermaid
-graph TD
+flowchart TD
     subgraph DWM_Mode["Chế độ Hợp thành Cửa sổ (DWM Composition / iFlip)"]
         GameApp1["Bộ đệm Game (Back Buffer)"] --> DWM["Trình hợp thành DWM"]
         OverlayWin["Bộ đệm Cửa sổ Overlay"] --> DWM
@@ -39,6 +39,22 @@ graph TD
 
 ---
 
+## Phân Tích Kiến Trúc Các Phần Mềm Handheld Thương Mại (GPD Tool, AYASpace, Handheld Companion)
+
+Các phần mềm chuyên dụng trên thiết bị chơi game cầm tay (GPD Win, AYANEO, ROG Ally) giải quyết triệt để bài toán này bằng cách kết hợp 4 phương án kỹ thuật từ tầng hệ điều hành đến tầng nhân đồ họa DirectX:
+
+```mermaid
+flowchart TD
+    subgraph Solutions["4 Hướng Tiếp Cận Xử Lý Lớp Phủ (Overlay Solutions)"]
+        A["Phương án 1: Windows System Z-Band (user32.dll)"]
+        B["Phương án 2: Đổi cấu hình Game / Móc CreateSwapChain (DXGI Borderless)"]
+        C["Phương án 3: Chia sẻ Kết cấu Đồ họa (Direct3D Shared Texture)"]
+        D["Phương án 4: Can thiệp hàm Xuất khung hình (Present Hooking / RTSS)"]
+    end
+```
+
+---
+
 ## Phương Án 1: Đưa Cửa Sổ Vào Phân Lớp Hệ Thống (Windows System Z-Band)
 
 ### 1. Cơ chế kỹ thuật
@@ -46,7 +62,7 @@ graph TD
 - Các cửa sổ nằm trong phân lớp này được DWM cấp quyền vẽ đè trực tiếp lên trên các bề mặt đang độc chiếm màn hình mà không làm kích hoạt cơ chế thu nhỏ game.
 
 ```mermaid
-graph TD
+flowchart TD
     subgraph Z_Band_Hierarchy["Cấu trúc Phân lớp Trục Z (Windows Z-Bands)"]
         Z_GameBar["Phân lớp Hệ thống / Game Bar (ZBID_SYSTEM_TOOLS = 2 / ZBID_IMMERSIVE_APPCHROME = 15)"]
         Z_Exclusive["Bề mặt Trò chơi Độc chiếm (Exclusive Fullscreen Surface)"]
@@ -58,57 +74,74 @@ graph TD
 ```
 
 ### 2. Cách thức giải quyết triệt để
-- Thay vì gọi hàm tạo cửa sổ thông thường (`CreateWindowExW`), ứng dụng nạp hàm nội bộ không công khai từ thư viện `user32.dll`:
-  * Hàm API: `CreateWindowInBand` (hoặc `SetWindowBand`).
-  * Chỉ số phân lớp (Band ID): `ZBID_SYSTEM_TOOLS` (giá trị nguyên `2`) hoặc `ZBID_IMMERSIVE_APPCHROME` (giá trị nguyên `15`).
-- Yêu cầu môi trường: Tiến trình cần có đặc quyền trợ năng giao diện (`uiAccess="true"` trong Manifest kết hợp chữ ký số chứng chỉ hoặc chạy dưới quyền Quản trị viên `Administrator`).
-
-### 3. Các bước triển khai trong mã nguồn
-- **Bước 1 (C++ Runner)**: Khai báo con trỏ hàm `CreateWindowInBand` từ `user32.dll` trong file [win32_window.cpp](file:///c:/Users/h/dev-projects/windows-handheld-tools/windows/runner/win32_window.cpp).
-  * Chữ ký hàm Win32:
-    `HWND WINAPI CreateWindowInBand(DWORD dwExStyle, LPCWSTR lpClassName, LPCWSTR lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam, DWORD dwBand);`
-- **Bước 2 (Gán Band ID)**: Thay thế lời gọi `CreateWindowEx` bằng `CreateWindowInBand`, truyền tham số `dwBand = 2` (`ZBID_SYSTEM_TOOLS`).
-- **Bước 3 (Thử nghiệm)**: Biên dịch lại ứng dụng và kiểm tra khả năng nổi trên *Metro Exodus*.
+- Nạp hàm nội bộ không công khai từ thư viện `user32.dll`:
+  * Hàm API: `CreateWindowInBand` và `SetWindowBand`.
+  * Chỉ số phân lớp (Band ID): `ZBID_SYSTEM_TOOLS` (giá trị nguyên `2`).
+- **Điều kiện cốt lõi**: Yêu cầu quyền **UIAccess (`uiAccess="true"`)** trong Token tiến trình. Nếu chưa được ký số tin cậy (Digital Certificate), nhân Windows sẽ âm thầm hạ cấp cửa sổ về `ZBID_DEFAULT = 0`.
 
 ---
 
-## Phương Án 2: Can Thiệp Trực Tiếp Vào Luồng Khung Hình DirectX (DirectX Hooking / RTSS OSD Injection)
+## Phương Án 2: Móc Hàm Khởi Tạo Chuỗi Khung Hình Cưỡng Bức Không Viền (DXGI `CreateSwapChain` Hooking)
 
-### 1. Cơ chế kỹ thuật
-- Thay vì tạo một cửa sổ Win32 riêng biệt bên ngoài hệ điều hành, phương pháp này chèn mã thực thi nhị phân (DLL Injection) trực tiếp vào không gian địa chỉ bộ nhớ (Process Memory Space) của tiến trình trò chơi.
-- Mã nhị phân chèn vào sẽ thay thế địa chỉ hàm xuất hình ảnh của giao diện DirectX/DXGI: **`IDXGISwapChain::Present`** (DirectX 11/12) hoặc **`ID3D11DeviceContext::DrawIndexed`**.
+### 1. Cơ chế kỹ thuật (Kiến trúc AYASpace / Handheld Companion)
+- Khi trò chơi khởi động, game gọi hàm của DirectX Graphics Infrastructure (DXGI): `IDXGIFactory::CreateSwapChain` (hoặc `CreateSwapChainForHwnd`).
+- Trong cấu trúc tham số `DXGI_SWAP_CHAIN_DESC`, game truyền cờ `Windowed = FALSE` để yêu cầu chạy Toàn màn hình độc quyền.
+- Một thư viện C++ hook (`dxgi_hook.dll`) được chèn vào không gian bộ nhớ của game (qua `SetWindowsHookEx` hoặc DLL Injection), chặn hàm này và **sửa tham số thành `Windowed = TRUE`** trước khi gửi xuống Driver GPU.
 
 ```mermaid
 sequenceDiagram
     participant Game as Tiến trình Game (Metro Exodus)
-    participant Hook as Hook DLL (RTSS / Injected Hook)
-    participant GPU as Bộ điều khiển Đồ họa (GPU)
+    participant Hook as DXGI Hook (MinHook)
+    participant DXGI as DirectX Runtime (dxgi.dll)
 
-    Game->>Hook: Gọi xuất khung hình (IDXGISwapChain::Present)
-    Note over Hook: Vẽ đè giao diện Quick Panel lên Back Buffer
-    Hook->>GPU: Gửi toàn bộ khung hình hoàn chỉnh ra màn hình
+    Game->>Hook: Gọi CreateSwapChain(Windowed = FALSE)
+    Note over Hook: Can thiệp tham số: Sửa thành Windowed = TRUE
+    Hook->>DXGI: Gọi CreateSwapChain Gốc(Windowed = TRUE)
+    DXGI-->>Game: Khởi tạo hoàn tất chế độ Borderless iFlip
 ```
 
 ### 2. Cách thức giải quyết triệt để
-- Khi game chuẩn bị đẩy khung hình từ bộ đệm phụ (Back Buffer) ra bộ đệm chính để hiển thị, hàm Hook chặn luồng thực thi, tự vẽ thêm các điểm ảnh của bảng điều khiển (Quick Settings UI) lên trên cùng của bộ đệm game, sau đó mới cho phép hàm `Present` gốc chạy tiếp.
-- Do giao diện được hợp nhất vào chính dòng khung hình của game, trò chơi vẫn giữ nguyên quyền độc chiếm phần cứng 100% mà không bị gián đoạn hay thu nhỏ.
-
-### 3. Các bước triển khai trong mã nguồn
-- **Cách tiếp cận A (Tận dụng RivaTuner Statistics Server - RTSS có sẵn)**:
-  * Dự án đã tích hợp module [rtss_service.dart](file:///c:/Users/h/dev-projects/windows-handheld-tools/lib/hardware/rtss_service.dart) giao tiếp qua bộ nhớ chia sẻ (`RTSSSharedMemory`).
-  * Sử dụng RTSS API để đẩy text và bảng điều khiển thông số OSD trực tiếp vào game khi nhấn hotkey.
-- **Cách tiếp cận B (Chèn Native Direct3D Hook DLL)**:
-  * Viết một thư viện C++ (`overlay_hook.dll`) sử dụng thư viện móc hàm (Microsoft Detours hoặc MinHook) can thiệp vào `dxgi.dll`.
-  * Nhúng giao diện đồ họa siêu nhẹ (ImGui hoặc chuyển texture từ Flutter Engine qua Shared Texture Handle `D3D11_RESOURCE_MISC_SHARED`) vào hàm `Present`.
+- Game hoàn toàn tin rằng mình đang chạy Toàn màn hình độc quyền, nhưng thực chất Windows DWM đang quản lý game dưới dạng **Cửa sổ Không viền (Borderless Windowed / Independent Flip)**.
+- Khi đó, cửa sổ Flutter Quick Settings Panel của bạn sẽ hiển thị đè lên game 100% mượt mà và không bao giờ bị văng.
 
 ---
 
-## Ma Trận So Sánh Kỹ Thuật
+## Phương Án 3: Chia Sẻ Kết Cấu Đồ Họa Độc Lập (Direct3D Shared Texture Injection)
 
-| Tiêu chí | Phương án 1: Windows System Z-Band | Phương án 2: DirectX Hooking (RTSS) |
-| :--- | :--- | :--- |
-| **Bản chất** | Tầng hệ điều hành (OS Window Management) | Tầng đồ họa trong bộ nhớ (Process Memory Injection) |
-| **Bảo tồn giao diện Flutter** | Giữ nguyên 100% giao diện Flutter (Hiệu ứng động, trượt mượt mà) | Cần ánh xạ Texture từ Flutter sang DirectX hoặc dùng ImGui/RTSS Text |
-| **Tính tương thích Game** | Tương thích toàn bộ Game chạy iFlip / Fullscreen Optimizations / UWP | Tương thích 100% cả những Game Exclusive Fullscreen cổ điển cứng đầu nhất |
-| **Nguy cơ Anti-Cheat** | 0% (Không can thiệp bộ nhớ game) | Có thể bị chặn bởi một số game có Easy Anti-Cheat / BattleEye nếu tự viết Hook |
-| **Độ phức tạp triển khai** | Trung bình (Sửa `win32_window.cpp` gọi `CreateWindowInBand`) | Cao (Cần Native C++ Hook DLL hoặc mở rộng RTSS OSD) |
+### 1. Cơ chế kỹ thuật (Kiến trúc OBS Game Capture / Discord Overlay / Steam Overlay)
+- Ứng dụng Flutter render toàn bộ giao diện bảng điều khiển vào một kết cấu đồ họa ngoài màn hình (Off-Screen Surface) với cờ chia sẻ vùng nhớ: **`D3D11_RESOURCE_MISC_SHARED`** (hoặc `D3D11_RESOURCE_MISC_SHARED_NTHANDLE`).
+- Lấy con trỏ chia sẻ tài nguyên (`HANDLE sharedHandle`) từ DirectX Device của Flutter.
+- Thư viện hook bên trong game gọi `ID3D11Device::OpenSharedResource(sharedHandle)` để nạp trực tiếp tấm ảnh kết cấu của Flutter vào bộ nhớ game.
+- Tại hàm xuất hình ảnh **`IDXGISwapChain::Present`**, thư viện hook vẽ một tấm ảnh phẳng (2D Quad) chứa giao diện Flutter đè lên bộ đệm khung hình của game.
+
+```mermaid
+flowchart LR
+    FlutterEngine["Flutter Engine (UI Panel)"] -->|Vẽ vào| SharedTex["Direct3D Shared Texture (GPU Shared Memory)"]
+    SharedTex -->|Shared Handle IPC| InjectedDLL["Injected DLL (Nằm trong Game)"]
+    InjectedDLL -->|Vẽ đè tại Present()| GameBackBuffer["Game DirectX Back Buffer"]
+    GameBackBuffer --> Screen["Màn hình Hiển thị"]
+```
+
+### 2. Cách thức giải quyết triệt để
+- Triệt tiêu 100% sự phụ thuộc vào cửa sổ Win32 Desktop.
+- Giao diện Flutter được nhúng trực tiếp vào chính luồng dữ liệu 60fps/120fps của game, không làm thay đổi trạng thái cửa sổ của trò chơi.
+
+---
+
+## Phương Án 4: Can Thiệp Trực Tiếp Vào Hàm Xuất Khung Hình (Present Hooking / RTSS OSD)
+
+### 1. Cơ chế kỹ thuật
+- Chèn mã thực thi nhị phân vào hàm `IDXGISwapChain::Present` (DirectX 11/12) để vẽ trực tiếp thông số HUD (TDP, Quạt, FPS, Pin) lên bộ đệm game.
+- Dự án đã có sẵn module [rtss_service.dart](file:///c:/Users/h/dev-projects/windows-handheld-tools/lib/hardware/rtss_service.dart) giao tiếp qua bộ nhớ chia sẻ `RTSSSharedMemoryV2` của RivaTuner Statistics Server.
+
+---
+
+## Ma Trận So Sánh Kỹ Thuật Toàn Diện
+
+| Tiêu chí | Phương án 1: Windows System Z-Band | Phương án 2: DXGI Borderless Hook | Phương án 3: Direct3D Shared Texture | Phương án 4: RTSS OSD Injection |
+| :--- | :--- | :--- | :--- | :--- |
+| **Bản chất kỹ thuật** | Tầng hệ điều hành (OS Window Management) | Móc hàm tạo chuỗi khung hình (`CreateSwapChain`) | Móc hàm xuất hình + Chia sẻ GPU Memory | Chèn chuỗi text/vector vào hàm `Present` |
+| **Bảo tồn giao diện Flutter** | Giữ nguyên 100% | Giữ nguyên 100% | Giữ nguyên 100% (Texture Stream) | Chỉ hiển thị Text HUD / Không có Widget |
+| **Khắc phục game Exclusive** | Phụ thuộc quyền UIAccess ký số | Khắc phục 100% (Ép game sang Borderless) | Khắc phục 100% (Vẽ trực tiếp vào game) | Khắc phục 100% (Chỉ áp dụng đo đạc OSD) |
+| **Độ ổn định & Tương thích** | Cao | Rất cao (Chuẩn Handheld Companion) | Rất cao (Chuẩn Discord / OBS) | Tối đa |
+| **Độ phức tạp triển khai** | Thấp (Đã tích hợp trong `win32_window.cpp`) | Trung bình (Tạo DLL `dxgi_hook.dll` với MinHook) | Nâng cao (Tạo DLL Hook + IPC Texture Handle) | Thấp (Đã tích hợp trong `rtss_service.dart`) |
