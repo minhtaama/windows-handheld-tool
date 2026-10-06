@@ -1,0 +1,323 @@
+import 'package:flutter/material.dart';
+
+import '../../core/app_theme.dart';
+import '../../hardware/tdp_service.dart';
+import '../../hardware/fan_service.dart';
+import '../../hardware/rtss_service.dart';
+import '../../services/rtss_installer_service.dart';
+import '../widgets/setting_slider.dart';
+import '../widgets/section_label.dart';
+
+/// Tab điều khiển Hiệu năng & Năng lượng: Quản lý TDP, Tốc độ quạt và Khóa khung hình RTSS.
+class PerformanceTab extends StatelessWidget {
+  final ScrollController scrollController;
+  final int focusedIndex;
+
+  // Cấu hình & Dữ liệu đo TDP
+  final int tdp;
+  final int liveTdp;
+  final bool tdpAuto;
+  final TdpController tdpCtrl;
+  final ValueChanged<int> onTdpChanged;
+  final VoidCallback onToggleTdpAuto;
+
+  // Cấu hình & Dữ liệu đo Quạt
+  final int fan;
+  final int liveFan;
+  final bool fanAuto;
+  final FanController fanCtrl;
+  final ValueChanged<int> onFanChanged;
+  final VoidCallback onToggleFanAuto;
+
+  // Cấu hình & Dữ liệu đo RTSS
+  final int fpsLimit;
+  final int? liveFps;
+  final String? activeGame;
+  final bool isRtssRunning;
+  final RtssFpsController rtssCtrl;
+  final ValueChanged<int> onFpsLimitChanged;
+  final VoidCallback onStartRtss;
+  final bool isInstallingRtss;
+  final String? rtssInstallMsg;
+  final VoidCallback onInstallRtss;
+
+  const PerformanceTab({
+    super.key,
+    required this.scrollController,
+    required this.focusedIndex,
+    required this.tdp,
+    required this.liveTdp,
+    required this.tdpAuto,
+    required this.tdpCtrl,
+    required this.onTdpChanged,
+    required this.onToggleTdpAuto,
+    required this.fan,
+    required this.liveFan,
+    required this.fanAuto,
+    required this.fanCtrl,
+    required this.onFanChanged,
+    required this.onToggleFanAuto,
+    required this.fpsLimit,
+    required this.liveFps,
+    required this.activeGame,
+    required this.isRtssRunning,
+    required this.rtssCtrl,
+    required this.onFpsLimitChanged,
+    required this.onStartRtss,
+    required this.isInstallingRtss,
+    required this.rtssInstallMsg,
+    required this.onInstallRtss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      key: const ValueKey('tab_performance'),
+      controller: scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      children: [
+        const SectionLabel(label: "NĂNG LƯỢNG (TDP)"),
+        SettingSlider(
+          icon: Icons.bolt_rounded,
+          title: "Công suất TDP",
+          value: tdp,
+          min: tdpCtrl.minVal,
+          max: tdpCtrl.maxVal,
+          step: tdpCtrl.step,
+          unit: tdpCtrl.unit,
+          currentValue: liveTdp,
+          currentColor: AppTheme.accent2,
+          quickPresets: const [10, 15, 20, 25, 30],
+          onChanged: onTdpChanged,
+          shouldShowSlider: !tdpAuto,
+          isFocused: focusedIndex == 0,
+          trailing: InkWell(
+            borderRadius: BorderRadius.circular(4),
+            onTap: onToggleTdpAuto,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: tdpAuto
+                    ? AppTheme.accent.withValues(alpha: 0.15)
+                    : AppTheme.cardBorder.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: tdpAuto
+                      ? AppTheme.accent.withValues(alpha: 0.4)
+                      : AppTheme.cardBorder,
+                ),
+              ),
+              child: Text(
+                tdpAuto ? "AUTO" : "MANUAL",
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: tdpAuto ? AppTheme.accent : AppTheme.textSecondary,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        const SectionLabel(label: "TẢN NHIỆT (QUẠT)"),
+        SettingSlider(
+          icon: Icons.toys_rounded,
+          title: "Tốc độ quạt",
+          value: fan,
+          min: fanCtrl.minVal,
+          max: fanCtrl.maxVal,
+          step: fanCtrl.step,
+          unit: fanCtrl.unit,
+          currentValue: liveFan,
+          currentColor: AppTheme.accent,
+          quickPresets: const [30, 50, 75, 100],
+          onChanged: onFanChanged,
+          shouldShowSlider: !fanAuto,
+          isFocused: focusedIndex == 1,
+          trailing: InkWell(
+            borderRadius: BorderRadius.circular(4),
+            onTap: onToggleFanAuto,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: fanAuto
+                    ? AppTheme.accent.withValues(alpha: 0.15)
+                    : AppTheme.cardBorder.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: fanAuto
+                      ? AppTheme.accent.withValues(alpha: 0.4)
+                      : AppTheme.cardBorder,
+                ),
+              ),
+              child: Text(
+                fanAuto ? "AUTO" : "MANUAL",
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: fanAuto ? AppTheme.accent : AppTheme.textSecondary,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        const SectionLabel(label: "KHUNG HÌNH (RTSS)"),
+        if (!RtssInstallerService.isInstalled())
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppTheme.cardBackground,
+              borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+              border: Border.all(
+                color: focusedIndex == 2 ? AppTheme.accent : AppTheme.cardBorder,
+                width: focusedIndex == 2 ? 1.8 : 1.0,
+              ),
+              boxShadow: focusedIndex == 2
+                  ? [
+                      BoxShadow(
+                        color: AppTheme.primary.withValues(alpha: 0.4),
+                        blurRadius: 14,
+                        spreadRadius: 1,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.speed_rounded,
+                      color: AppTheme.accent,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        "Chưa cài đặt RTSS",
+                        style: AppTheme.cardTitle,
+                      ),
+                    ),
+                    if (isInstallingRtss)
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppTheme.accent,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  rtssInstallMsg ??
+                      "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 34,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accent.withValues(alpha: 0.15),
+                      foregroundColor: AppTheme.accent,
+                      side: BorderSide(
+                        color: AppTheme.accent.withValues(alpha: 0.4),
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(
+                          AppTheme.buttonRadius,
+                        ),
+                      ),
+                    ),
+                    icon: Icon(
+                      isInstallingRtss
+                          ? Icons.hourglass_top_rounded
+                          : Icons.download_rounded,
+                      size: 16,
+                    ),
+                    label: Text(
+                      isInstallingRtss
+                          ? "Đang cài đặt..."
+                          : "Tự động cài đặt RTSS qua Winget",
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    onPressed: isInstallingRtss ? null : onInstallRtss,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          SettingSlider(
+            icon: Icons.speed_rounded,
+            title: activeGame != null
+                ? "Giới hạn FPS ($activeGame)"
+                : "Giới hạn FPS",
+            value: fpsLimit,
+            min: rtssCtrl.minVal,
+            max: rtssCtrl.maxVal,
+            step: rtssCtrl.step,
+            unit: rtssCtrl.unit,
+            currentValue: liveFps,
+            currentColor: AppTheme.accent,
+            quickPresets: const [0, 30, 40, 60],
+            onChanged: onFpsLimitChanged,
+            isFocused: focusedIndex == 2,
+            trailing: !isRtssRunning
+                ? InkWell(
+                    onTap: onStartRtss,
+                    borderRadius: BorderRadius.circular(4),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppTheme.warning.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: AppTheme.warning.withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.play_arrow_rounded,
+                            size: 12,
+                            color: AppTheme.warning,
+                          ),
+                          SizedBox(width: 2),
+                          Text(
+                            "Bật RTSS",
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: AppTheme.warning,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : null,
+          ),
+      ],
+    );
+  }
+}

@@ -18,9 +18,9 @@ import '../services/virtual_keyboard_service.dart';
 import '../services/dxgi_hook_service.dart';
 import '../services/overlay_controller.dart';
 import '../services/rtss_installer_service.dart';
-import 'widgets/setting_slider.dart';
-import 'widgets/action_button.dart';
-import 'widgets/preset_selector.dart';
+import 'tabs/performance_tab.dart';
+import 'tabs/device_tab.dart';
+import 'tabs/utilities_tab.dart';
 import 'widgets/tab_bar.dart';
 
 /// Nội dung thanh Quick Settings cho máy Handheld hỗ trợ đầy đủ cảm ứng & tay cầm Gamepad.
@@ -516,6 +516,23 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     }
   }
 
+  void _toggleDxgiHook() {
+    setState(() {
+      DxgiHookService.instance.toggle();
+      _dxgiHookEnabled = DxgiHookService.instance.isEnabled;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _dxgiHookEnabled
+              ? 'Đã kích hoạt DXGI Borderless Hook (Chống văng game Exclusive)!'
+              : 'Đã tắt DXGI Borderless Hook!',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -577,496 +594,81 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   Widget _buildSelectedTabContent() {
     switch (_selectedTabIndex) {
       case 0:
-        return _buildPerformanceTab();
+        return PerformanceTab(
+          scrollController: _scrollController,
+          focusedIndex: _focusedIndex,
+          tdp: _tdp,
+          liveTdp: _liveTdp,
+          tdpAuto: _tdpAuto,
+          tdpCtrl: _tdpCtrl,
+          onTdpChanged: _updateTdp,
+          onToggleTdpAuto: _toggleTdpAuto,
+          fan: _fan,
+          liveFan: _liveFan,
+          fanAuto: _fanAuto,
+          fanCtrl: _fanCtrl,
+          onFanChanged: _updateFan,
+          onToggleFanAuto: _toggleFanAuto,
+          fpsLimit: _fpsLimit,
+          liveFps: _liveFps,
+          activeGame: _activeGame,
+          isRtssRunning: _isRtssRunning,
+          rtssCtrl: _rtssCtrl,
+          onFpsLimitChanged: _updateFpsLimit,
+          onStartRtss: _startRtss,
+          isInstallingRtss: _isInstallingRtss,
+          rtssInstallMsg: _rtssInstallMsg,
+          onInstallRtss: _handleInstallRtss,
+        );
       case 1:
-        return _buildDeviceTab();
+        return DeviceTab(
+          scrollController: _scrollController,
+          focusedIndex: _focusedIndex,
+          brightness: _brightness,
+          brightnessCtrl: _brightnessCtrl,
+          onBrightnessChanged: _updateBrightness,
+          audio: _audio,
+          audioCtrl: _audioCtrl,
+          onAudioChanged: _updateAudio,
+          touchEnabled: _touchEnabled,
+          onToggleTouchscreen: _toggleTouchscreen,
+          widthPercent: _widthPercent,
+          onWidthPercentChanged: _updateWidthPercent,
+        );
       case 2:
-        return _buildUtilitiesTab();
+        return UtilitiesTab(
+          scrollController: _scrollController,
+          focusedIndex: _focusedIndex,
+          dxgiHookEnabled: _dxgiHookEnabled,
+          onToggleDxgiHook: _toggleDxgiHook,
+          onVirtualKeyboard: () {
+            OverlayController.instance.hideOverlay();
+            VirtualKeyboardService.toggleKeyboard();
+          },
+          onTaskManager: () {
+            OverlayController.instance.hideOverlay();
+            Process.start('taskmgr.exe', [], runInShell: true);
+          },
+          onDisplaySettings: () {
+            OverlayController.instance.hideOverlay();
+            Process.start('explorer.exe', [
+              'ms-settings:display',
+            ], runInShell: true);
+          },
+          onTrimMemory: () {
+            SystemOptimizer.trimMemory();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Đã giải phóng bộ nhớ RAM tiến trình!'),
+                duration: Duration(seconds: 1),
+              ),
+            );
+          },
+          onClosePanel: () => OverlayController.instance.hideOverlay(),
+        );
       default:
         return const SizedBox.shrink();
     }
-  }
-
-  /// Tab 1: Hiệu năng & Năng lượng (TDP, Quạt, RTSS FPS)
-  Widget _buildPerformanceTab() {
-    return ListView(
-      key: const ValueKey('tab_performance'),
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      children: [
-        _buildSectionLabel("NĂNG LƯỢNG (TDP)"),
-        SettingSlider(
-          icon: Icons.bolt_rounded,
-          title: "Công suất TDP",
-          value: _tdp,
-          min: _tdpCtrl.minVal,
-          max: _tdpCtrl.maxVal,
-          step: _tdpCtrl.step,
-          unit: _tdpCtrl.unit,
-          currentValue: _liveTdp,
-          currentColor: AppTheme.accent2, // Màu cam năng lượng
-          quickPresets: const [10, 15, 20, 25, 30],
-          onChanged: _updateTdp,
-          shouldShowSlider: !_tdpAuto,
-          isFocused: _focusedIndex == 0,
-          trailing: InkWell(
-            borderRadius: BorderRadius.circular(4),
-            onTap: _toggleTdpAuto,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: _tdpAuto
-                    ? AppTheme.accent.withValues(alpha: 0.15)
-                    : AppTheme.cardBorder.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                  color: _tdpAuto
-                      ? AppTheme.accent.withValues(alpha: 0.4)
-                      : AppTheme.cardBorder,
-                ),
-              ),
-              child: Text(
-                _tdpAuto ? "AUTO" : "MANUAL",
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  color: _tdpAuto ? AppTheme.accent : AppTheme.textSecondary,
-                ),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        _buildSectionLabel("TẢN NHIỆT (QUẠT)"),
-        SettingSlider(
-          icon: Icons.toys_rounded,
-          title: "Tốc độ quạt",
-          value: _fan,
-          min: _fanCtrl.minVal,
-          max: _fanCtrl.maxVal,
-          step: _fanCtrl.step,
-          unit: _fanCtrl.unit,
-          currentValue: _liveFan,
-          currentColor: AppTheme.accent,
-          quickPresets: const [30, 50, 75, 100],
-          onChanged: _updateFan,
-          shouldShowSlider: !_fanAuto,
-          isFocused: _focusedIndex == 1,
-          trailing: InkWell(
-            borderRadius: BorderRadius.circular(4),
-            onTap: _toggleFanAuto,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: _fanAuto
-                    ? AppTheme.accent.withValues(alpha: 0.15)
-                    : AppTheme.cardBorder.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                  color: _fanAuto
-                      ? AppTheme.accent.withValues(alpha: 0.4)
-                      : AppTheme.cardBorder,
-                ),
-              ),
-              child: Text(
-                _fanAuto ? "AUTO" : "MANUAL",
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  color: _fanAuto ? AppTheme.accent : AppTheme.textSecondary,
-                ),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        _buildSectionLabel("KHUNG HÌNH (RTSS)"),
-        if (!RtssInstallerService.isInstalled())
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppTheme.cardBackground,
-              borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-              border: Border.all(
-                color: _focusedIndex == 2 ? AppTheme.accent : AppTheme.cardBorder,
-                width: _focusedIndex == 2 ? 1.8 : 1.0,
-              ),
-              boxShadow: _focusedIndex == 2
-                  ? [
-                      BoxShadow(
-                        color: AppTheme.primary.withValues(alpha: 0.4),
-                        blurRadius: 14,
-                        spreadRadius: 1,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : null,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.speed_rounded,
-                      color: AppTheme.accent,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        "Chưa cài đặt RTSS",
-                        style: AppTheme.cardTitle,
-                      ),
-                    ),
-                    if (_isInstallingRtss)
-                      const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: AppTheme.accent,
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  _rtssInstallMsg ??
-                      "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppTheme.textSecondary,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  height: 34,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.accent.withValues(alpha: 0.15),
-                      foregroundColor: AppTheme.accent,
-                      side: BorderSide(
-                        color: AppTheme.accent.withValues(alpha: 0.4),
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(
-                          AppTheme.buttonRadius,
-                        ),
-                      ),
-                    ),
-                    icon: Icon(
-                      _isInstallingRtss
-                          ? Icons.hourglass_top_rounded
-                          : Icons.download_rounded,
-                      size: 16,
-                    ),
-                    label: Text(
-                      _isInstallingRtss
-                          ? "Đang cài đặt..."
-                          : "Tự động cài đặt RTSS qua Winget",
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    onPressed: _isInstallingRtss ? null : _handleInstallRtss,
-                  ),
-                ),
-              ],
-            ),
-          )
-        else
-          SettingSlider(
-            icon: Icons.speed_rounded,
-            title: _activeGame != null
-                ? "Giới hạn FPS ($_activeGame)"
-                : "Giới hạn FPS",
-            value: _fpsLimit,
-            min: _rtssCtrl.minVal,
-            max: _rtssCtrl.maxVal,
-            step: _rtssCtrl.step,
-            unit: _rtssCtrl.unit,
-            currentValue: _liveFps,
-            currentColor: AppTheme.accent,
-            quickPresets: const [0, 30, 40, 60],
-            onChanged: _updateFpsLimit,
-            isFocused: _focusedIndex == 2,
-            trailing: !_isRtssRunning
-                ? InkWell(
-                    onTap: _startRtss,
-                    borderRadius: BorderRadius.circular(4),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppTheme.warning.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                          color: AppTheme.warning.withValues(alpha: 0.4),
-                        ),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.play_arrow_rounded,
-                            size: 12,
-                            color: AppTheme.warning,
-                          ),
-                          SizedBox(width: 2),
-                          Text(
-                            "Bật RTSS",
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: AppTheme.warning,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                : null,
-          ),
-      ],
-    );
-  }
-
-  /// Tab 2: Màn hình, Âm thanh & Cảm ứng
-  Widget _buildDeviceTab() {
-    return ListView(
-      key: const ValueKey('tab_device'),
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      children: [
-        _buildSectionLabel("HIỂN THỊ"),
-        SettingSlider(
-          icon: Icons.brightness_6_rounded,
-          title: "Độ sáng màn hình",
-          value: _brightness,
-          min: _brightnessCtrl.minVal,
-          max: _brightnessCtrl.maxVal,
-          step: _brightnessCtrl.step,
-          unit: _brightnessCtrl.unit,
-          quickPresets: const [25, 50, 75, 100],
-          onChanged: _updateBrightness,
-          isFocused: _focusedIndex == 0,
-        ),
-        const SizedBox(height: 16),
-
-        _buildSectionLabel("ÂM THANH"),
-        SettingSlider(
-          icon: Icons.volume_up_rounded,
-          title: "Âm lượng loa",
-          value: _audio,
-          min: _audioCtrl.minVal,
-          max: _audioCtrl.maxVal,
-          step: _audioCtrl.step,
-          unit: _audioCtrl.unit,
-          quickPresets: const [0, 30, 60, 100],
-          onChanged: _updateAudio,
-          isFocused: _focusedIndex == 1,
-        ),
-        const SizedBox(height: 16),
-
-        _buildSectionLabel("GIAO DIỆN & CẢM ỨNG"),
-        Row(
-          children: [
-            Expanded(
-              child: ActionButton(
-                icon: _touchEnabled
-                    ? Icons.touch_app_rounded
-                    : Icons.do_not_touch_rounded,
-                title: "Cảm ứng",
-                subtitle: _touchEnabled ? "Đang Bật" : "Đã Tắt",
-                onTap: _toggleTouchscreen,
-                isFocused: _focusedIndex == 2,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-          decoration: BoxDecoration(
-            color: AppTheme.cardBackground,
-            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-            border: Border.all(
-              color: _focusedIndex == 3 ? AppTheme.accent : AppTheme.cardBorder,
-              width: _focusedIndex == 3 ? 1.8 : 1.0,
-            ),
-            boxShadow: _focusedIndex == 3
-                ? [
-                    BoxShadow(
-                      color: AppTheme.primary.withValues(alpha: 0.4),
-                      blurRadius: 14,
-                      spreadRadius: 1,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                : null,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.aspect_ratio_rounded,
-                    size: 16,
-                    color: AppTheme.accent,
-                  ),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      "Độ rộng Side Panel",
-                      style: AppTheme.cardTitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  Text("$_widthPercent %", style: AppTheme.cardValue),
-                ],
-              ),
-              const SizedBox(height: 8),
-              PresetSelector<int>(
-                presets: const [30, 35, 40, 45],
-                selectedValue: _widthPercent,
-                labelBuilder: (preset) => "$preset%",
-                onSelected: _updateWidthPercent,
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Tab 3: Tiện ích & Thao tác nhanh
-  Widget _buildUtilitiesTab() {
-    return ListView(
-      key: const ValueKey('tab_utilities'),
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      children: [
-        _buildSectionLabel("CÔNG CỤ HỆ THỐNG"),
-        Row(
-          children: [
-            Expanded(
-              child: ActionButton(
-                icon: Icons.keyboard_alt_rounded,
-                title: "Bàn phím ảo",
-                subtitle: "Mở TabTip OSK",
-                isFocused: _focusedIndex == 0,
-                onTap: () {
-                  OverlayController.instance.hideOverlay();
-                  VirtualKeyboardService.toggleKeyboard();
-                },
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: ActionButton(
-                icon: Icons.analytics_outlined,
-                title: "Task Manager",
-                subtitle: "Quản lý tiến trình",
-                isFocused: _focusedIndex == 1,
-                onTap: () {
-                  OverlayController.instance.hideOverlay();
-                  Process.start('taskmgr.exe', [], runInShell: true);
-                },
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: ActionButton(
-                icon: Icons.monitor_rounded,
-                title: "Màn hình",
-                subtitle: "Đổi độ phân giải",
-                isFocused: _focusedIndex == 2,
-                onTap: () {
-                  OverlayController.instance.hideOverlay();
-                  Process.start('explorer.exe', [
-                    'ms-settings:display',
-                  ], runInShell: true);
-                },
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: ActionButton(
-                icon: Icons.layers_rounded,
-                title: "DXGI Hook",
-                subtitle: _dxgiHookEnabled ? "Đang Bật (Borderless)" : "Đã Tắt (FSE Gốc)",
-                isFocused: _focusedIndex == 3,
-                onTap: _toggleDxgiHook,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: ActionButton(
-                icon: Icons.cleaning_services_rounded,
-                title: "Dọn dẹp RAM",
-                subtitle: "Tối ưu bộ nhớ",
-                isFocused: _focusedIndex == 4,
-                onTap: () {
-                  SystemOptimizer.trimMemory();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Đã giải phóng bộ nhớ RAM tiến trình!'),
-                      duration: Duration(seconds: 1),
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: ActionButton(
-                icon: Icons.fullscreen_exit_rounded,
-                title: "Đóng Panel",
-                subtitle: "Phím: B / Back+RB",
-                isFocused: _focusedIndex == 5,
-                onTap: () => OverlayController.instance.hideOverlay(),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  void _toggleDxgiHook() {
-    setState(() {
-      DxgiHookService.instance.toggle();
-      _dxgiHookEnabled = DxgiHookService.instance.isEnabled;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          _dxgiHookEnabled
-              ? 'Đã kích hoạt DXGI Borderless Hook (Chống văng game Exclusive)!'
-              : 'Đã tắt DXGI Borderless Hook!',
-        ),
-        duration: const Duration(seconds: 2),
-      ),
-    );
   }
 
   /// Thanh gợi ý thao tác tay cầm Gamepad phong cách Console dưới đáy Panel
@@ -1136,21 +738,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildSectionLabel(String label) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 8),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: AppTheme.textSecondary,
-          letterSpacing: 1.0,
-        ),
-      ),
     );
   }
 }
