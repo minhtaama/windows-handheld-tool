@@ -7,7 +7,7 @@ import 'quick_panel.dart';
 
 /// Màn hình Side Dock Panel chuẩn True Fullscreen Transparent Overlay.
 /// Toàn bộ không gian trong suốt bao phủ toàn màn hình, hỗ trợ co dãn bề rộng panel linh hoạt
-/// với AnimatedContainer và đóng mở mượt mà bằng SlideTransition.
+/// với AnimatedContainer, đóng mở mượt mà bằng SlideTransition và tùy chỉnh tỷ lệ phóng đại UI Scale.
 class OverlayScreen extends StatefulWidget {
   final ConfigManager config;
 
@@ -85,7 +85,7 @@ class _OverlayScreenState extends State<OverlayScreen>
         final isVisible = OverlayController.instance.isVisible;
         final screenWidth = MediaQuery.of(context).size.width;
         final panelWidth = (screenWidth * (OverlayController.instance.widthPercent / 100.0))
-            .clamp(320.0, 750.0);
+            .clamp(320.0, 850.0);
 
         return IgnorePointer(
           ignoring: !isVisible,

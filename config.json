@@ -1,9 +1,11 @@
 {
     "overlay": {
         "width": 360,
-        "width_percent": 45,
+        "width_percent": 40,
         "animation_duration_ms": 400,
-        "side": "right"
+        "side": "right",
+        "scale_percent": 100,
+        "scale": 1.4
     },
     "hotkey": {
         "toggle_overlay": "ctrl+shift+q",
@@ -26,15 +28,15 @@
             "min": 5,
             "max": 35,
             "step": 1,
-            "current": 15,
-            "auto": false
+            "current": 20,
+            "auto": true
         },
         "fan": {
             "min": 0,
             "max": 100,
             "step": 5,
             "current": 65,
-            "auto": true
+            "auto": false
         },
         "brightness": {
             "min": 0,

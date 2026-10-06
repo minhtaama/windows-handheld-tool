@@ -86,7 +86,7 @@ class SettingSlider extends StatelessWidget {
           // 1. Dòng tiêu đề và thông số (Gọn gàng, tinh tế, chống tràn pixel tuyệt đối)
           Row(
             children: [
-              Icon(icon, size: 18, color: AppTheme.primary),
+              Icon(icon, size: AppTheme.scaled(18), color: AppTheme.primary),
               const SizedBox(width: 8),
               // Tiêu đề tự co giãn linh hoạt
               Expanded(

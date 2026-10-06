@@ -68,6 +68,12 @@ class AppTheme {
   static const double cardRadius = 10.0;
   static const double buttonRadius = 8.0;
 
+  /// Hệ số phóng đại kích thước nội dung UI (mặc định 1.0)
+  static double uiScale = 1.0;
+
+  /// Nhân kích thước với hệ số uiScale
+  static double scaled(double size) => size * uiScale;
+
   static const TextStyle headerTitle = TextStyle(
     fontSize: 15,
     fontWeight: FontWeight.w700,

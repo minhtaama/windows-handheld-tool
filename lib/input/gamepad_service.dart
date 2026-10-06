@@ -141,6 +141,10 @@ class GamepadService {
   static final _btnStart = _ButtonTriggerTracker();
   static final _btnBack = _ButtonTriggerTracker();
 
+  static bool _isConnected = false;
+  /// Trạng thái phát hiện có ít nhất 1 tay cầm Gamepad đang kết nối
+  static bool get isConnected => _isConnected;
+
   static void start({
     required void Function() onTriggerCombo,
     int intervalMs = 50,
@@ -198,6 +202,7 @@ class GamepadService {
           }
         }
 
+        _isConnected = foundActiveGamepad;
         if (!foundActiveGamepad) return;
 
         // 1. Bắt sự kiện tổ hợp phím mở/tắt Overlay (BACK + RB)

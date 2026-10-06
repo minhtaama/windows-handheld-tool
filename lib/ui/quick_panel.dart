@@ -21,6 +21,7 @@ import '../services/rtss_installer_service.dart';
 import 'tabs/performance_tab.dart';
 import 'tabs/device_tab.dart';
 import 'tabs/utilities_tab.dart';
+import 'tabs/settings_tab.dart';
 import 'widgets/tab_bar.dart';
 
 /// Nội dung thanh Quick Settings cho máy Handheld hỗ trợ đầy đủ cảm ứng & tay cầm Gamepad.
@@ -50,8 +51,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late bool _touchEnabled;
   late bool _dxgiHookEnabled;
   late int _widthPercent;
+  late double _scale;
 
-  // Tab đang được chọn (0: Hiệu năng, 1: Thiết bị, 2: Tiện ích)
+  // Tab đang được chọn (0: Hiệu năng, 1: Thiết bị, 2: Tiện ích, 3: Cài đặt)
   int _selectedTabIndex = 0;
 
   // Vị trí điều khiển đang được chọn bằng Gamepad trong Tab hiện tại
@@ -113,6 +115,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _touchEnabled = TouchscreenService.isEnabled;
     _dxgiHookEnabled = DxgiHookService.instance.isEnabled;
     _widthPercent = widget.config.get("overlay.width_percent", 35);
+    _scale = (widget.config.get("overlay.scale", 1.0) as num).toDouble();
+    AppTheme.uiScale = _scale;
 
     _liveTdp = (_tdp * 0.85).round().clamp(_tdpCtrl.minVal, _tdp);
     _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
@@ -168,9 +172,11 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       case 0:
         return 2; // TDP (0), Quạt (1), RTSS (2)
       case 1:
-        return 3; // Độ sáng (0), Âm lượng (1), Cảm ứng (2), Độ rộng (3)
+        return 2; // Độ sáng (0), Âm lượng (1), Cảm ứng (2)
       case 2:
         return 5; // Bàn phím (0), TaskMgr (1), Màn hình (2), DXGI Hook (3), Dọn RAM (4), Đóng panel (5)
+      case 3:
+        return 1; // UI Scale (0), Độ rộng Panel (1)
       default:
         return 0;
     }
@@ -199,7 +205,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   void _autoScrollToFocused() {
     if (!_scrollController.hasClients) return;
-    final targetOffset = (_focusedIndex * 135.0).clamp(
+    final targetOffset = (_focusedIndex * (135.0 * _scale)).clamp(
       0.0,
       _scrollController.position.maxScrollExtent,
     );
@@ -230,10 +236,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
     switch (button) {
       case GamepadButton.lb:
-        _switchTab((_selectedTabIndex - 1 + 3) % 3);
+        _switchTab((_selectedTabIndex - 1 + 4) % 4);
         break;
       case GamepadButton.rb:
-        _switchTab((_selectedTabIndex + 1) % 3);
+        _switchTab((_selectedTabIndex + 1) % 4);
         break;
       case GamepadButton.dpadUp:
         _moveFocus(-1);
@@ -281,13 +287,18 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           _updateAudio(max(_audioCtrl.minVal, _audio - _audioCtrl.step));
         } else if (_focusedIndex == 2) {
           _toggleTouchscreen();
-        } else if (_focusedIndex == 3) {
-          _cyclePreset(const [30, 35, 40, 45], _widthPercent, -1, _updateWidthPercent);
         }
         break;
       case 2:
         if (_focusedIndex > 0) {
           _moveFocus(-1);
+        }
+        break;
+      case 3:
+        if (_focusedIndex == 0) {
+          _cyclePreset(const [0.8, 1.0, 1.2, 1.4], _scale, -1, _updateScale);
+        } else if (_focusedIndex == 1) {
+          _cyclePreset(const [30, 35, 40, 45], _widthPercent, -1, _updateWidthPercent);
         }
         break;
     }
@@ -313,13 +324,18 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           _updateAudio(min(_audioCtrl.maxVal, _audio + _audioCtrl.step));
         } else if (_focusedIndex == 2) {
           _toggleTouchscreen();
-        } else if (_focusedIndex == 3) {
-          _cyclePreset(const [30, 35, 40, 45], _widthPercent, 1, _updateWidthPercent);
         }
         break;
       case 2:
         if (_focusedIndex < _getMaxIndexForTab(2)) {
           _moveFocus(1);
+        }
+        break;
+      case 3:
+        if (_focusedIndex == 0) {
+          _cyclePreset(const [0.8, 1.0, 1.2, 1.4], _scale, 1, _updateScale);
+        } else if (_focusedIndex == 1) {
+          _cyclePreset(const [30, 35, 40, 45], _widthPercent, 1, _updateWidthPercent);
         }
         break;
     }
@@ -349,8 +365,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           _cyclePreset(const [0, 30, 60, 100], _audio, 1, _updateAudio);
         } else if (_focusedIndex == 2) {
           _toggleTouchscreen();
-        } else if (_focusedIndex == 3) {
-          _cyclePreset(const [30, 35, 40, 45], _widthPercent, 1, _updateWidthPercent);
         }
         break;
       case 2:
@@ -375,6 +389,13 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           );
         } else if (_focusedIndex == 5) {
           OverlayController.instance.hideOverlay();
+        }
+        break;
+      case 3:
+        if (_focusedIndex == 0) {
+          _cyclePreset(const [0.8, 1.0, 1.2, 1.4], _scale, 1, _updateScale);
+        } else if (_focusedIndex == 1) {
+          _cyclePreset(const [30, 35, 40, 45], _widthPercent, 1, _updateWidthPercent);
         }
         break;
     }
@@ -406,7 +427,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     setState(() => _tdpAuto = nextAuto);
     widget.config.set("hardware.tdp.auto", nextAuto);
     if (nextAuto) {
-      // Khi bật auto thả nổi: mở rộng trần công suất tối đa để Windows tự điều tiết
       _tdpCtrl.setValue(_tdpCtrl.maxVal);
     } else {
       _tdpCtrl.setValue(_tdp);
@@ -452,6 +472,14 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   void _updateWidthPercent(int val) {
     setState(() => _widthPercent = val);
     OverlayController.instance.updateWidthPercent(val);
+  }
+
+  void _updateScale(double val) {
+    setState(() {
+      _scale = val;
+      AppTheme.uiScale = val;
+    });
+    OverlayController.instance.updateScale(val);
   }
 
   Future<void> _toggleTouchscreen() async {
@@ -537,13 +565,14 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // 1. Thanh Tab Bar nổi phía trên (Compact Mode)
+        // 1. Thanh Tab Bar nổi phía trên (Compact Mode với 4 Tab)
         AppTabBar(
           selectedIndex: _selectedTabIndex,
           items: const [
             AppTabItem(icon: Icons.bolt_rounded, label: 'Hiệu năng'),
             AppTabItem(icon: Icons.tune_rounded, label: 'Thiết bị'),
             AppTabItem(icon: Icons.apps_rounded, label: 'Tiện ích'),
+            AppTabItem(icon: Icons.settings_rounded, label: 'Cài đặt'),
           ],
           onTabSelected: _switchTab,
         ),
@@ -570,15 +599,20 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             child: Column(
               children: [
                 Expanded(
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 180),
-                    layoutBuilder: (currentChild, previousChildren) {
-                      return Stack(
-                        fit: StackFit.expand,
-                        children: [...previousChildren, ?currentChild],
-                      );
-                    },
-                    child: _buildSelectedTabContent(),
+                  child: MediaQuery(
+                    data: MediaQuery.of(context).copyWith(
+                      textScaler: TextScaler.linear(_scale),
+                    ),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      layoutBuilder: (currentChild, previousChildren) {
+                        return Stack(
+                          fit: StackFit.expand,
+                          children: [...previousChildren, ?currentChild],
+                        );
+                      },
+                      child: _buildSelectedTabContent(),
+                    ),
                   ),
                 ),
                 _buildGamepadFooter(),
@@ -632,8 +666,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           onAudioChanged: _updateAudio,
           touchEnabled: _touchEnabled,
           onToggleTouchscreen: _toggleTouchscreen,
-          widthPercent: _widthPercent,
-          onWidthPercentChanged: _updateWidthPercent,
         );
       case 2:
         return UtilitiesTab(
@@ -665,6 +697,20 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             );
           },
           onClosePanel: () => OverlayController.instance.hideOverlay(),
+        );
+      case 3:
+        return SettingsTab(
+          scrollController: _scrollController,
+          focusedIndex: _focusedIndex,
+          isRtssRunning: _isRtssRunning,
+          activeGame: _activeGame,
+          isTdpHardwareActive: _tdpCtrl.isAvailable(),
+          isDxgiHookActive: DxgiHookService.instance.isHookActive || _dxgiHookEnabled,
+          isGamepadConnected: GamepadService.isConnected,
+          scale: _scale,
+          onScaleChanged: _updateScale,
+          widthPercent: _widthPercent,
+          onWidthPercentChanged: _updateWidthPercent,
         );
       default:
         return const SizedBox.shrink();

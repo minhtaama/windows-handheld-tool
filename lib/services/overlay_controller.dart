@@ -23,6 +23,9 @@ class OverlayController extends ChangeNotifier {
   /// Lấy tỷ lệ phần trăm độ rộng của panel từ cấu hình (mặc định 35%)
   int get widthPercent => config?.get("overlay.width_percent", 35) ?? 35;
 
+  /// Lấy tỷ lệ phóng đại giao diện UI Scale (mặc định 1.0)
+  double get scale => ((config?.get("overlay.scale", 1.0) ?? 1.0) as num).toDouble();
+
   /// Callback kích hoạt hoạt cảnh trượt mở từ UI
   AsyncCallback? onAnimateShow;
 
@@ -34,6 +37,13 @@ class OverlayController extends ChangeNotifier {
     config?.set("overlay.width_percent", percent);
     notifyListeners();
     logger.info('Đã cập nhật độ rộng panel: $percent%.');
+  }
+
+  /// Thay đổi tỷ lệ phóng đại nội dung UI Scale
+  void updateScale(double newScale) {
+    config?.set("overlay.scale", newScale);
+    notifyListeners();
+    logger.info('Đã cập nhật tỷ lệ UI Scale: ${newScale}x.');
   }
 
   /// Mở Side Dock Panel: Ngắt gamepad trong game, bật cửa sổ Overlay và chạy hoạt cảnh trượt vào

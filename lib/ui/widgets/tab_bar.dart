@@ -11,8 +11,9 @@ class AppTabItem {
   const AppTabItem({required this.icon, required this.label});
 }
 
-/// Thanh Tab Bar dạng thẻ lớn (Compact Mode) phong cách Acrylic Dock.
-class AppTabBar extends StatelessWidget {
+/// Thanh Tab Bar dạng ô vuông co dãn theo UI Scale, hỗ trợ cuộn ngang tự động (Auto-Scroll)
+/// và tự động gom cụm dạt về lề phải khi tổng chiều rộng nhỏ hơn bề ngang panel.
+class AppTabBar extends StatefulWidget {
   final int selectedIndex;
   final List<AppTabItem> items;
   final ValueChanged<int> onTabSelected;
@@ -24,49 +25,104 @@ class AppTabBar extends StatelessWidget {
     required this.onTabSelected,
   });
 
+  @override
+  State<AppTabBar> createState() => _AppTabBarState();
+}
+
+class _AppTabBarState extends State<AppTabBar> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToSelected());
+  }
+
+  @override
+  void didUpdateWidget(AppTabBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selectedIndex != oldWidget.selectedIndex) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToSelected());
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToSelected() {
+    if (!_scrollController.hasClients) return;
+    final tabSize = AppTheme.scaled(56.0);
+    final itemWidth = tabSize + 6.0; // padding 3px mỗi bên
+    final targetCenter = widget.selectedIndex * itemWidth + (itemWidth / 2);
+    final viewportWidth = _scrollController.position.viewportDimension;
+    final targetOffset = (targetCenter - (viewportWidth / 2)).clamp(
+      0.0,
+      _scrollController.position.maxScrollExtent,
+    );
+    _scrollController.animateTo(
+      targetOffset,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
   void _prevTab() {
-    if (selectedIndex > 0) {
-      onTabSelected(selectedIndex - 1);
+    if (widget.selectedIndex > 0) {
+      widget.onTabSelected(widget.selectedIndex - 1);
     }
   }
 
   void _nextTab() {
-    if (selectedIndex < items.length - 1) {
-      onTabSelected(selectedIndex + 1);
+    if (widget.selectedIndex < widget.items.length - 1) {
+      widget.onTabSelected(widget.selectedIndex + 1);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final tabSize = AppTheme.scaled(56.0);
+    final iconSize = AppTheme.scaled(20.0);
+
     return Container(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisAlignment: MainAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Nút phím tắt LB (Bumper trái)
+          // Nút phím tắt LB (Bumper trái cố định gọn gàng)
           BumperButton(
             type: BumperType.lb,
-            isEnabled: selectedIndex > 0,
+            width: 38,
+            height: 20,
+            isEnabled: widget.selectedIndex > 0,
             onTap: _prevTab,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
 
-          // Danh sách các thẻ Tab dạng khối vuông
-          Expanded(
-            child: Row(
-              children: List.generate(items.length, (index) {
-                final item = items[index];
-                final isSelected = index == selectedIndex;
+          // Vùng chứa các ô tab vuông: co lại khi ít tab (căn lề phải) và cuộn ngang khi nhiều tab
+          Flexible(
+            child: SingleChildScrollView(
+              controller: _scrollController,
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: List.generate(widget.items.length, (index) {
+                  final item = widget.items[index];
+                  final isSelected = index == widget.selectedIndex;
 
-                return Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
                     child: InkWell(
-                      onTap: () => onTabSelected(index),
+                      onTap: () => widget.onTabSelected(index),
                       borderRadius: BorderRadius.circular(AppTheme.cardRadius),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
-                        height: 64,
+                        width: tabSize,
+                        height: tabSize,
                         decoration: BoxDecoration(
                           color: isSelected
                               ? AppTheme.tabSelected
@@ -86,8 +142,8 @@ class AppTabBar extends StatelessWidget {
                                     color: AppTheme.primary.withValues(
                                       alpha: 0.35,
                                     ),
-                                    blurRadius: 12,
-                                    offset: const Offset(0, 3),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 2),
                                   ),
                                 ]
                               : null,
@@ -97,23 +153,23 @@ class AppTabBar extends StatelessWidget {
                           children: [
                             Icon(
                               item.icon,
-                              size: 22,
+                              size: iconSize,
                               color: isSelected
                                   ? AppTheme.accent
                                   : AppTheme.textSecondary,
                             ),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: 3),
                             Text(
                               item.label,
                               style: TextStyle(
-                                fontSize: 11,
+                                fontSize: 10,
                                 fontWeight: isSelected
                                     ? FontWeight.bold
                                     : FontWeight.w500,
                                 color: isSelected
                                     ? AppTheme.textPrimary
                                     : AppTheme.textSecondary,
-                                letterSpacing: 0.3,
+                                letterSpacing: 0.2,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -122,17 +178,19 @@ class AppTabBar extends StatelessWidget {
                         ),
                       ),
                     ),
-                  ),
-                );
-              }),
+                  );
+                }),
+              ),
             ),
           ),
 
-          const SizedBox(width: 8),
-          // Nút phím tắt RB (Bumper phải)
+          const SizedBox(width: 6),
+          // Nút phím tắt RB (Bumper phải cố định gọn gàng)
           BumperButton(
             type: BumperType.rb,
-            isEnabled: selectedIndex < items.length - 1,
+            width: 38,
+            height: 20,
+            isEnabled: widget.selectedIndex < widget.items.length - 1,
             onTap: _nextTab,
           ),
         ],

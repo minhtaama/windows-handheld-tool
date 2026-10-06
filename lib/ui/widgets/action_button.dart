@@ -50,13 +50,13 @@ class ActionButton extends StatelessWidget {
           child: Row(
             children: [
               Container(
-                width: 36,
-                height: 36,
+                width: AppTheme.scaled(36),
+                height: AppTheme.scaled(36),
                 decoration: BoxDecoration(
                   color: AppTheme.primary.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(icon, size: 20, color: AppTheme.primary),
+                child: Icon(icon, size: AppTheme.scaled(20), color: AppTheme.primary),
               ),
               const SizedBox(width: 10),
               Expanded(
