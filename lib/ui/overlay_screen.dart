@@ -5,7 +5,9 @@ import '../core/config.dart';
 import '../services/overlay_controller.dart';
 import 'quick_panel.dart';
 
-/// Màn hình Side Dock Panel chuẩn Fullscreen Transparent Overlay (chống phá vỡ DirectX SwapChain).
+/// Màn hình Side Dock Panel chuẩn True Fullscreen Transparent Overlay.
+/// Toàn bộ không gian trong suốt bao phủ toàn màn hình, hỗ trợ co dãn bề rộng panel linh hoạt
+/// với AnimatedContainer và đóng mở mượt mà bằng SlideTransition.
 class OverlayScreen extends StatefulWidget {
   final ConfigManager config;
 
@@ -77,27 +79,56 @@ class _OverlayScreenState extends State<OverlayScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.transparent,
-      body: Align(
-        alignment: Alignment.centerRight,
-        child: SlideTransition(
-          position: _slideAnimation,
-          child: FadeTransition(
-            opacity: _panelFadeAnimation,
-            child: Container(
-              constraints: const BoxConstraints(maxWidth: 520),
-              padding: const EdgeInsets.only(
-                top: 20,
-                bottom: 20,
-                right: 16,
-                left: 8,
-              ),
-              child: QuickSettingsPanel(config: widget.config),
+    return ListenableBuilder(
+      listenable: OverlayController.instance,
+      builder: (context, _) {
+        final isVisible = OverlayController.instance.isVisible;
+        final screenWidth = MediaQuery.of(context).size.width;
+        final panelWidth = (screenWidth * (OverlayController.instance.widthPercent / 100.0))
+            .clamp(320.0, 750.0);
+
+        return IgnorePointer(
+          ignoring: !isVisible,
+          child: Scaffold(
+            backgroundColor: AppTheme.transparent,
+            body: Stack(
+              children: [
+                // Vùng nền trong suốt bên trái: Chạm vào để đóng panel
+                if (isVisible)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () => OverlayController.instance.hideOverlay(),
+                    ),
+                  ),
+
+                // Side Dock Panel neo sát mép phải với hoạt cảnh co dãn AnimatedContainer
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: SlideTransition(
+                    position: _slideAnimation,
+                    child: FadeTransition(
+                      opacity: _panelFadeAnimation,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        curve: Curves.easeOutCubic,
+                        width: panelWidth,
+                        padding: const EdgeInsets.only(
+                          top: 20,
+                          bottom: 20,
+                          right: 16,
+                          left: 8,
+                        ),
+                        child: QuickSettingsPanel(config: widget.config),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

@@ -93,6 +93,10 @@ class ConfigManager {
           "poll_interval_ms": 50,
           "toggle_combo": ["BACK", "RIGHT_SHOULDER"],
         },
+        "dxgi_hook": {
+          "enabled": true,
+          "auto_borderless": true,
+        },
         "hardware": {
           "tdp": {"min": 5, "max": 35, "step": 1, "current": 15},
           "fan": {"min": 0, "max": 100, "step": 5, "current": 50, "auto": true},

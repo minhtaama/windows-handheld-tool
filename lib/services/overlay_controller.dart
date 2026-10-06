@@ -1,15 +1,12 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-
-import 'package:window_manager/window_manager.dart';
-
 import '../core/config.dart';
 import '../core/logger.dart';
+import 'dxgi_hook_service.dart';
 import 'native_window_service.dart';
 
-/// Quản lý trạng thái và hành vi ẩn/hiện của Side Dock Panel trên Windows.
-/// Áp dụng mô hình Fullscreen Transparent Overlay (chuẩn Handheld Gaming Overlay)
-/// kết hợp Native Win32 SW_SHOWNOACTIVATE để tránh cướp Focus và không làm văng game DirectX.
+/// Quản lý trạng thái và hoạt cảnh ẩn/hiện của Side Dock Panel trên Windows.
+/// Áp dụng mô hình True Fullscreen Transparent Overlay (chuẩn Gaming Overlay)
+/// kết hợp XInput Muting để ngăn chặn hoàn toàn việc game nhận nhầm thao tác tay cầm khi đang điều khiển Quick Panel.
 class OverlayController extends ChangeNotifier {
   static const logger = AppLogger('OverlayController');
   static final OverlayController instance = OverlayController._();
@@ -32,68 +29,52 @@ class OverlayController extends ChangeNotifier {
   /// Callback kích hoạt hoạt cảnh trượt đóng từ UI
   AsyncCallback? onAnimateHide;
 
-  /// Thay đổi bề rộng Side Dock Panel tại chỗ (Flutter tự động animate, không can thiệp Win32)
+  /// Thay đổi bề rộng Side Dock Panel tại chỗ (Flutter tự động animate mượt mà 60fps/120fps)
   void updateWidthPercent(int percent) {
     config?.set("overlay.width_percent", percent);
     notifyListeners();
     logger.info('Đã cập nhật độ rộng panel: $percent%.');
   }
 
-  /// Mở Side Dock Panel với hoạt cảnh trượt mượt mà từ mép phải
+  /// Mở Side Dock Panel: Ngắt gamepad trong game, bật cửa sổ Overlay và chạy hoạt cảnh trượt vào
   Future<void> showOverlay() async {
     try {
       _isVisible = true;
       notifyListeners();
 
-      // 1. Lấy độ phân giải vật lý thực tế hiện hành của màn hình (hỗ trợ in-game 720p/800p/RSR)
-      final currentScreenSize = NativeWindowService.getPhysicalScreenSize();
+      // 1. Ngắt (Mute) tín hiệu Gamepad gửi đến game để tránh nhận nhầm thao tác
+      DxgiHookService.instance.setOverlayActive(true);
 
-      // 2. Tính toán kích thước Side-Dock Panel (chuẩn kiến trúc GPD Tool / Handheld Sidebar)
-      // Không bao phủ (0, 0) toàn màn hình để Windows DWM không coi đây là Fullscreen Replacement
-      final panelWidth = (currentScreenSize.width * (widthPercent / 100.0)).clamp(
-        320.0,
-        520.0,
-      );
-      final posX = currentScreenSize.width - panelWidth;
+      // 2. Hiển thị cửa sổ Fullscreen Transparent Overlay ở trạng thái SWP_NOACTIVATE & Always-on-Top
+      NativeWindowService.showOverlayNoActivate();
 
-      // 3. Hiển thị cửa sổ neo sát mép phải ở chế độ SW_SHOWNOACTIVATE & Always-on-Top (KHÔNG cướp Focus của Game)
-      final shown = NativeWindowService.showOverlayNoActivate(
-        size: Size(panelWidth, currentScreenSize.height),
-        position: Offset(posX, 0),
-      );
-
-      // Fallback an toàn qua windowManager nếu cần
-      if (!shown) {
-        await windowManager.setPosition(Offset(posX, 0));
-        await windowManager.setSize(Size(panelWidth, currentScreenSize.height));
-        await windowManager.setAlwaysOnTop(true);
-        await windowManager.show(inactive: true);
-      }
-
-      // 4. Kích hoạt hoạt cảnh trượt từ mép phải vào (chạy bất đồng bộ, không nghẽn luồng)
+      // 3. Kích hoạt hoạt cảnh trượt từ mép phải vào
       onAnimateShow?.call();
 
-      logger.info('Đã mở Side Dock Panel (Pos: $posX, Width: $panelWidth, Height: ${currentScreenSize.height}).');
+      logger.info('Đã mở Side Dock Panel (Fullscreen Transparent Overlay, Gamepad Muted in Game).');
     } catch (e) {
       logger.error('Lỗi khi mở Overlay', e);
     }
   }
 
-  /// Đóng Side Dock Panel: Chạy hoạt cảnh trượt ra ngoài mép phải trước khi ẩn cửa sổ
+  /// Đóng Side Dock Panel: Chạy hoạt cảnh trượt ra, khôi phục Gamepad cho game và bật cờ xuyên thấu
   Future<void> hideOverlay() async {
     try {
       _isVisible = false;
       notifyListeners();
 
-      // 1. Chạy hoạt cảnh trượt ra mép phải
+      // 1. Khôi phục tín hiệu Gamepad cho game ngay lập tức
+      DxgiHookService.instance.setOverlayActive(false);
+
+      // 2. Chạy hoạt cảnh trượt ra mép phải
       if (onAnimateHide != null) {
         await onAnimateHide!();
       }
 
-      // 2. Dời cửa sổ ra off-screen để giữ nguyên DWM composition surface
+      // 3. Chuyển cửa sổ sang chế độ xuyên thấu (WS_EX_TRANSPARENT)
       NativeWindowService.hideOverlayWindow();
 
-      logger.info('Đã đóng Side Dock Panel.');
+      logger.info('Đã đóng Side Dock Panel (Gamepad restored in Game).');
     } catch (e) {
       logger.error('Lỗi khi ẩn Overlay', e);
     }
@@ -117,7 +98,7 @@ class OverlayController extends ChangeNotifier {
 
   /// Xử lý sự kiện khi người dùng click chuột ra ngoài panel sang game/desktop
   void handleWindowBlur() {
-    // Không tự động đóng panel khi mất tiêu điểm để duy trì hiển thị khi chơi game
+    // Duy trì hiển thị để không làm gián đoạn trải nghiệm chơi game
     logger.info('Bỏ qua sự kiện Window Blur để duy trì hiển thị trên Game.');
   }
 }

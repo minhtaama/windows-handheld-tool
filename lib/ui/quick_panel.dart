@@ -15,6 +15,7 @@ import '../hardware/touchscreen_service.dart';
 import '../input/gamepad_service.dart';
 import '../services/system_optimizer.dart';
 import '../services/virtual_keyboard_service.dart';
+import '../services/dxgi_hook_service.dart';
 import '../services/overlay_controller.dart';
 import '../services/rtss_installer_service.dart';
 import 'widgets/setting_slider.dart';
@@ -47,6 +48,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late int _audio;
   late int _fpsLimit;
   late bool _touchEnabled;
+  late bool _dxgiHookEnabled;
   late int _widthPercent;
 
   // Tab đang được chọn (0: Hiệu năng, 1: Thiết bị, 2: Tiện ích)
@@ -109,6 +111,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     final savedFps = widget.config.get("hardware.rtss.fps_limit", 60);
     _fpsLimit = _rtssCtrl.isAvailable() ? _rtssCtrl.getValue() : savedFps;
     _touchEnabled = TouchscreenService.isEnabled;
+    _dxgiHookEnabled = DxgiHookService.instance.isEnabled;
     _widthPercent = widget.config.get("overlay.width_percent", 35);
 
     _liveTdp = (_tdp * 0.85).round().clamp(_tdpCtrl.minVal, _tdp);
@@ -167,7 +170,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       case 1:
         return 3; // Độ sáng (0), Âm lượng (1), Cảm ứng (2), Độ rộng (3)
       case 2:
-        return 4; // Bàn phím (0), TaskMgr (1), Màn hình (2), Dọn RAM (3), Đóng panel (4)
+        return 5; // Bàn phím (0), TaskMgr (1), Màn hình (2), DXGI Hook (3), Dọn RAM (4), Đóng panel (5)
       default:
         return 0;
     }
@@ -361,6 +364,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           OverlayController.instance.hideOverlay();
           Process.start('explorer.exe', ['ms-settings:display'], runInShell: true);
         } else if (_focusedIndex == 3) {
+          _toggleDxgiHook();
+        } else if (_focusedIndex == 4) {
           SystemOptimizer.trimMemory();
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -368,7 +373,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
               duration: Duration(seconds: 1),
             ),
           );
-        } else if (_focusedIndex == 4) {
+        } else if (_focusedIndex == 5) {
           OverlayController.instance.hideOverlay();
         }
         break;
@@ -1002,10 +1007,24 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             const SizedBox(width: 10),
             Expanded(
               child: ActionButton(
+                icon: Icons.layers_rounded,
+                title: "DXGI Hook",
+                subtitle: _dxgiHookEnabled ? "Đang Bật (Borderless)" : "Đã Tắt (FSE Gốc)",
+                isFocused: _focusedIndex == 3,
+                onTap: _toggleDxgiHook,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: ActionButton(
                 icon: Icons.cleaning_services_rounded,
                 title: "Dọn dẹp RAM",
                 subtitle: "Tối ưu bộ nhớ",
-                isFocused: _focusedIndex == 3,
+                isFocused: _focusedIndex == 4,
                 onTap: () {
                   SystemOptimizer.trimMemory();
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -1017,19 +1036,36 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
                 },
               ),
             ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: ActionButton(
+                icon: Icons.fullscreen_exit_rounded,
+                title: "Đóng Panel",
+                subtitle: "Phím: B / Back+RB",
+                isFocused: _focusedIndex == 5,
+                onTap: () => OverlayController.instance.hideOverlay(),
+              ),
+            ),
           ],
         ),
-        const SizedBox(height: 16),
-
-        _buildSectionLabel("ĐIỀU HƯỚNG"),
-        ActionButton(
-          icon: Icons.fullscreen_exit_rounded,
-          title: "Đóng Quick Panel",
-          subtitle: "Phím tắt: B / Back + RB",
-          isFocused: _focusedIndex == 4,
-          onTap: () => OverlayController.instance.hideOverlay(),
-        ),
       ],
+    );
+  }
+
+  void _toggleDxgiHook() {
+    setState(() {
+      DxgiHookService.instance.toggle();
+      _dxgiHookEnabled = DxgiHookService.instance.isEnabled;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _dxgiHookEnabled
+              ? 'Đã kích hoạt DXGI Borderless Hook (Chống văng game Exclusive)!'
+              : 'Đã tắt DXGI Borderless Hook!',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
     );
   }
 

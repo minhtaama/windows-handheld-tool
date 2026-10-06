@@ -46,8 +46,8 @@ typedef _InvalidateRectDart = int Function(int hWnd, Pointer<Void> lpRect, int b
 typedef _SetWindowBandC = Int32 Function(IntPtr hWnd, IntPtr hwndInsertAfter, Uint32 dwBand);
 typedef _SetWindowBandDart = int Function(int hWnd, int hwndInsertAfter, int dwBand);
 
-/// Dịch vụ quản lý cửa sổ Native Win32 tối ưu cho Gaming Overlay.
-/// Điều khiển cửa sổ với SW_SHOWNOACTIVATE và SWP_NOACTIVATE
+/// Dịch vụ quản lý cửa sổ Native Win32 tối ưu cho Gaming Overlay chuẩn Fullscreen Transparent Overlay.
+/// Bao phủ toàn màn hình cố định và sử dụng SWP_NOACTIVATE kết hợp ZBID_SYSTEM_TOOLS
 /// để đảm bảo không cướp Focus của Game (chống văng/minimize game DirectX).
 class NativeWindowService {
   static const _logger = AppLogger('NativeWindowService');
@@ -64,12 +64,11 @@ class NativeWindowService {
   static const int swpHideWindow = 0x0080;
 
   static const int gwlExStyle = -20;
+  static const int wsExTransparent = 0x00000020;
   static const int wsExTopMost = 0x00000008;
   static const int wsExToolWindow = 0x00000080;
   static const int wsExNoActivate = 0x08000000;
   static const int wsExLayered = 0x00080000;
-
-  static const int lwaAlpha = 2;
 
   static const int smCxScreen = 0;
   static const int smCyScreen = 1;
@@ -152,7 +151,6 @@ class NativeWindowService {
   }
 
   /// Lấy kích thước màn hình vật lý thực tế hiện hành của Windows
-  /// (hoạt động chính xác ngay cả khi game đổi sang 720p / 800p / RSR / FSR)
   static Size getPhysicalScreenSize() {
     _ensureInitialized();
     if (_getSystemMetrics == null) {
@@ -163,7 +161,7 @@ class NativeWindowService {
     return Size(width.toDouble(), height.toDouble());
   }
 
-  /// Hiển thị cửa sổ Overlay ở trạng thái Always-on-Top mà KHÔNG cướp Focus của Game
+  /// Hiển thị cửa sổ Fullscreen Transparent Overlay mà KHÔNG cướp Focus của Game
   static bool showOverlayNoActivate({Size? size, Offset? position}) {
     _ensureInitialized();
     final hwnd = getWindowHandle();
@@ -172,30 +170,28 @@ class NativeWindowService {
       return false;
     }
 
-    final targetSize = size ?? getPhysicalScreenSize();
-    final posX = position?.dx.toInt() ?? 0;
-    final posY = position?.dy.toInt() ?? 0;
-    final width = targetSize.width.toInt();
-    final height = targetSize.height.toInt();
+    final physicalSize = size ?? getPhysicalScreenSize();
+    final width = physicalSize.width.toInt();
+    final height = physicalSize.height.toInt();
 
-    // 1. Cưỡng bức gắn các cờ Win32 Extended Styles: Layered Window, Không kích hoạt, ToolWindow và Always on Top
+    // 1. Cấu hình Extended Styles: Bỏ cờ WS_EX_TRANSPARENT để nhận cảm ứng/chuột
     if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
       try {
         final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
         _setWindowLongPtrW!(
           hwnd,
           gwlExStyle,
-          currentExStyle | wsExLayered | wsExNoActivate | wsExTopMost | wsExToolWindow,
+          (currentExStyle & ~wsExTransparent) | wsExLayered | wsExNoActivate | wsExTopMost | wsExToolWindow,
         );
       } catch (_) {}
     }
 
-    // 2. Đặt vị trí, kích thước và đưa lên Topmost mà không kích hoạt cửa sổ
+    // 2. Đặt vị trí bao phủ toàn màn hình cố định (0, 0, width, height) ở chế độ Topmost
     _setWindowPos?.call(
       hwnd,
       hwndTopMost,
-      posX,
-      posY,
+      0,
+      0,
       width,
       height,
       swpNoActivate | swpShowWindow | swpFrameChanged,
@@ -204,29 +200,32 @@ class NativeWindowService {
     // 3. Đảm bảo cửa sổ luôn nằm trong phân lớp Hệ thống (Windows System Z-Band)
     _setWindowBand?.call(hwnd, hwndTopMost, zbidSystemTools);
 
-    // 4. Ép Windows DWM vẽ lại ngay lập tức frame Flutter
+    // 4. Yêu cầu vẽ lại frame ngay lập tức
     _invalidateRect?.call(hwnd, nullptr, 1);
 
-    _logger.info('Đã hiển thị Overlay (SWP_NOACTIVATE, Pos: ($posX, $posY), Size: ${width}x$height)');
+    _logger.info('Đã hiển thị Fullscreen Transparent Overlay (${width}x$height, ZBID_SYSTEM_TOOLS)');
     return true;
   }
 
-  /// Ẩn cửa sổ Overlay bằng cách di chuyển ra khỏi màn hình (giữ nguyên DWM Surface và buffer kích thước để không ngắt VSync)
+  /// Ẩn tương tác Overlay: Bật cờ xuyên thấu WS_EX_TRANSPARENT để mọi click đi thẳng vào game
   static bool hideOverlayWindow() {
     _ensureInitialized();
     final hwnd = getWindowHandle();
     if (hwnd == 0) return false;
 
-    _setWindowPos?.call(
-      hwnd,
-      0,
-      -10000,
-      -10000,
-      0,
-      0,
-      swpNoSize | swpNoZOrder | swpNoActivate,
-    );
-    _logger.info('Đã ẩn Overlay (Dời tọa độ Off-Screen -10000, -10000)');
+    // Gắn cờ WS_EX_TRANSPARENT (Click-Through) để chuột/cảm ứng không bị cản trở
+    if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
+      try {
+        final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
+        _setWindowLongPtrW!(
+          hwnd,
+          gwlExStyle,
+          currentExStyle | wsExTransparent | wsExNoActivate,
+        );
+      } catch (_) {}
+    }
+
+    _logger.info('Đã chuyển Overlay sang trạng thái xuyên thấu (WS_EX_TRANSPARENT Click-Through)');
     return true;
   }
 

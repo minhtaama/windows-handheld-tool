@@ -12,6 +12,7 @@ import 'hardware/touchscreen_service.dart';
 import 'hardware/rtss_service.dart';
 import 'input/hotkey_service.dart';
 import 'input/gamepad_service.dart';
+import 'services/dxgi_hook_service.dart';
 import 'services/native_window_service.dart';
 import 'services/overlay_controller.dart';
 import 'services/virtual_keyboard_service.dart';
@@ -26,18 +27,20 @@ void main() async {
   await RtssService.instance.ensureRunning();
   final config = ConfigManager();
   OverlayController.instance.config = config;
+  DxgiHookService.instance.init(config);
 
   // 1. Cấu hình Cửa sổ Fullscreen Transparent Overlay (Chuẩn Handheld Gaming Overlay)
   await windowManager.ensureInitialized();
 
   final physicalSize = NativeWindowService.getPhysicalScreenSize();
+  final screenWidth = physicalSize.width;
   final screenHeight = physicalSize.height;
 
   _logger.info('DEBUG-MAIN-INIT: Physical Screen Size = $physicalSize');
 
   final windowOptions = WindowOptions(
     title: 'Handheld Quick Settings',
-    size: Size(450, screenHeight),
+    size: Size(screenWidth, screenHeight),
     backgroundColor: AppTheme.transparent,
     skipTaskbar: true,
     alwaysOnTop: true,
@@ -47,10 +50,9 @@ void main() async {
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAsFrameless();
     await windowManager.setBackgroundColor(AppTheme.transparent);
-    await windowManager.setSize(Size(450, screenHeight));
-    await windowManager.setPosition(const Offset(99999, 0));
+    await windowManager.setSize(Size(screenWidth, screenHeight));
+    await windowManager.setPosition(Offset.zero);
     await windowManager.setAlwaysOnTop(true);
-    // Để Flutter Engine vẽ hoàn thành frame đầu tiên vào DirectX buffer trước khi dời off-screen
   });
 
   // Tự động đóng panel khi người dùng click ra ngoài (mất focus sang game/desktop)
@@ -141,6 +143,7 @@ class _TrayListener extends TrayListener {
         TouchscreenService.toggleTouchscreen();
         break;
       case 'exit_app':
+        DxgiHookService.instance.uninstallGlobalHook();
         GamepadService.stop();
         HotkeyService.dispose();
         exit(0);
