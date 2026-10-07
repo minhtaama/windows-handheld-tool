@@ -1,7 +1,7 @@
 {
     "overlay": {
         "width": 360,
-        "width_percent": 30,
+        "width_percent": 40,
         "animation_duration_ms": 400,
         "side": "right",
         "scale_percent": 100,

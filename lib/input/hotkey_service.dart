@@ -91,39 +91,41 @@ class HotkeyService {
       });
     }
 
-    // 3. Đăng ký bổ trợ qua hotkey_manager cho môi trường Desktop thông thường
-    try {
-      await hotKeyManager.unregisterAll();
+    // 3. Đăng ký bổ trợ qua hotkey_manager làm Fallback nếu không nạp được FFI GetAsyncKeyState
+    if (_getAsyncKeyState == null) {
+      try {
+        await hotKeyManager.unregisterAll();
 
-      final overlayHotKey = HotKey(
-        key: PhysicalKeyboardKey.keyQ,
-        modifiers: [HotKeyModifier.control, HotKeyModifier.shift],
-        scope: HotKeyScope.system,
-      );
-      await hotKeyManager.register(
-        overlayHotKey,
-        keyDownHandler: (hotKey) {
-          _logger.info('Nhận tín hiệu phím tắt: Ctrl + Shift + Q (hotkey_manager)');
-          onToggleOverlay();
-        },
-      );
+        final overlayHotKey = HotKey(
+          key: PhysicalKeyboardKey.keyQ,
+          modifiers: [HotKeyModifier.control, HotKeyModifier.shift],
+          scope: HotKeyScope.system,
+        );
+        await hotKeyManager.register(
+          overlayHotKey,
+          keyDownHandler: (hotKey) {
+            _logger.info('Nhận tín hiệu phím tắt: Ctrl + Shift + Q (hotkey_manager fallback)');
+            onToggleOverlay();
+          },
+        );
 
-      final keyboardHotKey = HotKey(
-        key: PhysicalKeyboardKey.keyK,
-        modifiers: [HotKeyModifier.control, HotKeyModifier.shift],
-        scope: HotKeyScope.system,
-      );
-      await hotKeyManager.register(
-        keyboardHotKey,
-        keyDownHandler: (hotKey) {
-          _logger.info('Nhận tín hiệu phím tắt: Ctrl + Shift + K (hotkey_manager)');
-          onToggleKeyboard();
-        },
-      );
+        final keyboardHotKey = HotKey(
+          key: PhysicalKeyboardKey.keyK,
+          modifiers: [HotKeyModifier.control, HotKeyModifier.shift],
+          scope: HotKeyScope.system,
+        );
+        await hotKeyManager.register(
+          keyboardHotKey,
+          keyDownHandler: (hotKey) {
+            _logger.info('Nhận tín hiệu phím tắt: Ctrl + Shift + K (hotkey_manager fallback)');
+            onToggleKeyboard();
+          },
+        );
 
-      _logger.info('Đã đăng ký thành công các phím tắt toàn cục hệ thống.');
-    } catch (e) {
-      _logger.warning('hotkey_manager fallback: $e');
+        _logger.info('Đã đăng ký thành công các phím tắt toàn cục hệ thống (hotkey_manager fallback).');
+      } catch (e) {
+        _logger.warning('hotkey_manager fallback: $e');
+      }
     }
   }
 

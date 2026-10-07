@@ -87,44 +87,47 @@ class _OverlayScreenState extends State<OverlayScreen>
         final panelWidth = (screenWidth * (OverlayController.instance.widthPercent / 100.0))
             .clamp(320.0, 850.0);
 
-        return IgnorePointer(
-          ignoring: !isVisible,
-          child: Scaffold(
-            backgroundColor: AppTheme.transparent,
-            body: Stack(
-              children: [
-                // Vùng nền trong suốt bên trái: Chạm vào để đóng panel
-                if (isVisible)
-                  Positioned.fill(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onTap: () => OverlayController.instance.hideOverlay(),
+        return ExcludeSemantics(
+          excluding: true,
+          child: IgnorePointer(
+            ignoring: !isVisible,
+            child: Scaffold(
+              backgroundColor: AppTheme.transparent,
+              body: Stack(
+                children: [
+                  // Vùng nền trong suốt bên trái: Chạm vào để đóng panel
+                  if (isVisible)
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: () => OverlayController.instance.hideOverlay(),
+                      ),
                     ),
-                  ),
 
-                // Side Dock Panel neo sát mép phải với hoạt cảnh co dãn AnimatedContainer
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: SlideTransition(
-                    position: _slideAnimation,
-                    child: FadeTransition(
-                      opacity: _panelFadeAnimation,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOutCubic,
-                        width: panelWidth,
-                        padding: const EdgeInsets.only(
-                          top: 20,
-                          bottom: 20,
-                          right: 16,
-                          left: 8,
+                  // Side Dock Panel neo sát mép phải với hoạt cảnh co dãn AnimatedContainer
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: SlideTransition(
+                      position: _slideAnimation,
+                      child: FadeTransition(
+                        opacity: _panelFadeAnimation,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeOutCubic,
+                          width: panelWidth,
+                          padding: const EdgeInsets.only(
+                            top: 20,
+                            bottom: 20,
+                            right: 16,
+                            left: 8,
+                          ),
+                          child: QuickSettingsPanel(config: widget.config),
                         ),
-                        child: QuickSettingsPanel(config: widget.config),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
