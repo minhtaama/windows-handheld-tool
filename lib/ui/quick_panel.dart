@@ -167,19 +167,50 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     super.dispose();
   }
 
-  int _getMaxIndexForTab(int tabIndex) {
+  List<List<int>> _getTabLayout(int tabIndex) {
     switch (tabIndex) {
       case 0:
-        return RtssInstallerService.isInstalled() ? 5 : 4;
+        return [
+          [0],
+          [1],
+          [2],
+          [3],
+          [4],
+          if (RtssInstallerService.isInstalled()) [5],
+        ];
       case 1:
-        return 2; // Độ sáng (0), Âm lượng (1), Cảm ứng (2)
+        return [
+          [0],
+          [1],
+          [2],
+        ];
       case 2:
-        return 5; // Bàn phím (0), TaskMgr (1), Màn hình (2), DXGI Hook (3), Dọn RAM (4), Đóng panel (5)
+        return [
+          [0, 1],
+          [2, 3],
+          [4, 5],
+        ];
       case 3:
-        return 1; // UI Scale (0), Độ rộng Panel (1)
+        return [
+          [0],
+          [1],
+        ];
       default:
-        return 0;
+        return [
+          [0],
+        ];
     }
+  }
+
+  (int, int) _findGridPosition(List<List<int>> layout, int targetIndex) {
+    for (int r = 0; r < layout.length; r++) {
+      for (int c = 0; c < layout[r].length; c++) {
+        if (layout[r][c] == targetIndex) {
+          return (r, c);
+        }
+      }
+    }
+    return (0, 0);
   }
 
   void _switchTab(int newIndex) {
@@ -194,18 +225,38 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     }
   }
 
-  void _moveFocus(int delta) {
-    final maxIdx = _getMaxIndexForTab(_selectedTabIndex);
-    final nextIdx = (_focusedIndex + delta).clamp(0, maxIdx);
+  void _setFocus(int nextIdx) {
     if (nextIdx != _focusedIndex) {
       setState(() => _focusedIndex = nextIdx);
       _autoScrollToFocused();
     }
   }
 
+  void _handleGamepadUp() {
+    final layout = _getTabLayout(_selectedTabIndex);
+    final (r, c) = _findGridPosition(layout, _focusedIndex);
+    if (r > 0) {
+      final prevRow = layout[r - 1];
+      final targetCol = min(c, prevRow.length - 1);
+      _setFocus(prevRow[targetCol]);
+    }
+  }
+
+  void _handleGamepadDown() {
+    final layout = _getTabLayout(_selectedTabIndex);
+    final (r, c) = _findGridPosition(layout, _focusedIndex);
+    if (r < layout.length - 1) {
+      final nextRow = layout[r + 1];
+      final targetCol = min(c, nextRow.length - 1);
+      _setFocus(nextRow[targetCol]);
+    }
+  }
+
   void _autoScrollToFocused() {
     if (!_scrollController.hasClients) return;
-    final targetOffset = (_focusedIndex * (135.0 * _scale)).clamp(
+    final layout = _getTabLayout(_selectedTabIndex);
+    final (r, _) = _findGridPosition(layout, _focusedIndex);
+    final targetOffset = (r * (120.0 * _scale)).clamp(
       0.0,
       _scrollController.position.maxScrollExtent,
     );
@@ -242,10 +293,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         _switchTab((_selectedTabIndex + 1) % 4);
         break;
       case GamepadButton.dpadUp:
-        _moveFocus(-1);
+        _handleGamepadUp();
         break;
       case GamepadButton.dpadDown:
-        _moveFocus(1);
+        _handleGamepadDown();
         break;
       case GamepadButton.dpadLeft:
         _handleGamepadLeft();
@@ -268,6 +319,19 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   }
 
   void _handleGamepadLeft() {
+    final layout = _getTabLayout(_selectedTabIndex);
+    final (r, c) = _findGridPosition(layout, _focusedIndex);
+    final currentRow = layout[r];
+
+    // Nếu hàng có nhiều phần tử (Grid/Row), D-pad Left di chuyển sang phần tử bên trái
+    if (currentRow.length > 1) {
+      if (c > 0) {
+        _setFocus(currentRow[c - 1]);
+      }
+      return;
+    }
+
+    // Nếu hàng chỉ có 1 phần tử (Slider, Toggle, Preset), điều chỉnh giá trị của phần tử
     switch (_selectedTabIndex) {
       case 0:
         if (_focusedIndex == 0) {
@@ -295,11 +359,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           _toggleTouchscreen();
         }
         break;
-      case 2:
-        if (_focusedIndex > 0) {
-          _moveFocus(-1);
-        }
-        break;
       case 3:
         if (_focusedIndex == 0) {
           _cyclePreset(const [0.8, 1.0, 1.2, 1.4], _scale, -1, _updateScale);
@@ -316,6 +375,19 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   }
 
   void _handleGamepadRight() {
+    final layout = _getTabLayout(_selectedTabIndex);
+    final (r, c) = _findGridPosition(layout, _focusedIndex);
+    final currentRow = layout[r];
+
+    // Nếu hàng có nhiều phần tử (Grid/Row), D-pad Right di chuyển sang phần tử bên phải
+    if (currentRow.length > 1) {
+      if (c < currentRow.length - 1) {
+        _setFocus(currentRow[c + 1]);
+      }
+      return;
+    }
+
+    // Nếu hàng chỉ có 1 phần tử (Slider, Toggle, Preset), điều chỉnh giá trị của phần tử
     switch (_selectedTabIndex) {
       case 0:
         if (_focusedIndex == 0) {
@@ -341,11 +413,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           _updateAudio(min(_audioCtrl.maxVal, _audio + _audioCtrl.step));
         } else if (_focusedIndex == 2) {
           _toggleTouchscreen();
-        }
-        break;
-      case 2:
-        if (_focusedIndex < _getMaxIndexForTab(2)) {
-          _moveFocus(1);
         }
         break;
       case 3:
