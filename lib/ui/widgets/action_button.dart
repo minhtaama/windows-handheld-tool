@@ -66,20 +66,13 @@ class ActionButton extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textPrimary,
-                      ),
+                      style: AppTheme.body.copyWith(fontSize: 13),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                     Text(
                       subtitle,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: AppTheme.textSecondary,
-                      ),
+                      style: AppTheme.caption,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),

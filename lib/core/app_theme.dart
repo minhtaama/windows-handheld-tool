@@ -68,35 +68,26 @@ class AppTheme {
   static const double cardRadius = 10.0;
   static const double buttonRadius = 8.0;
 
-  /// Hệ số phóng đại kích thước nội dung UI (mặc định 1.0)
   static double uiScale = 1.0;
-
-  /// Nhân kích thước với hệ số uiScale
   static double scaled(double size) => size * uiScale;
+  static double scaledHalf(double size) => size * ((uiScale - 1) / 2 + 1);
 
-  static const TextStyle headerTitle = TextStyle(
-    fontSize: 15,
-    fontWeight: FontWeight.w700,
+  static TextStyle get title => TextStyle(
+    fontSize: scaled(14.5),
+    fontWeight: FontWeight.bold,
     color: textPrimary,
-    letterSpacing: 0.5,
   );
 
-  static const TextStyle headerSubtitle = TextStyle(
-    fontSize: 11,
-    fontWeight: FontWeight.w400,
+  static TextStyle get body => TextStyle(
+    fontSize: scaled(14.5),
+    fontWeight: FontWeight.bold,
+    color: textPrimary,
+  );
+
+  static TextStyle get caption => TextStyle(
+    fontSize: scaledHalf(12),
+    fontWeight: FontWeight.normal,
     color: textSecondary,
-  );
-
-  static const TextStyle cardTitle = TextStyle(
-    fontSize: 13,
-    fontWeight: FontWeight.w600,
-    color: textPrimary,
-  );
-
-  static const TextStyle cardValue = TextStyle(
-    fontSize: 13,
-    fontWeight: FontWeight.w700,
-    color: textPrimary,
   );
 
   static ThemeData get themeData {

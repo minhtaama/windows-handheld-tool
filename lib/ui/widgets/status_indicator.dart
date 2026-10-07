@@ -55,21 +55,14 @@ class StatusIndicatorCard extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.textPrimary,
-                  ),
+                  style: AppTheme.body,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
                 Text(
                   statusText,
-                  style: const TextStyle(
-                    fontSize: 10,
-                    color: AppTheme.textSecondary,
-                  ),
+                  style: AppTheme.caption,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),

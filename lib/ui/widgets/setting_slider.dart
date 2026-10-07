@@ -92,7 +92,7 @@ class SettingSlider extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: AppTheme.cardTitle,
+                  style: AppTheme.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -104,7 +104,7 @@ class SettingSlider extends StatelessWidget {
               if (currentValue != null) ...[
                 Text(
                   '$currentValue',
-                  style: TextStyle(
+                  style: AppTheme.body.copyWith(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
                     color: liveColor,
@@ -112,14 +112,16 @@ class SettingSlider extends StatelessWidget {
                 ),
                 Text(
                   ' / ',
-                  style: TextStyle(
+                  style: AppTheme.caption.copyWith(
                     fontSize: 12,
-                    fontWeight: FontWeight.w400,
                     color: AppTheme.textSecondary.withValues(alpha: 0.6),
                   ),
                 ),
               ],
-              Text(_formatTargetValue(value), style: AppTheme.cardValue),
+              Text(
+                _formatTargetValue(value),
+                style: AppTheme.title.copyWith(fontWeight: FontWeight.w700),
+              ),
             ],
           ),
           const SizedBox(height: 8),

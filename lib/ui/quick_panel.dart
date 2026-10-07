@@ -766,7 +766,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           ),
           child: Text(
             keyText,
-            style: const TextStyle(
+            style: AppTheme.caption.copyWith(
               fontSize: 9,
               fontWeight: FontWeight.w800,
               color: AppTheme.accent,
@@ -777,10 +777,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         const SizedBox(width: 4),
         Text(
           label,
-          style: const TextStyle(
-            fontSize: 10,
+          style: AppTheme.caption.copyWith(
             fontWeight: FontWeight.w500,
-            color: AppTheme.textSecondary,
           ),
         ),
       ],

@@ -91,8 +91,7 @@ class BumperButton extends StatelessWidget {
                 padding: _getTextOffset(effectiveType),
                 child: Text(
                   displayLabel,
-                  style: TextStyle(
-                    fontSize: 10,
+                  style: AppTheme.caption.copyWith(
                     fontWeight: FontWeight.w800,
                     color: isEnabled
                         ? AppTheme.textSecondary

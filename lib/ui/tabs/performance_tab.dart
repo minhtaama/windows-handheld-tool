@@ -109,8 +109,7 @@ class PerformanceTab extends StatelessWidget {
               ),
               child: Text(
                 tdpAuto ? "AUTO" : "MANUAL",
-                style: TextStyle(
-                  fontSize: 10,
+                style: AppTheme.caption.copyWith(
                   fontWeight: FontWeight.bold,
                   color: tdpAuto ? AppTheme.accent : AppTheme.textSecondary,
                 ),
@@ -153,8 +152,7 @@ class PerformanceTab extends StatelessWidget {
               ),
               child: Text(
                 fanAuto ? "AUTO" : "MANUAL",
-                style: TextStyle(
-                  fontSize: 10,
+                style: AppTheme.caption.copyWith(
                   fontWeight: FontWeight.bold,
                   color: fanAuto ? AppTheme.accent : AppTheme.textSecondary,
                 ),
@@ -198,10 +196,10 @@ class PerformanceTab extends StatelessWidget {
                       size: 18,
                     ),
                     const SizedBox(width: 8),
-                    const Expanded(
+                    Expanded(
                       child: Text(
                         "Chưa cài đặt RTSS",
-                        style: AppTheme.cardTitle,
+                        style: AppTheme.title,
                       ),
                     ),
                     if (isInstallingRtss)
@@ -219,9 +217,8 @@ class PerformanceTab extends StatelessWidget {
                 Text(
                   rtssInstallMsg ??
                       "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
-                  style: const TextStyle(
+                  style: AppTheme.caption.copyWith(
                     fontSize: 11,
-                    color: AppTheme.textSecondary,
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -251,8 +248,7 @@ class PerformanceTab extends StatelessWidget {
                       isInstallingRtss
                           ? "Đang cài đặt..."
                           : "Tự động cài đặt RTSS qua Winget",
-                      style: const TextStyle(
-                        fontSize: 12,
+                      style: AppTheme.body.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -294,19 +290,18 @@ class PerformanceTab extends StatelessWidget {
                           color: AppTheme.warning.withValues(alpha: 0.4),
                         ),
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(
+                          const Icon(
                             Icons.play_arrow_rounded,
                             size: 12,
                             color: AppTheme.warning,
                           ),
-                          SizedBox(width: 2),
+                          const SizedBox(width: 2),
                           Text(
                             "Bật RTSS",
-                            style: TextStyle(
-                              fontSize: 10,
+                            style: AppTheme.caption.copyWith(
                               color: AppTheme.warning,
                               fontWeight: FontWeight.bold,
                             ),

@@ -67,8 +67,7 @@ class PresetSelector<T> extends StatelessWidget {
             ),
             child: Text(
               label,
-              style: TextStyle(
-                fontSize: 12,
+              style: AppTheme.body.copyWith(
                 fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                 color: isSelected ? AppTheme.accent : AppTheme.textSecondary,
                 letterSpacing: 0.5,

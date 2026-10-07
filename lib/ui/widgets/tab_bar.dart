@@ -83,8 +83,8 @@ class _AppTabBarState extends State<AppTabBar> {
 
   @override
   Widget build(BuildContext context) {
-    final tabSize = AppTheme.scaled(56.0);
-    final iconSize = AppTheme.scaled(20.0);
+    final tabSize = AppTheme.scaledHalf(80.0);
+    final iconSize = AppTheme.scaled(30.0);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
@@ -161,15 +161,13 @@ class _AppTabBarState extends State<AppTabBar> {
                             const SizedBox(height: 3),
                             Text(
                               item.label,
-                              style: TextStyle(
-                                fontSize: 10,
+                              style: AppTheme.caption.copyWith(
                                 fontWeight: isSelected
                                     ? FontWeight.bold
-                                    : FontWeight.w500,
+                                    : FontWeight.normal,
                                 color: isSelected
                                     ? AppTheme.textPrimary
                                     : AppTheme.textSecondary,
-                                letterSpacing: 0.2,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,

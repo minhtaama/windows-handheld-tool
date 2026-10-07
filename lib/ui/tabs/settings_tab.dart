@@ -53,8 +53,8 @@ class SettingsTab extends StatelessWidget {
           title: "RivaTuner RTSS",
           statusText: isRtssRunning
               ? (activeGame != null
-                  ? "Đang hook game: $activeGame"
-                  : "Đang chạy (Sẵn sàng đo FPS)")
+                    ? "Đang hook game: $activeGame"
+                    : "Đang chạy (Sẵn sàng đo FPS)")
               : "Chưa kết nối RTSS",
           isActive: isRtssRunning,
         ),
@@ -126,23 +126,23 @@ class SettingsTab extends StatelessWidget {
                     color: AppTheme.primary,
                   ),
                   const SizedBox(width: 8),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       "Tỷ lệ hiển thị (UI Scale)",
-                      style: AppTheme.cardTitle,
+                      style: AppTheme.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   Text(
                     "${(scale * 100).toInt()}%",
-                    style: AppTheme.cardValue,
+                    style: AppTheme.title.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ],
               ),
               const SizedBox(height: 8),
               PresetSelector<double>(
-                presets: const [0.8, 1.0, 1.2, 1.4],
+                presets: const [0.9, 1.0, 1.1, 1.2],
                 selectedValue: scale,
                 labelBuilder: (preset) => "${(preset * 100).toInt()}%",
                 onSelected: onScaleChanged,
@@ -185,15 +185,18 @@ class SettingsTab extends StatelessWidget {
                     color: AppTheme.primary,
                   ),
                   const SizedBox(width: 8),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       "Độ rộng Side Panel",
-                      style: AppTheme.cardTitle,
+                      style: AppTheme.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  Text("$widthPercent %", style: AppTheme.cardValue),
+                  Text(
+                    "$widthPercent %",
+                    style: AppTheme.title.copyWith(fontWeight: FontWeight.w700),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -225,25 +228,15 @@ class SettingsTab extends StatelessWidget {
                 color: AppTheme.textSecondary,
               ),
               const SizedBox(width: 10),
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      "Handheld Gaming Tools",
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textPrimary,
-                      ),
-                    ),
-                    SizedBox(height: 2),
+                    Text("Handheld Gaming Tools", style: AppTheme.body),
+                    const SizedBox(height: 2),
                     Text(
                       "Phiên bản 2.0 (Monochrome Clean Edition)",
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: AppTheme.textSecondary,
-                      ),
+                      style: AppTheme.caption,
                     ),
                   ],
                 ),
