@@ -29,6 +29,7 @@ class AppTheme {
   static const Color warning = Color(0xFFF59E0B);
 
   // Đỏ cảnh báo nguy hiểm
+  static const Color positive = Color.fromARGB(255, 99, 196, 70);
   static const Color danger = Color(0xFFEF4444);
 
   // Nền thẻ tab Titanium nâng khối
@@ -65,21 +66,21 @@ class AppTheme {
   );
 
   static const double panelRadius = 16.0;
-  static const double cardRadius = 10.0;
-  static const double buttonRadius = 8.0;
+  static const double cardRadius = 8.0;
+  static const double buttonRadius = 4.0;
 
   static double uiScale = 1.0;
   static double scaled(double size) => size * uiScale;
   static double scaledHalf(double size) => size * ((uiScale - 1) / 2 + 1);
 
   static TextStyle get title => TextStyle(
-    fontSize: scaled(14.5),
+    fontSize: scaledHalf(14),
     fontWeight: FontWeight.bold,
     color: textPrimary,
   );
 
   static TextStyle get body => TextStyle(
-    fontSize: scaled(14.5),
+    fontSize: scaled(13),
     fontWeight: FontWeight.bold,
     color: textPrimary,
   );
@@ -88,6 +89,13 @@ class AppTheme {
     fontSize: scaledHalf(12),
     fontWeight: FontWeight.normal,
     color: textSecondary,
+  );
+
+  static TextStyle get hint => TextStyle(
+    fontSize: scaledHalf(10),
+    fontWeight: FontWeight.w800,
+    color: AppTheme.accent,
+    letterSpacing: 0.4,
   );
 
   static ThemeData get themeData {

@@ -28,15 +28,15 @@
             "min": 5,
             "max": 35,
             "step": 1,
-            "current": 20,
-            "auto": true
+            "current": 15,
+            "auto": false
         },
         "fan": {
             "min": 0,
             "max": 100,
             "step": 5,
-            "current": 65,
-            "auto": false
+            "current": 50,
+            "auto": true
         },
         "brightness": {
             "min": 0,
@@ -54,7 +54,7 @@
             "current": 60
         },
         "rtss": {
-            "fps_limit": 60
+            "fps_limit": 0
         }
     }
 }

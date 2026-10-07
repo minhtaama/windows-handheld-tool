@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../hardware/brightness_service.dart';
 import '../../hardware/audio_service.dart';
 import '../widgets/setting_slider.dart';
-import '../widgets/action_button.dart';
+import '../widgets/toggle_card.dart';
 import '../widgets/section_label.dart';
 
 /// Tab điều khiển Thiết bị: Độ sáng màn hình, Âm lượng loa và Bật/tắt Cảm ứng màn hình.
@@ -58,6 +58,8 @@ class DeviceTab extends StatelessWidget {
           quickPresets: const [25, 50, 75, 100],
           onChanged: onBrightnessChanged,
           isFocused: focusedIndex == 0,
+          helpText:
+              "Điều chỉnh cường độ sáng màn hình tích hợp. Giảm độ sáng giúp kéo dài đáng kể thời lượng pin.",
         ),
         const SizedBox(height: 16),
 
@@ -73,24 +75,25 @@ class DeviceTab extends StatelessWidget {
           quickPresets: const [0, 30, 60, 100],
           onChanged: onAudioChanged,
           isFocused: focusedIndex == 1,
+          helpText:
+              "Điều chỉnh mức âm lượng tổng của hệ thống Windows từ 0% đến 100%.",
         ),
         const SizedBox(height: 16),
 
         const SectionLabel(label: "CẢM ỨNG MÀN HÌNH"),
-        Row(
-          children: [
-            Expanded(
-              child: ActionButton(
-                icon: touchEnabled
-                    ? Icons.touch_app_rounded
-                    : Icons.do_not_touch_rounded,
-                title: "Cảm ứng",
-                subtitle: touchEnabled ? "Đang Bật" : "Đã Tắt",
-                onTap: onToggleTouchscreen,
-                isFocused: focusedIndex == 2,
-              ),
-            ),
-          ],
+        ToggleCard(
+          icon: touchEnabled
+              ? Icons.touch_app_rounded
+              : Icons.do_not_touch_rounded,
+          title: "Màn hình cảm ứng",
+          subtitle: touchEnabled
+              ? "Đang Bật (Chạm để tương tác)"
+              : "Đã Tắt (Tránh chạm nhầm khi chơi)",
+          value: touchEnabled,
+          onChanged: (_) => onToggleTouchscreen(),
+          isFocused: focusedIndex == 2,
+          helpText:
+              "Bật hoặc tắt màn hình cảm ứng để tránh chạm nhầm khi đang cầm chơi game bằng tay cầm.",
         ),
       ],
     );

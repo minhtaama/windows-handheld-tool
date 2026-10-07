@@ -7,6 +7,8 @@ import '../../hardware/rtss_service.dart';
 import '../../services/rtss_installer_service.dart';
 import '../widgets/setting_slider.dart';
 import '../widgets/section_label.dart';
+import '../widgets/toggle_card.dart';
+import '../widgets/help_box.dart';
 
 /// Tab điều khiển Hiệu năng & Năng lượng: Quản lý TDP, Tốc độ quạt và Khóa khung hình RTSS.
 class PerformanceTab extends StatelessWidget {
@@ -77,8 +79,19 @@ class PerformanceTab extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       children: [
         const SectionLabel(label: "NĂNG LƯỢNG (TDP)"),
-        SettingSlider(
+        ToggleCard(
           icon: Icons.bolt_rounded,
+          title: "Chế độ TDP tự động",
+          subtitle: "Tự điều chỉnh công suất theo tải hệ thống",
+          value: tdpAuto,
+          onChanged: (_) => onToggleTdpAuto(),
+          isFocused: focusedIndex == 0,
+          helpText:
+              "Tự động điều chỉnh mức tiêu thụ điện năng (Watt) của CPU theo thời gian thực để tối ưu thời lượng pin và hiệu năng khi chơi game.",
+        ),
+        const SizedBox(height: 8),
+        SettingSlider(
+          icon: Icons.electric_meter_rounded,
           title: "Công suất TDP",
           value: tdp,
           min: tdpCtrl.minVal,
@@ -90,38 +103,26 @@ class PerformanceTab extends StatelessWidget {
           quickPresets: const [10, 15, 20, 25, 30],
           onChanged: onTdpChanged,
           shouldShowSlider: !tdpAuto,
-          isFocused: focusedIndex == 0,
-          trailing: InkWell(
-            borderRadius: BorderRadius.circular(4),
-            onTap: onToggleTdpAuto,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: tdpAuto
-                    ? AppTheme.accent.withValues(alpha: 0.15)
-                    : AppTheme.cardBorder.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                  color: tdpAuto
-                      ? AppTheme.accent.withValues(alpha: 0.4)
-                      : AppTheme.cardBorder,
-                ),
-              ),
-              child: Text(
-                tdpAuto ? "AUTO" : "MANUAL",
-                style: AppTheme.caption.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: tdpAuto ? AppTheme.accent : AppTheme.textSecondary,
-                ),
-              ),
-            ),
-          ),
+          isFocused: focusedIndex == 1,
+          helpText:
+              "Khóa công suất điện tối đa của bộ xử lý (TDP tính bằng Watt). Tăng TDP để có FPS cao hơn, giảm TDP để máy mát hơn và tiết kiệm pin.",
         ),
         const SizedBox(height: 16),
 
         const SectionLabel(label: "TẢN NHIỆT (QUẠT)"),
-        SettingSlider(
+        ToggleCard(
           icon: Icons.toys_rounded,
+          title: "Chế độ quạt tự động",
+          subtitle: "Hệ thống tự điều tốc theo nhiệt độ chip",
+          value: fanAuto,
+          onChanged: (_) => onToggleFanAuto(),
+          isFocused: focusedIndex == 2,
+          helpText:
+              "Tự động điều chỉnh vòng quay quạt tản nhiệt dựa theo nhiệt độ linh kiện. Chuyển sang MANUAL nếu muốn tự khóa % quạt cố định.",
+        ),
+        const SizedBox(height: 8),
+        SettingSlider(
+          icon: Icons.mode_fan_off_rounded,
           title: "Tốc độ quạt",
           value: fan,
           min: fanCtrl.minVal,
@@ -133,32 +134,9 @@ class PerformanceTab extends StatelessWidget {
           quickPresets: const [30, 50, 75, 100],
           onChanged: onFanChanged,
           shouldShowSlider: !fanAuto,
-          isFocused: focusedIndex == 1,
-          trailing: InkWell(
-            borderRadius: BorderRadius.circular(4),
-            onTap: onToggleFanAuto,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: fanAuto
-                    ? AppTheme.accent.withValues(alpha: 0.15)
-                    : AppTheme.cardBorder.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                  color: fanAuto
-                      ? AppTheme.accent.withValues(alpha: 0.4)
-                      : AppTheme.cardBorder,
-                ),
-              ),
-              child: Text(
-                fanAuto ? "AUTO" : "MANUAL",
-                style: AppTheme.caption.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: fanAuto ? AppTheme.accent : AppTheme.textSecondary,
-                ),
-              ),
-            ),
-          ),
+          isFocused: focusedIndex == 3,
+          helpText:
+              "Điều chỉnh phần trăm tốc độ quạt làm mát của máy Handheld từ 0% đến 100%.",
         ),
         const SizedBox(height: 16),
 
@@ -171,10 +149,10 @@ class PerformanceTab extends StatelessWidget {
               color: AppTheme.cardBackground,
               borderRadius: BorderRadius.circular(AppTheme.cardRadius),
               border: Border.all(
-                color: focusedIndex == 2 ? AppTheme.accent : AppTheme.cardBorder,
-                width: focusedIndex == 2 ? 1.8 : 1.0,
+                color: focusedIndex == 4 ? AppTheme.accent : AppTheme.cardBorder,
+                width: focusedIndex == 4 ? 1.8 : 1.0,
               ),
-              boxShadow: focusedIndex == 2
+              boxShadow: focusedIndex == 4
                   ? [
                       BoxShadow(
                         color: AppTheme.primary.withValues(alpha: 0.4),
@@ -197,9 +175,24 @@ class PerformanceTab extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        "Chưa cài đặt RTSS",
-                        style: AppTheme.title,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              "Chưa cài đặt RTSS",
+                              style: AppTheme.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          HelpBox(
+                            helpText:
+                                "RTSS (RivaTuner Statistics Server) là dịch vụ giám sát và khóa tốc độ khung hình (FPS). Bấm nút A trên tay cầm để tự động tải và cài đặt nhanh qua Winget.",
+                            isFocused: focusedIndex == 4,
+                          ),
+                        ],
                       ),
                     ),
                     if (isInstallingRtss)
@@ -258,9 +251,22 @@ class PerformanceTab extends StatelessWidget {
               ],
             ),
           )
-        else
-          SettingSlider(
+        else ...[
+          ToggleCard(
             icon: Icons.speed_rounded,
+            title: "Dịch vụ RivaTuner (RTSS)",
+            subtitle: isRtssRunning ? "RTSS đang chạy nền" : "RTSS chưa khởi chạy",
+            value: isRtssRunning,
+            onChanged: (val) {
+              if (!isRtssRunning) onStartRtss();
+            },
+            isFocused: focusedIndex == 4,
+            helpText:
+                "Bật dịch vụ nền RivaTuner Statistics Server để theo dõi số khung hình FPS và giới hạn tốc độ làm tươi màn hình.",
+          ),
+          const SizedBox(height: 8),
+          SettingSlider(
+            icon: Icons.timelapse_rounded,
             title: activeGame != null
                 ? "Giới hạn FPS ($activeGame)"
                 : "Giới hạn FPS",
@@ -273,45 +279,11 @@ class PerformanceTab extends StatelessWidget {
             currentColor: AppTheme.accent,
             quickPresets: const [0, 30, 40, 60],
             onChanged: onFpsLimitChanged,
-            isFocused: focusedIndex == 2,
-            trailing: !isRtssRunning
-                ? InkWell(
-                    onTap: onStartRtss,
-                    borderRadius: BorderRadius.circular(4),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppTheme.warning.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                          color: AppTheme.warning.withValues(alpha: 0.4),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.play_arrow_rounded,
-                            size: 12,
-                            color: AppTheme.warning,
-                          ),
-                          const SizedBox(width: 2),
-                          Text(
-                            "Bật RTSS",
-                            style: AppTheme.caption.copyWith(
-                              color: AppTheme.warning,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                : null,
+            isFocused: focusedIndex == 5,
+            helpText:
+                "Khóa tốc độ khung hình tối đa trong game. Đặt mức 30, 40 hoặc 60 FPS giúp ổn định độ mượt (Frame Time) và giảm tải nhiệt độ.",
           ),
+        ],
       ],
     );
   }

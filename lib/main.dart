@@ -39,7 +39,7 @@ void main() async {
   _logger.info('DEBUG-MAIN-INIT: Physical Screen Size = $physicalSize');
 
   final windowOptions = WindowOptions(
-    title: 'Handheld Quick Settings',
+    title: 'Windows Handheld Tool',
     size: Size(screenWidth, screenHeight),
     backgroundColor: AppTheme.transparent,
     skipTaskbar: true,
@@ -101,7 +101,9 @@ Future<void> _initSystemTray() async {
       _logger.warning('Không tìm thấy file app_icon.ico');
     }
 
-    await trayManager.setToolTip('Handheld Quick Settings (${DeviceInfoService.currentDevice.displayName})');
+    await trayManager.setToolTip(
+      'Handheld Quick Settings (${DeviceInfoService.currentDevice.displayName})',
+    );
 
     final menu = Menu(
       items: [
@@ -166,10 +168,14 @@ class _HandheldAppState extends State<HandheldApp> {
     super.initState();
     // Đợi frame đầu tiên vẽ xong hoàn toàn vào DirectX rồi dời off-screen chạy ngầm
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      _logger.info('DEBUG-MAIN-INIT: PostFrameCallback fired (First frame rendered)');
+      _logger.info(
+        'DEBUG-MAIN-INIT: PostFrameCallback fired (First frame rendered)',
+      );
       await Future.delayed(const Duration(milliseconds: 150));
       NativeWindowService.hideOverlayWindow();
-      _logger.info('DEBUG-MAIN-INIT: Initial NativeWindowService.hideOverlayWindow() completed');
+      _logger.info(
+        'DEBUG-MAIN-INIT: Initial NativeWindowService.hideOverlayWindow() completed',
+      );
     });
   }
 

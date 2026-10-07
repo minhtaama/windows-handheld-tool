@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
+import 'help_box.dart';
 import 'preset_selector.dart';
 
 /// Widget thanh trượt điều khiển dùng chung (DRY) chuẩn Handheld Gaming với thanh đo kép đồng trục (Coaxial Dual-Gauge).
@@ -13,7 +14,7 @@ class SettingSlider extends StatelessWidget {
   final int step;
   final String unit;
   final ValueChanged<int> onChanged;
-  final Widget? trailing;
+  final String? helpText;
 
   /// Giá trị thực tế tức thời đo được từ phần cứng (Live Telemetry)
   final int? currentValue;
@@ -40,7 +41,7 @@ class SettingSlider extends StatelessWidget {
     required this.step,
     required this.unit,
     required this.onChanged,
-    this.trailing,
+    this.helpText,
     this.currentValue,
     this.currentColor,
     this.quickPresets,
@@ -88,18 +89,27 @@ class SettingSlider extends StatelessWidget {
             children: [
               Icon(icon, size: AppTheme.scaled(18), color: AppTheme.primary),
               const SizedBox(width: 8),
-              // Tiêu đề tự co giãn linh hoạt
+              // Tiêu đề tự co giãn linh hoạt và icon (?) nằm ngay bên cạnh
               Expanded(
-                child: Text(
-                  title,
-                  style: AppTheme.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        style: AppTheme.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (helpText != null) ...[
+                      const SizedBox(width: 6),
+                      HelpBox(helpText: helpText, isFocused: isFocused),
+                    ],
+                  ],
                 ),
               ),
               const SizedBox(width: 6),
-              // Widget bổ trợ nếu có (ví dụ nút AUTO/MANUAL)
-              if (trailing != null) ...[trailing!, const SizedBox(width: 8)],
               // Thông số hiển thị: nếu có giá trị thực tế thì hiển thị "Live / Target"
               if (currentValue != null) ...[
                 Text(

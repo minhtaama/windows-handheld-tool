@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
+import 'help_box.dart';
 
 /// Widget nút thao tác nhanh (Action Button) dùng chung dạng lưới.
 class ActionButton extends StatelessWidget {
@@ -9,6 +10,7 @@ class ActionButton extends StatelessWidget {
   final String subtitle;
   final VoidCallback onTap;
   final bool isFocused;
+  final String? helpText;
 
   const ActionButton({
     super.key,
@@ -17,6 +19,7 @@ class ActionButton extends StatelessWidget {
     required this.subtitle,
     required this.onTap,
     this.isFocused = false,
+    this.helpText,
   });
 
   @override
@@ -64,11 +67,22 @@ class ActionButton extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(
-                      title,
-                      style: AppTheme.body.copyWith(fontSize: 13),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            title,
+                            style: AppTheme.body.copyWith(fontSize: 13),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (helpText != null) ...[
+                          const SizedBox(width: 4),
+                          HelpBox(helpText: helpText, isFocused: isFocused),
+                        ],
+                      ],
                     ),
                     Text(
                       subtitle,

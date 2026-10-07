@@ -170,7 +170,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   int _getMaxIndexForTab(int tabIndex) {
     switch (tabIndex) {
       case 0:
-        return 2; // TDP (0), Quạt (1), RTSS (2)
+        return RtssInstallerService.isInstalled() ? 5 : 4;
       case 1:
         return 2; // Độ sáng (0), Âm lượng (1), Cảm ứng (2)
       case 2:
@@ -271,10 +271,16 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     switch (_selectedTabIndex) {
       case 0:
         if (_focusedIndex == 0) {
-          _updateTdp(max(_tdpCtrl.minVal, _tdp - _tdpCtrl.step));
+          _toggleTdpAuto();
         } else if (_focusedIndex == 1) {
+          _updateTdp(max(_tdpCtrl.minVal, _tdp - _tdpCtrl.step));
+        } else if (_focusedIndex == 2) {
+          _toggleFanAuto();
+        } else if (_focusedIndex == 3) {
           _updateFan(max(_fanCtrl.minVal, _fan - _fanCtrl.step));
-        } else if (_focusedIndex == 2 && RtssInstallerService.isInstalled()) {
+        } else if (_focusedIndex == 4 && RtssInstallerService.isInstalled()) {
+          if (!_isRtssRunning) _startRtss();
+        } else if (_focusedIndex == 5 && RtssInstallerService.isInstalled()) {
           _cyclePreset(const [0, 30, 40, 60], _fpsLimit, -1, _updateFpsLimit);
         }
         break;
@@ -298,7 +304,12 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         if (_focusedIndex == 0) {
           _cyclePreset(const [0.8, 1.0, 1.2, 1.4], _scale, -1, _updateScale);
         } else if (_focusedIndex == 1) {
-          _cyclePreset(const [30, 35, 40, 45], _widthPercent, -1, _updateWidthPercent);
+          _cyclePreset(
+            const [30, 35, 40, 45],
+            _widthPercent,
+            -1,
+            _updateWidthPercent,
+          );
         }
         break;
     }
@@ -308,10 +319,16 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     switch (_selectedTabIndex) {
       case 0:
         if (_focusedIndex == 0) {
-          _updateTdp(min(_tdpCtrl.maxVal, _tdp + _tdpCtrl.step));
+          _toggleTdpAuto();
         } else if (_focusedIndex == 1) {
+          _updateTdp(min(_tdpCtrl.maxVal, _tdp + _tdpCtrl.step));
+        } else if (_focusedIndex == 2) {
+          _toggleFanAuto();
+        } else if (_focusedIndex == 3) {
           _updateFan(min(_fanCtrl.maxVal, _fan + _fanCtrl.step));
-        } else if (_focusedIndex == 2 && RtssInstallerService.isInstalled()) {
+        } else if (_focusedIndex == 4 && RtssInstallerService.isInstalled()) {
+          if (!_isRtssRunning) _startRtss();
+        } else if (_focusedIndex == 5 && RtssInstallerService.isInstalled()) {
           _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
         }
         break;
@@ -335,7 +352,12 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         if (_focusedIndex == 0) {
           _cyclePreset(const [0.8, 1.0, 1.2, 1.4], _scale, 1, _updateScale);
         } else if (_focusedIndex == 1) {
-          _cyclePreset(const [30, 35, 40, 45], _widthPercent, 1, _updateWidthPercent);
+          _cyclePreset(
+            const [30, 35, 40, 45],
+            _widthPercent,
+            1,
+            _updateWidthPercent,
+          );
         }
         break;
     }
@@ -345,22 +367,31 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     switch (_selectedTabIndex) {
       case 0:
         if (_focusedIndex == 0) {
-          _cyclePreset(const [10, 15, 20, 25, 30], _tdp, 1, _updateTdp);
+          _toggleTdpAuto();
         } else if (_focusedIndex == 1) {
-          _cyclePreset(const [30, 50, 75, 100], _fan, 1, _updateFan);
+          _cyclePreset(const [10, 15, 20, 25, 30], _tdp, 1, _updateTdp);
         } else if (_focusedIndex == 2) {
+          _toggleFanAuto();
+        } else if (_focusedIndex == 3) {
+          _cyclePreset(const [30, 50, 75, 100], _fan, 1, _updateFan);
+        } else if (_focusedIndex == 4) {
           if (!RtssInstallerService.isInstalled()) {
             _handleInstallRtss();
           } else if (!_isRtssRunning) {
             _startRtss();
-          } else {
-            _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
           }
+        } else if (_focusedIndex == 5) {
+          _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
         }
         break;
       case 1:
         if (_focusedIndex == 0) {
-          _cyclePreset(const [25, 50, 75, 100], _brightness, 1, _updateBrightness);
+          _cyclePreset(
+            const [25, 50, 75, 100],
+            _brightness,
+            1,
+            _updateBrightness,
+          );
         } else if (_focusedIndex == 1) {
           _cyclePreset(const [0, 30, 60, 100], _audio, 1, _updateAudio);
         } else if (_focusedIndex == 2) {
@@ -376,7 +407,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           Process.start('taskmgr.exe', [], runInShell: true);
         } else if (_focusedIndex == 2) {
           OverlayController.instance.hideOverlay();
-          Process.start('explorer.exe', ['ms-settings:display'], runInShell: true);
+          Process.start('explorer.exe', [
+            'ms-settings:display',
+          ], runInShell: true);
         } else if (_focusedIndex == 3) {
           _toggleDxgiHook();
         } else if (_focusedIndex == 4) {
@@ -395,20 +428,19 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         if (_focusedIndex == 0) {
           _cyclePreset(const [0.8, 1.0, 1.2, 1.4], _scale, 1, _updateScale);
         } else if (_focusedIndex == 1) {
-          _cyclePreset(const [30, 35, 40, 45], _widthPercent, 1, _updateWidthPercent);
+          _cyclePreset(
+            const [30, 35, 40, 45],
+            _widthPercent,
+            1,
+            _updateWidthPercent,
+          );
         }
         break;
     }
   }
 
   void _handleGamepadX() {
-    if (_selectedTabIndex == 0) {
-      if (_focusedIndex == 0) {
-        _toggleTdpAuto();
-      } else if (_focusedIndex == 1) {
-        _toggleFanAuto();
-      }
-    }
+    // Nút X hiện được xử lý trực tiếp bởi widget HelpBox đang giữ focus
   }
 
   void _updateTdp(int val) {
@@ -600,9 +632,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
               children: [
                 Expanded(
                   child: MediaQuery(
-                    data: MediaQuery.of(context).copyWith(
-                      textScaler: TextScaler.linear(_scale),
-                    ),
+                    data: MediaQuery.of(context)
+                        .copyWith(textScaler: TextScaler.linear(_scale)),
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 180),
                       layoutBuilder: (currentChild, previousChildren) {
@@ -705,7 +736,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           isRtssRunning: _isRtssRunning,
           activeGame: _activeGame,
           isTdpHardwareActive: _tdpCtrl.isAvailable(),
-          isDxgiHookActive: DxgiHookService.instance.isHookActive || _dxgiHookEnabled,
+          isDxgiHookActive:
+              DxgiHookService.instance.isHookActive || _dxgiHookEnabled,
           isGamepadConnected: GamepadService.isConnected,
           scale: _scale,
           onScaleChanged: _updateScale,
@@ -728,24 +760,15 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           top: BorderSide(color: AppTheme.cardBorder, width: 1.0),
         ),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _buildHintBadge("LB/RB", "Tab"),
-            const SizedBox(width: 8),
-            _buildHintBadge("D-Pad", "Chọn/Chỉnh"),
-            const SizedBox(width: 8),
-            _buildHintBadge("A", "Chọn"),
-            if (_selectedTabIndex == 0) ...[
-              const SizedBox(width: 8),
-              _buildHintBadge("X", "Auto"),
-            ],
-            const SizedBox(width: 8),
-            _buildHintBadge("B", "Đóng"),
-          ],
-        ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          _buildHintBadge("X", "Trợ giúp"),
+          const SizedBox(width: 12),
+          _buildHintBadge("A", "Chọn"),
+          const SizedBox(width: 12),
+          _buildHintBadge("B", "Đóng"),
+        ],
       ),
     );
   }
@@ -758,29 +781,16 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
           decoration: BoxDecoration(
             color: AppTheme.primary.withValues(alpha: 0.18),
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(1000),
             border: Border.all(
               color: AppTheme.primary.withValues(alpha: 0.4),
               width: 0.8,
             ),
           ),
-          child: Text(
-            keyText,
-            style: AppTheme.caption.copyWith(
-              fontSize: 9,
-              fontWeight: FontWeight.w800,
-              color: AppTheme.accent,
-              letterSpacing: 0.4,
-            ),
-          ),
+          child: Text(keyText, style: AppTheme.hint),
         ),
         const SizedBox(width: 4),
-        Text(
-          label,
-          style: AppTheme.caption.copyWith(
-            fontWeight: FontWeight.w500,
-          ),
-        ),
+        Text(label, style: AppTheme.hint),
       ],
     );
   }

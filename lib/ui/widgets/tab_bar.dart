@@ -90,7 +90,7 @@ class _AppTabBarState extends State<AppTabBar> {
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           // Nút phím tắt LB (Bumper trái cố định gọn gàng)
           BumperButton(
