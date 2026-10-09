@@ -64,17 +64,42 @@ void main() async {
   // 2. Khởi tạo Khay hệ thống (System Tray) với đường dẫn icon tuyệt đối
   await _initSystemTray();
 
-  // 3. Khởi tạo Phím tắt toàn cục (Global Hotkeys)
+  // 3. Khởi tạo Phím tắt toàn cục & Gamepad (Chỉ 1 hotkey duy nhất cho 1 tính năng: PC HOẶC Gamepad)
+  String overlayGamepad = config.get("gamepad.overlay_combo", "BACK + RB");
+  String overlayKeyboard = config.get("hotkey.toggle_overlay", "");
+  if (overlayGamepad.isNotEmpty) {
+    overlayKeyboard = "";
+    config.set("hotkey.toggle_overlay", "");
+  } else if (overlayKeyboard.isNotEmpty) {
+    overlayGamepad = "";
+    config.set("gamepad.overlay_combo", "");
+  }
+
+  String keyboardGamepad = config.get("gamepad.keyboard_combo", "BACK + LB");
+  String keyboardKeyboard = config.get("hotkey.toggle_keyboard", "");
+  if (keyboardGamepad.isNotEmpty) {
+    keyboardKeyboard = "";
+    config.set("hotkey.toggle_keyboard", "");
+  } else if (keyboardKeyboard.isNotEmpty) {
+    keyboardGamepad = "";
+    config.set("gamepad.keyboard_combo", "");
+  }
+
   await HotkeyService.init(
     onToggleOverlay: () => OverlayController.instance.toggleOverlay(),
     onToggleKeyboard: () => VirtualKeyboardService.toggleKeyboard(),
+    initialOverlayHotkey: overlayKeyboard,
+    initialKeyboardHotkey: keyboardKeyboard,
   );
 
   // 4. Khởi tạo Gamepad Listener (XInput)
   if (config.get("gamepad.enabled", true)) {
     final pollMs = config.get("gamepad.poll_interval_ms", 50);
     GamepadService.start(
-      onTriggerCombo: () => OverlayController.instance.toggleOverlay(),
+      onToggleOverlay: () => OverlayController.instance.toggleOverlay(),
+      onToggleKeyboard: () => VirtualKeyboardService.toggleKeyboard(),
+      initialOverlayCombo: overlayGamepad,
+      initialKeyboardCombo: keyboardGamepad,
       intervalMs: pollMs,
     );
   }

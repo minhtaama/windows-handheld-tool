@@ -29,12 +29,10 @@ class HomeTab extends StatelessWidget {
       children: [
         // 1. Khối Đồng hồ hệ thống & Thiết bị Handheld
         _buildClockHeader(),
-        const SizedBox(height: 14),
 
         // 2. Khối Trạng thái Pin & Nguồn điện
         const SectionLabel(label: "NGUỒN & PIN"),
         _buildBatteryCard(),
-        const SizedBox(height: 14),
 
         // 3. Khối Tài nguyên Phần cứng
         const SectionLabel(label: "TÀI NGUYÊN HỆ THỐNG"),
@@ -62,6 +60,7 @@ class HomeTab extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
+            flex: 3,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -101,6 +100,7 @@ class HomeTab extends StatelessWidget {
           const SizedBox(width: 8),
 
           Expanded(
+            flex: 2,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -116,6 +116,7 @@ class HomeTab extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(
                   device.displayName,
+                  textAlign: TextAlign.right,
                   style: TextStyle(
                     fontSize: AppTheme.scaled(11),
                     fontWeight: FontWeight.w700,

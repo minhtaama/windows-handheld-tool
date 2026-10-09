@@ -46,7 +46,7 @@ class DeviceTab extends StatelessWidget {
       controller: scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       children: [
-        const SectionLabel(label: "HIỂN THỊ"),
+        const SectionLabel(label: "HIỂN THỊ", isFirst: true),
         SettingSlider(
           icon: Icons.brightness_6_rounded,
           title: "Độ sáng màn hình",
@@ -58,10 +58,8 @@ class DeviceTab extends StatelessWidget {
           quickPresets: const [25, 50, 75, 100],
           onChanged: onBrightnessChanged,
           isFocused: focusedIndex == 0,
-          helpText:
-              "Điều chỉnh cường độ sáng màn hình tích hợp. Giảm độ sáng giúp kéo dài đáng kể thời lượng pin.",
+          helpText: "Điều chỉnh cường độ sáng màn hình tích hợp. Giảm độ sáng giúp kéo dài đáng kể thời lượng pin.",
         ),
-        const SizedBox(height: 16),
 
         const SectionLabel(label: "ÂM THANH"),
         SettingSlider(
@@ -75,10 +73,8 @@ class DeviceTab extends StatelessWidget {
           quickPresets: const [0, 30, 60, 100],
           onChanged: onAudioChanged,
           isFocused: focusedIndex == 1,
-          helpText:
-              "Điều chỉnh mức âm lượng tổng của hệ thống Windows từ 0% đến 100%.",
+          helpText: "Điều chỉnh mức âm lượng tổng của hệ thống Windows từ 0% đến 100%.",
         ),
-        const SizedBox(height: 16),
 
         const SectionLabel(label: "CẢM ỨNG MÀN HÌNH"),
         ToggleCard(
@@ -92,8 +88,7 @@ class DeviceTab extends StatelessWidget {
           value: touchEnabled,
           onChanged: (_) => onToggleTouchscreen(),
           isFocused: focusedIndex == 2,
-          helpText:
-              "Bật hoặc tắt màn hình cảm ứng để tránh chạm nhầm khi đang cầm chơi game bằng tay cầm.",
+          helpText: "Bật hoặc tắt màn hình cảm ứng để tránh chạm nhầm khi đang cầm chơi game bằng tay cầm.",
         ),
       ],
     );

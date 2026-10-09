@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/app_theme.dart';
 import '../../services/dxgi_hook_service.dart';
 import '../widgets/action_button.dart';
+import '../widgets/hotkey_tile.dart';
 import '../widgets/preset_selector.dart';
 import '../widgets/section_label.dart';
 import '../widgets/status_indicator.dart';
@@ -35,6 +36,18 @@ class SettingsTab extends StatelessWidget {
   final bool isDxgiHookActive;
   final bool isGamepadConnected;
 
+  // Cấu hình Phím tắt Đơn nhất (Bàn phím PC HOẶC Gamepad)
+  final GlobalKey<HotkeyTileState>? overlayHotkeyTileKey;
+  final String overlayHotkeyDevice;
+  final String overlayHotkey;
+  final void Function(String device, String hotkey) onOverlayHotkeyChanged;
+
+  final GlobalKey<HotkeyTileState>? virtualKeyboardHotkeyTileKey;
+  final String virtualKeyboardHotkeyDevice;
+  final String virtualKeyboardHotkey;
+  final void Function(String device, String hotkey)
+  onVirtualKeyboardHotkeyChanged;
+
   // Tùy chỉnh hiển thị Side Panel
   final double scale;
   final ValueChanged<double> onScaleChanged;
@@ -59,6 +72,14 @@ class SettingsTab extends StatelessWidget {
     required this.isTdpHardwareActive,
     required this.isDxgiHookActive,
     required this.isGamepadConnected,
+    this.overlayHotkeyTileKey,
+    required this.overlayHotkeyDevice,
+    required this.overlayHotkey,
+    required this.onOverlayHotkeyChanged,
+    this.virtualKeyboardHotkeyTileKey,
+    required this.virtualKeyboardHotkeyDevice,
+    required this.virtualKeyboardHotkey,
+    required this.onVirtualKeyboardHotkeyChanged,
     required this.scale,
     required this.onScaleChanged,
     required this.widthPercent,
@@ -73,7 +94,7 @@ class SettingsTab extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       children: [
         // 1. CÔNG CỤ HỆ THỐNG
-        const SectionLabel(label: "CÔNG CỤ HỆ THỐNG"),
+        const SectionLabel(label: "CÔNG CỤ HỆ THỐNG", isFirst: true),
         Row(
           children: [
             Expanded(
@@ -121,11 +142,9 @@ class SettingsTab extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 16),
 
         // 2. CẤU HÌNH HỆ THỐNG & TƯƠNG THÍCH
         const SectionLabel(label: "CẤU HÌNH HỆ THỐNG"),
-
         // Khởi động cùng Windows (Auto-start via Task Scheduler)
         ToggleCard(
           icon: Icons.power_settings_new_rounded,
@@ -133,7 +152,7 @@ class SettingsTab extends StatelessWidget {
           subtitle: "Tự chạy với quyền Quản trị viên (Task Scheduler)",
           value: autoStartEnabled,
           onChanged: onToggleAutoStart,
-          isFocused: focusedIndex == 5,
+          isFocused: focusedIndex == 4,
           helpText: "Kích hoạt tác vụ Windows Task Scheduler với quyền Quản trị viên tối đa (Highest Privileges) khi đăng nhập, khắc phục triệt để việc UAC chặn ứng dụng tự khởi động.",
         ),
         const SizedBox(height: 12),
@@ -154,8 +173,34 @@ class SettingsTab extends StatelessWidget {
               ? "Shared Texture"
               : "DXGI Borderless",
           onSelected: onHookModeChanged,
-          isFocused: focusedIndex == 6,
+          isFocused: focusedIndex == 5,
           helpText: "DXGI Borderless: Ép game toàn màn hình sang chế độ không viền (iFlip) để Quick Panel hiển thị đè mượt mà.\nShared Texture: Cơ chế OBS/Discord Overlay, nạp kết cấu GPU và vẽ đè trực tiếp lên bộ đệm BackBuffer tại hàm xuất hình Present.",
+        ),
+        const SizedBox(height: 12),
+
+        // Phím tắt mở Quick Settings (Đơn nhất: Bàn phím PC HOẶC Gamepad)
+        HotkeyTile(
+          key: overlayHotkeyTileKey,
+          icon: Icons.dashboard_customize_rounded,
+          title: "Phím tắt mở Quick Settings",
+          device: overlayHotkeyDevice,
+          hotkey: overlayHotkey,
+          onHotkeyChanged: onOverlayHotkeyChanged,
+          isFocused: focusedIndex == 6,
+          helpText: "Phím tắt duy nhất để bật hoặc ẩn bảng điều khiển Quick Settings (Bàn phím PC HOẶC Gamepad).",
+        ),
+        const SizedBox(height: 12),
+
+        // Phím tắt mở Bàn phím ảo (Đơn nhất: Bàn phím PC HOẶC Gamepad)
+        HotkeyTile(
+          key: virtualKeyboardHotkeyTileKey,
+          icon: Icons.keyboard_alt_rounded,
+          title: "Phím tắt mở Bàn phím ảo",
+          device: virtualKeyboardHotkeyDevice,
+          hotkey: virtualKeyboardHotkey,
+          onHotkeyChanged: onVirtualKeyboardHotkeyChanged,
+          isFocused: focusedIndex == 7,
+          helpText: "Phím tắt duy nhất để kích hoạt nhanh bàn phím ảo Windows TabTip khi chơi game (Bàn phím PC HOẶC Gamepad).",
         ),
         const SizedBox(height: 16),
 
@@ -171,7 +216,7 @@ class SettingsTab extends StatelessWidget {
           selectedValue: scale,
           labelBuilder: (preset) => "${(preset * 100).toInt()}%",
           onSelected: onScaleChanged,
-          isFocused: focusedIndex == 7,
+          isFocused: focusedIndex == 8,
         ),
         const SizedBox(height: 12),
 
@@ -184,9 +229,8 @@ class SettingsTab extends StatelessWidget {
           selectedValue: widthPercent,
           labelBuilder: (preset) => "$preset%",
           onSelected: onWidthPercentChanged,
-          isFocused: focusedIndex == 8,
+          isFocused: focusedIndex == 9,
         ),
-        const SizedBox(height: 16),
 
         // 4. BẢNG TRẠNG THÁI KẾT NỐI (STATUS)
         const SectionLabel(label: "TRẠNG THÁI HỆ THỐNG"),
@@ -228,17 +272,19 @@ class SettingsTab extends StatelessWidget {
           icon: Icons.sports_esports_rounded,
           title: "Tay cầm Gamepad",
           statusText: isGamepadConnected
-              ? "Đã kết nối (Phím tắt: Back + RB)"
+              ? (overlayHotkeyDevice == 'gamepad' && overlayHotkey.isNotEmpty
+                    ? "Đã kết nối (Phím tắt: $overlayHotkey)"
+                    : "Đã kết nối (Sẵn sàng)")
               : "Chưa phát hiện tay cầm XInput",
           isActive: isGamepadConnected,
         ),
-        const SizedBox(height: 16),
 
         // 5. THÔNG TIN PHẦN MỀM
+        const SizedBox(height: 18),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            color: AppTheme.cardBackground,
+            color: AppTheme.info,
             borderRadius: BorderRadius.circular(AppTheme.cardRadius),
             border: Border.all(color: AppTheme.cardBorder, width: 1.0),
           ),
@@ -247,16 +293,26 @@ class SettingsTab extends StatelessWidget {
               Icon(
                 Icons.info_outline_rounded,
                 size: AppTheme.scaled(18),
-                color: AppTheme.textSecondary,
+                color: AppTheme.background,
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text("Windows Handheld Tools", style: AppTheme.body),
+                    Text(
+                      "Windows Handheld Tool",
+                      style: AppTheme.title.copyWith(
+                        color: AppTheme.background,
+                      ),
+                    ),
                     const SizedBox(height: 2),
-                    Text("v1.0", style: AppTheme.caption),
+                    Text(
+                      "v1.0 (Beta)",
+                      style: AppTheme.caption.copyWith(
+                        color: AppTheme.background,
+                      ),
+                    ),
                   ],
                 ),
               ),

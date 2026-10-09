@@ -89,7 +89,7 @@ class PerformanceTab extends StatelessWidget {
       controller: scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       children: [
-        const SectionLabel(label: "NĂNG LƯỢNG (TDP)"),
+        const SectionLabel(label: "NĂNG LƯỢNG (TDP)", isFirst: true),
         ToggleCard(
           icon: Icons.bolt_rounded,
           title: "Chế độ TDP tự động",
@@ -117,7 +117,6 @@ class PerformanceTab extends StatelessWidget {
           isFocused: focusedIndex == 1,
           helpText: "Khóa công suất điện tối đa của bộ xử lý (TDP tính bằng Watt). Tăng TDP để có FPS cao hơn, giảm TDP để máy mát hơn và tiết kiệm pin.",
         ),
-        const SizedBox(height: 16),
 
         const SectionLabel(label: "TẢN NHIỆT (QUẠT)"),
         ToggleCard(
@@ -147,7 +146,6 @@ class PerformanceTab extends StatelessWidget {
           isFocused: focusedIndex == 3,
           helpText: "Điều chỉnh phần trăm tốc độ quạt làm mát của máy Handheld từ 0% đến 100%.",
         ),
-        const SizedBox(height: 16),
 
         const SectionLabel(label: "KHUNG HÌNH (RTSS)"),
         if (!RtssInstallerService.isInstalled())

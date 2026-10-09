@@ -13,6 +13,7 @@ import '../hardware/audio_service.dart';
 import '../hardware/rtss_service.dart';
 import '../hardware/touchscreen_service.dart';
 import '../input/gamepad_service.dart';
+import '../input/hotkey_service.dart';
 import '../services/system_optimizer.dart';
 import '../services/virtual_keyboard_service.dart';
 import '../services/autostart_service.dart';
@@ -24,6 +25,7 @@ import 'tabs/home_tab.dart';
 import 'tabs/performance_tab.dart';
 import 'tabs/device_tab.dart';
 import 'tabs/settings_tab.dart';
+import 'widgets/hotkey_tile.dart';
 import 'widgets/tab_bar.dart';
 
 /// Nội dung thanh Quick Settings cho máy Handheld hỗ trợ đầy đủ cảm ứng & tay cầm Gamepad.
@@ -55,6 +57,15 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late OverlayHookMode _hookMode;
   late int _widthPercent;
   late double _scale;
+
+  final _overlayHotkeyKey = GlobalKey<HotkeyTileState>();
+  final _virtualKeyboardHotkeyKey = GlobalKey<HotkeyTileState>();
+
+  // Cấu hình Phím tắt đơn nhất (Mỗi tính năng chỉ 1 hotkey: Bàn phím PC HOẶC Gamepad)
+  late String _overlayHotkeyDevice;
+  late String _overlayHotkey;
+  late String _virtualKeyboardHotkeyDevice;
+  late String _virtualKeyboardHotkey;
 
   // Cấu hình RTSS OSD
   late bool _rtssOsdEnabled;
@@ -146,6 +157,34 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _scale = (widget.config.get("overlay.scale", 1.0) as num).toDouble();
     AppTheme.uiScale = _scale;
 
+    // Khởi tạo phím tắt duy nhất cho Quick Settings (Mutual Exclusion)
+    final gpOverlay = widget.config.get("gamepad.overlay_combo", "BACK + RB");
+    final kbOverlay = widget.config.get("hotkey.toggle_overlay", "");
+    if (gpOverlay.isNotEmpty) {
+      _overlayHotkeyDevice = 'gamepad';
+      _overlayHotkey = gpOverlay;
+    } else if (kbOverlay.isNotEmpty) {
+      _overlayHotkeyDevice = 'keyboard';
+      _overlayHotkey = kbOverlay;
+    } else {
+      _overlayHotkeyDevice = '';
+      _overlayHotkey = '';
+    }
+
+    // Khởi tạo phím tắt duy nhất cho Virtual Keyboard (Mutual Exclusion)
+    final gpKb = widget.config.get("gamepad.keyboard_combo", "BACK + LB");
+    final kbKb = widget.config.get("hotkey.toggle_keyboard", "");
+    if (gpKb.isNotEmpty) {
+      _virtualKeyboardHotkeyDevice = 'gamepad';
+      _virtualKeyboardHotkey = gpKb;
+    } else if (kbKb.isNotEmpty) {
+      _virtualKeyboardHotkeyDevice = 'keyboard';
+      _virtualKeyboardHotkey = kbKb;
+    } else {
+      _virtualKeyboardHotkeyDevice = '';
+      _virtualKeyboardHotkey = '';
+    }
+
     _liveTdp = (_tdp * 0.85).round().clamp(_tdpCtrl.minVal, _tdp);
     _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
     _isRtssRunning = _rtssCtrl.isAvailable();
@@ -233,13 +272,14 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         ];
       case 3:
         return [
-          [0, 1],
-          [2, 3],
-          [4],
-          [5],
-          [6],
-          [7],
-          [8],
+          [0, 1], // Mở bàn phím ảo, Mở Task Manager
+          [2, 3], // Cài đặt màn hình, Dọn dẹp RAM
+          [4], // Khởi động cùng Windows
+          [5], // Chế độ tương thích Game Hook
+          [6], // Phím tắt mở Quick Settings (HotkeyTile)
+          [7], // Phím tắt mở Bàn phím ảo (HotkeyTile)
+          [8], // Tỷ lệ hiển thị UI Scale
+          [9], // Độ rộng Side Panel
         ];
       default:
         return [
@@ -420,18 +460,13 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         }
         break;
       case 3:
-        if (_focusedIndex == 5) {
+        if (_focusedIndex == 4) {
           _toggleAutoStart(!_autoStartEnabled);
-        } else if (_focusedIndex == 6) {
-          _cyclePreset(
-            OverlayHookMode.values,
-            _hookMode,
-            -1,
-            _updateHookMode,
-          );
-        } else if (_focusedIndex == 7) {
-          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, -1, _updateScale);
+        } else if (_focusedIndex == 5) {
+          _cyclePreset(OverlayHookMode.values, _hookMode, -1, _updateHookMode);
         } else if (_focusedIndex == 8) {
+          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, -1, _updateScale);
+        } else if (_focusedIndex == 9) {
           _cyclePreset(
             const [30, 35, 40, 45],
             _widthPercent,
@@ -494,18 +529,13 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         }
         break;
       case 3:
-        if (_focusedIndex == 5) {
+        if (_focusedIndex == 4) {
           _toggleAutoStart(!_autoStartEnabled);
-        } else if (_focusedIndex == 6) {
-          _cyclePreset(
-            OverlayHookMode.values,
-            _hookMode,
-            1,
-            _updateHookMode,
-          );
-        } else if (_focusedIndex == 7) {
-          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+        } else if (_focusedIndex == 5) {
+          _cyclePreset(OverlayHookMode.values, _hookMode, 1, _updateHookMode);
         } else if (_focusedIndex == 8) {
+          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+        } else if (_focusedIndex == 9) {
           _cyclePreset(
             const [30, 35, 40, 45],
             _widthPercent,
@@ -584,19 +614,16 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             ),
           );
         } else if (_focusedIndex == 4) {
-          OverlayController.instance.hideOverlay();
-        } else if (_focusedIndex == 5) {
           _toggleAutoStart(!_autoStartEnabled);
+        } else if (_focusedIndex == 5) {
+          _cyclePreset(OverlayHookMode.values, _hookMode, 1, _updateHookMode);
         } else if (_focusedIndex == 6) {
-          _cyclePreset(
-            OverlayHookMode.values,
-            _hookMode,
-            1,
-            _updateHookMode,
-          );
+          _overlayHotkeyKey.currentState?.startRecording();
         } else if (_focusedIndex == 7) {
-          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+          _virtualKeyboardHotkeyKey.currentState?.startRecording();
         } else if (_focusedIndex == 8) {
+          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+        } else if (_focusedIndex == 9) {
           _cyclePreset(
             const [30, 35, 40, 45],
             _widthPercent,
@@ -702,6 +729,55 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     OverlayController.instance.updateScale(val);
   }
 
+  void _updateOverlayHotkey(String device, String hotkey) {
+    setState(() {
+      _overlayHotkeyDevice = device;
+      _overlayHotkey = hotkey;
+    });
+
+    if (device == 'keyboard') {
+      widget.config.set("hotkey.toggle_overlay", hotkey);
+      widget.config.set("gamepad.overlay_combo", "");
+      HotkeyService.updateHotkeys(overlayHotkey: hotkey);
+      GamepadService.updateCombos(overlayCombo: "");
+    } else if (device == 'gamepad') {
+      widget.config.set("gamepad.overlay_combo", hotkey);
+      widget.config.set("hotkey.toggle_overlay", "");
+      GamepadService.updateCombos(overlayCombo: hotkey);
+      HotkeyService.updateHotkeys(overlayHotkey: "");
+    } else {
+      widget.config.set("hotkey.toggle_overlay", "");
+      widget.config.set("gamepad.overlay_combo", "");
+      HotkeyService.updateHotkeys(overlayHotkey: "");
+      GamepadService.updateCombos(overlayCombo: "");
+    }
+  }
+
+  void _updateVirtualKeyboardHotkey(String device, String hotkey) {
+    setState(() {
+      _virtualKeyboardHotkeyDevice = device;
+      _virtualKeyboardHotkey = hotkey;
+    });
+
+    if (device == 'keyboard') {
+      widget.config.set("hotkey.toggle_keyboard", hotkey);
+      widget.config.set("gamepad.keyboard_combo", "");
+      HotkeyService.updateHotkeys(keyboardHotkey: hotkey);
+      GamepadService.updateCombos(keyboardCombo: "");
+    } else if (device == 'gamepad') {
+      widget.config.set("gamepad.keyboard_combo", hotkey);
+      widget.config.set("hotkey.toggle_keyboard", "");
+      GamepadService.updateCombos(keyboardCombo: hotkey);
+      HotkeyService.updateHotkeys(keyboardHotkey: "");
+    } else {
+      widget.config.set("hotkey.toggle_keyboard", "");
+      widget.config.set("gamepad.keyboard_combo", "");
+      HotkeyService.updateHotkeys(keyboardHotkey: "");
+      GamepadService.updateCombos(keyboardCombo: "");
+    }
+  }
+
+
   Future<void> _toggleTouchscreen() async {
     final success = await TouchscreenService.toggleTouchscreen();
     if (mounted) {
@@ -774,8 +850,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           content: Text(
             success
                 ? (val
-                    ? 'Đã bật khởi động cùng Windows (Task Scheduler elevated)!'
-                    : 'Đã tắt khởi động cùng Windows!')
+                      ? 'Đã bật khởi động cùng Windows (Task Scheduler elevated)!'
+                      : 'Đã tắt khởi động cùng Windows!')
                 : 'Không thể thay đổi tác vụ khởi động (Cần quyền Admin).',
           ),
           duration: const Duration(seconds: 2),
@@ -799,7 +875,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       ),
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -956,6 +1031,14 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
               DxgiHookService.instance.isHookActive ||
               DxgiHookService.instance.isEnabled,
           isGamepadConnected: GamepadService.isConnected,
+          overlayHotkeyTileKey: _overlayHotkeyKey,
+          overlayHotkeyDevice: _overlayHotkeyDevice,
+          overlayHotkey: _overlayHotkey,
+          onOverlayHotkeyChanged: _updateOverlayHotkey,
+          virtualKeyboardHotkeyTileKey: _virtualKeyboardHotkeyKey,
+          virtualKeyboardHotkeyDevice: _virtualKeyboardHotkeyDevice,
+          virtualKeyboardHotkey: _virtualKeyboardHotkey,
+          onVirtualKeyboardHotkeyChanged: _updateVirtualKeyboardHotkey,
           scale: _scale,
           onScaleChanged: _updateScale,
           widthPercent: _widthPercent,

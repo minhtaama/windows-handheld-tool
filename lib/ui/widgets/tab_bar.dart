@@ -83,7 +83,7 @@ class _AppTabBarState extends State<AppTabBar> {
 
   @override
   Widget build(BuildContext context) {
-    final tabSize = AppTheme.scaledHalf(80.0);
+    final tabSize = AppTheme.scaledHalf(85.0);
     final iconSize = AppTheme.scaled(30.0);
 
     return Container(
