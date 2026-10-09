@@ -452,3 +452,404 @@ flowchart TD
 - Handheld Companion có cộng đồng người dùng lớn với hàng trăm nghìn lượt tải và cài đặt qua GitHub.
 - Cơ chế bảo vệ đám mây của Microsoft (Cloud Protection) liên tục ghi nhận mã băm SHA-256 của các bản phát hành Handheld Companion được nạp trên hàng chục nghìn máy tính mà không gây ra hành vi mã độc phá hoại.
 - Điểm uy tín bảo mật (SmartScreen Reputation Score) của tệp cài đặt tăng dần theo thời gian, giúp phiên bản đó vượt qua bộ lọc Heuristic của Windows Defender một cách tự động.
+
+---
+
+## Kiến Trúc Đo Đạc Cảm Biến PM Table Của AMD SMU Và Tự Phục Hồi Triển Khai Driver (AMD SMU PM Table Telemetry & Self-Healing Driver Architecture)
+
+### Bản Chất Vật Lý Của Bảng Đo Năng Lượng Tức Thời (Power Management Table - PM Table)
+
+Khác với các thanh ghi giới hạn tĩnh (Static Limit Registers) chỉ nhận lệnh thiết lập công suất trần (Set Limits: STAPM, Fast PPT, Slow PPT), vi điều khiển quản lý năng lượng tích hợp trên chip AMD Ryzen (System Management Unit - SMU) liên tục ghi các thông số cảm biến thời gian thực vào một vùng nhớ đệm chuyên dụng trong phần cứng gọi là **Bảng Quản lý Năng lượng (PM Table)**.
+
+```mermaid
+flowchart TD
+    subgraph Silicon_Layer["Tầng Phần Cứng Silicon (AMD Ryzen SoC)"]
+        Sensors["Cảm biến Dòng / Áp / Nhiệt độ trên Die"] --> SMU["Vi điều khiển SMU (Quản lý Năng lượng)"]
+        SMU -->|"Cập nhật định kỳ 10ms"| PMTable["Bảng Cảm Biến Phần Cứng (SMU PM Table)"]
+    end
+    subgraph Kernel_User_Bridge["Cầu Nối Nhân - Tầng Ứng Dụng (Ring 0 to Ring 3)"]
+        PMTable -->|"Đọc qua thanh ghi SMN (WinRing0x64.sys)"| RyzenAdj["Thư viện C++ (ryzenadj.dll)"]
+        RyzenAdj -->|"Truy xuất dữ liệu bảng cảm biến SMU"| DartFFI["Giao diện hàm ngoại vi (Dart FFI)"]
+    end
+    subgraph UI_Layer["Tầng Giao Diện Người Dùng (Flutter UI)"]
+        DartFFI --> LiveTdp["Công suất tiêu thụ thực tế tức thời (Live TDP: W)"]
+        LiveTdp --> Gauge["Thanh đo kép đồng trục (Coaxial Dual-Gauge Slider)"]
+    end
+```
+
+#### 1. Cơ chế đọc dữ liệu tức thời (Telemetry Ingestion Pipeline)
+- **Chu kỳ làm mới (Polling Cycle)**: Ứng dụng khởi tạo cấu trúc bảng với hàm `init_table(ryzen_access)`. Định kỳ mỗi giây (1Hz), ứng dụng phát lệnh `refresh_table(ryzen_access)` để SMU chép toàn bộ ảnh chụp dữ liệu cảm biến mới nhất ra vùng nhớ đệm.
+- **Trích xuất thông số vật lý (Physical Metric Extraction)**:
+  - Công suất thực tế trích xuất qua hàm `get_stapm_value(ryzen_access)` (đo bằng Watt với độ chính xác số thực thực tế, ví dụ `2.28W` khi nhàn rỗi và `24.85W` khi tải nặng).
+  - Nhiệt độ nhân trích xuất qua hàm `get_tctl_temp_value(ryzen_access)` (°C).
+- Nhờ cơ chế này, thanh trượt [[SettingSlider]] hiển thị đồng thời hai thông số: mức công suất tiêu thụ thực tế tức thời bên cạnh mức công suất giới hạn mục tiêu do người chơi thiết lập (`Live / Target: 18.2 / 20 W`).
+
+#### 2. Cơ chế tự phục hồi và đồng bộ driver (Self-Healing Driver Deployment)
+- **Bế tắc kỹ thuật:** Thư viện nhân `WinRing0x64.dll` sử dụng hàm API Windows `GetModuleFileNameW(NULL)` để xác định vị trí của tệp điều khiển `WinRing0x64.sys`. Khi ứng dụng chạy từ thư mục gốc, WinRing0 luôn tìm kiếm tệp driver nằm ngang hàng với tệp thực thi chính (`windows_handheld_tool.exe`) chứ không tự tìm vào thư mục con `bin\`.
+- **Giải pháp tự động hóa 100%:**
+  1. **Đóng gói phát sinh kép (Dual-Target Packaging):** Tập lệnh `package_release.bat` sao chép tự động các tệp nhị phân runtime (`WinRing0x64.sys`, `WinRing0x64.dll`, `ryzenadj.dll`, `inpoutx64.dll`, `dxgi_hook.dll`) vào **cả thư mục con `bin\` lẫn thư mục gốc** của gói phát hành.
+  2. **Tự chẩn đoán và đồng bộ thời gian chạy (Runtime Self-Healing):** Trong hàm `_initRyzenAdj()`, ứng dụng kiểm tra sự hiện diện của các tệp driver giữa thư mục gốc và thư mục con `bin\`. Nếu phát hiện tệp driver bị thiếu ở bất kỳ vị trí nào, ứng dụng tự động sao chép qua lại để đảm bảo cấu trúc tệp luôn đầy đủ trước khi kích hoạt `init_ryzenadj()`.
+
+---
+
+## Kiến Trúc Khởi Động Tự Động Trên Nguồn Pin Của Thiết Bị Cầm Tay (Battery-Aware Scheduled Task Architecture)
+
+### Bản Chất Vật Lý Của Trình Lập Lịch Windows Khi Quản Lý Nguồn Điện
+
+Trên các hệ máy cầm tay (Handheld PC như ROG Ally, Legion Go, GPD Win), thiết bị thường xuyên vận hành hoàn toàn bằng nguồn điện từ pin tích hợp (DC Power) thay vì cắm sạc trực tiếp từ nguồn lưới (AC Power).
+
+```mermaid
+flowchart TD
+    Boot["Người chơi bật máy / Khởi động lại Handheld"] --> Logon["Đăng nhập Windows (AtLogon)"]
+    Logon --> Svc["Dịch vụ Lập lịch Hệ thống (svchost.exe / Schedule)"]
+    subgraph Old_Way["Cơ chế Lệnh Cũ (schtasks /create)"]
+        Svc --> CheckPwrOld["Kiểm tra nguồn cấp điện hệ thống"]
+        CheckPwrOld -->|Chạy bằng PIN: DisallowStartIfOnBatteries=True| BlockTask["CHẶN KHỞI ĐỘNG (Task Câm nín)"]
+        CheckPwrOld -->|Đang cắm sạc AC| ExecOld["Kích hoạt tiến trình với WorkingDir = C:\\Windows\\System32"]
+        ExecOld --> FailDir["Không tìm thấy config.json và Driver nhị phân cục bộ"]
+    end
+    subgraph New_Way["Cơ chế Đối Tượng PowerShell (Register-ScheduledTask)"]
+        Svc --> CheckPwrNew["Cấu hình: AllowStartIfOnBatteries & DontStopIfGoingOnBatteries"]
+        CheckPwrNew -->|Chạy bằng PIN hoặc Sạc| LaunchTask["Khởi chạy tức thời với đặc quyền RunLevel Highest"]
+        LaunchTask --> SetCwd["Thiết lập WorkingDirectory = Thư mục chứa tệp EXE"]
+        SetCwd --> Ready["Nạp cấu hình JSON và Driver nhị phân thành công 100%"]
+    end
+```
+
+#### 1. Bế tắc kỹ thuật của tiện ích `schtasks.exe` truyền thống
+- **Chính sách tiết kiệm năng lượng mặc định (Battery Disallow Policy)**: Lệnh `schtasks /create` của Windows mặc định kích hoạt cờ `DisallowStartIfOnBatteries = True`. Khi người dùng khởi động lại máy ở chế độ di động không cắm sạc, bộ lập lịch Task Scheduler nhận diện thiết bị đang chạy bằng pin và đơn phương hủy kích hoạt tác vụ mà không phát ra bất kỳ cảnh báo nào.
+- **Thư mục làm việc bị trôi lệch (Working Directory Desynchronization)**: Khi khởi chạy qua `schtasks`, biến môi trường thư mục làm việc hiện hành (`Current Working Directory` - CWD) bị gán mặc định về `C:\Windows\System32`. Ứng dụng khi chạy ngầm sẽ không thể tra cứu tệp cấu hình [[ConfigManager]] (`config.json`) và các tệp nhị phân driver nhân [[TdpService]] (`ryzenadj.dll`, `WinRing0x64.sys`) nằm trong thư mục cài đặt gốc.
+
+#### 2. Giải pháp chuyển dịch sang Đối tượng Lập lịch PowerShell Hiện đại
+- **Giải phóng ràng buộc nguồn điện**: Hàm `AutostartService.setEnabled()` sử dụng lệnh ghép PowerShell `Register-ScheduledTask` kết hợp với đối tượng cấu hình `New-ScheduledTaskSettingsSet`:
+  - `-AllowStartIfOnBatteries`: Cho phép tác vụ kích hoạt ngay cả khi máy đang vận hành bằng nguồn pin.
+  - `-DontStopIfGoingOnBatteries`: Giữ cho ứng dụng tiếp tục chạy ổn định khi người dùng đột ngột rút dây sạc.
+  - `-ExecutionTimeLimit (New-TimeSpan -Days 0)`: Xóa bỏ giới hạn thời gian chạy tối đa (mặc định Windows sẽ tự tắt các tác vụ chạy quá 3 ngày).
+- **Cố định thư mục làm việc tuyệt đối**: Sử dụng `New-ScheduledTaskAction -WorkingDirectory '$exeDir'` để chỉ định thư mục cha của tệp thực thi làm không gian làm việc chính thức, đảm bảo việc đọc ghi dữ liệu cục bộ và nạp thư viện động luôn đồng nhất.
+
+---
+
+## Kiến Trúc Khử Hiện Tượng Chớp Trắng Khởi Động Trên Cửa Sổ Trong Suốt Win32 (Zero-Latency Transparent Window Initialization)
+
+### Bản Chất Vật Lý Của Bộ Đệm Dựng Hình Và Vòng Đời Cửa Sổ Đồ Họa
+
+Khi một cửa sổ Win32 được tạo lập thông qua hàm API `CreateWindowExW`, hệ điều hành phân bổ một cấu trúc quản lý cửa sổ trong bộ nhớ của tiến trình quản lý cửa sổ máy tính (Desktop Window Manager - DWM).
+
+```mermaid
+flowchart TD
+    subgraph Old_Lifecycle["Vòng Đời Cũ (Gây Chớp Trắng)"]
+        WinCreateOld["Tạo cửa sổ Win32 (CreateWindowEx)"] --> AlphaOld["Alpha mặc định = 255 (Mờ đục)"]
+        AlphaOld --> EngineOld["Flutter Engine khởi tạo bề mặt DirectX / ANGLE"]
+        EngineOld --> FrameOld["Dựng Frame đầu tiên (NextFrameCallback)"]
+        FrameOld --> ShowCpp["Mã C++ gọi ShowWindow ngay lập tức"]
+        ShowCpp --> Flash["CHỚP TRẮNG 200ms: DWM vẽ nền cửa sổ trước khi Dart xong await"]
+        Flash --> DartDoneOld["Dart hoàn tất nạp giao diện và thiết lập trong suốt"]
+    end
+    subgraph New_Lifecycle["Vòng Đời Mới (Triệt Tiêu Hoàn Toàn Chớp Trắng)"]
+        WinCreateNew["Tạo cửa sổ Win32 với cờ WS_EX_LAYERED | WS_EX_TRANSPARENT"] --> AlphaZero["Đặt Alpha = 0 tuyệt đối (SetLayeredWindowAttributes)"]
+        AlphaZero --> NoShow["Xóa bỏ lệnh ShowWindow bên trong C++ Runner"]
+        NoShow --> DartReady["Dart nạp xong cấu hình & dịch vụ bất đồng bộ"]
+        DartReady --> ShowCmd["Gọi windowManager.show() đồng bộ trạng thái"]
+        ShowCmd --> InvisibleIdle["Cửa sổ ở trạng thái vô hình (Alpha 0, Click-through) chờ phím tắt"]
+        InvisibleIdle --> Hotkey["Người chơi nhấn Hotkey / Gamepad"]
+        Hotkey --> FadeIn["showOverlayNoActivate: Nâng Alpha = 255, Gỡ WS_EX_TRANSPARENT"]
+    end
+```
+
+#### 1. Bế tắc kỹ thuật gây ra hiện tượng nháy trắng (White Flash Root Cause)
+- C++ Runner ban đầu đăng ký hàm gọi lại `flutter_controller_->engine()->SetNextFrameCallback()` với hành vi gọi thẳng `this->Show()` ngay khi khung hình đầu tiên của Flutter Engine hoàn tất.
+- Tại thời điểm này, mã Dart cấp cao trong `main()` vẫn đang thực hiện chuỗi các tác vụ bất đồng bộ (`DeviceInfoService.init()`, `RtssService.ensureRunning()`, `ConfigManager()`). Khung hình đầu tiên mà Engine trả về chỉ là một vùng nhớ đệm rỗng mang màu nền mặc định của cửa sổ Win32 (màu trắng).
+- DWM lập tức hòa trộn (composite) bề mặt màu trắng này lên màn hình máy tính của người chơi trong khoảng 150ms - 200ms trước khi Dart kịp thời gửi lệnh thiết lập màu nền trong suốt (`AppTheme.transparent`).
+
+#### 2. Giải pháp làm chủ vòng đời hiển thị (Deterministic Alpha Lifecycle)
+1. **Khởi tạo trong suốt tuyệt đối tại tầng Win32 Kernel**:
+   - Trong tệp `win32_window.cpp`, ngay sau khi hàm `CreateWindowExW` trả về địa chỉ cửa sổ (`HWND`), hệ điều hành áp dụng ngay hàm `SetLayeredWindowAttributes(window, 0, 0, LWA_ALPHA)`. Giá trị kênh Alpha bằng 0 biến cửa sổ thành một bề mặt quang học hoàn toàn vô hình đối với DWM.
+2. **Triệt tiêu lệnh hiển thị sớm ở tầng C++ Runner**:
+   - Trong `flutter_window.cpp`, loại bỏ hoàn toàn lệnh `this->Show()` bên trong `SetNextFrameCallback`. Cửa sổ tuyệt đối không được tự ý xuất hiện khi chưa có tín hiệu sẵn sàng từ Flutter Dart.
+3. **Điều khiển kênh Alpha hai chiều qua FFI Win32**:
+   - Dịch vụ [[NativeWindowService]] nạp trực tiếp hàm `SetLayeredWindowAttributes` từ `user32.dll`.
+   - **Khi ở chế độ chờ**: Ứng dụng duy trì `Alpha = 0` kết hợp cờ `WS_EX_TRANSPARENT`, đảm bảo mọi tương tác bàn phím, chuột và khung hình của game đang chơi chạy xuyên thấu mà không bị suy hao tài nguyên GPU.
+   - **Khi người dùng kích hoạt Quick Panel**: Hàm `showOverlayNoActivate()` thiết lập `Alpha = 255` và gỡ cờ xuyên thấu, hiển thị toàn bộ giao diện điều khiển tức thì với độ trễ 0ms.
+
+---
+
+## Thuật Toán Căn Giữa Khung Nhìn Cho Điều Hướng Gamepad (Gamepad Viewport Center-Alignment Algorithm)
+
+### Bản Chất Vật Lý Của Không Gian Cuộn Tuyến Tính (Scroll Viewport Geometry)
+
+Khung nhìn danh sách cuộn (`ListView` trong [[QuickPanel]]) là một cổng quan sát có chiều cao hữu hạn ($V_{height}$) trượt trên một trục không gian nội dung có tổng chiều cao thực tế lớn hơn ($C_{total}$).
+
+```mermaid
+flowchart TD
+    Input["Người chơi gạt Cần / Nhấn D-Pad (Lên / Xuống)"] --> CalcIndex["Xác định tọa độ phần tử lưới: row r, col c"]
+    CalcIndex --> CheckZero{"Hàng trên cùng (r == 0)?"}
+    CheckZero -->|Đúng| TopSnap["Cuộn ngay về đỉnh danh sách: targetOffset = 0.0"]
+    CheckZero -->|Sai| Measure["Tính toán tọa độ tâm phần tử: itemCenterY"]
+    Measure --> ViewportMath["Độ lệch so với tâm màn hình: itemCenterY - (viewportHeight / 2)"]
+    ViewportMath --> ClampOffset["Kẹp trong giới hạn: clamp(0.0, maxScrollExtent)"]
+    ClampOffset --> SmoothAnim["Cuộn mượt (animateTo) với đường cong easeOutCubic (140ms)"]
+    SmoothAnim --> ViewResult["Phần tử focus luôn nằm chính giữa tầm mắt người chơi"]
+```
+
+#### 1. Bế tắc kỹ thuật của thuật toán cuộn neo đỉnh (Top-Alignment Pitfall)
+- Thuật toán trước đây sử dụng công thức tính khoảng cách cuộn tuyến tính dựa trên chỉ số dòng:
+  $$\text{TargetOffset} = r \times (120.0 \times \text{Scale})$$
+- **Hệ quả hình học**: Đây là cơ chế **neo đỉnh (Top Alignment)**. Khi người chơi chuyển tiêu điểm xuống hàng $r = 1$, danh sách bị kéo mạnh lên phía trên để đưa đỉnh của hàng đó sát vào mép trên cùng của khung nhìn.
+- Do phía trên mỗi nhóm chức năng có chứa nhãn phân vùng (`SectionLabel`) và khoảng cách đệm (`EdgeInsets.symmetric`), hàng được chọn bị mép trên của cửa sổ che mất từ 30% đến 50% diện tích hiển thị. Người chơi hoàn toàn mất tầm nhìn đối với tiêu đề hoặc các nút gạt của thẻ chức năng đó.
+
+#### 2. Thuật toán căn giữa tâm khung nhìn (Center-Alignment Algorithm)
+Để tái hiện trải nghiệm điều hướng chuẩn công nghiệp của hệ máy console cầm tay, thuật toán chuyển sang cơ chế **Căn giữa tâm (Center Alignment)**:
+
+1. **Trường hợp gốc (Base Case $r = 0$)**:
+   - Nếu người chơi điều hướng về hàng đầu tiên của tab, danh sách lập tức cuộn về tọa độ gốc $\text{TargetOffset} = 0.0$, hiển thị trọn vẹn cả nhãn phân đoạn đầu trang và thẻ chức năng thứ nhất.
+2. **Trường hợp tổng quát ($r > 0$)**:
+   - Xác định tọa độ tâm theo trục dọc của phần tử thứ $r$:
+     $$\text{ItemCenterY} = \text{HeaderOffset} + \left[r \times (\text{RowHeight} + \text{ItemSpacing})\right] + \frac{\text{RowHeight}}{2}$$
+   - Tính toán vị trí cuộn mục tiêu sao cho tâm phần tử trùng khớp với tâm của khung nhìn hiển thị:
+     $$\text{TargetOffset} = \text{ItemCenterY} - \frac{V_{height}}{2}$$
+   - Giới hạn khoảng cách bằng hàm chặn biên để ngăn hiện tượng cuộn vượt giới hạn:
+     $$\text{FinalOffset} = \text{clamp}(\text{TargetOffset}, 0.0, \text{MaxScrollExtent})$$
+- Khi phần tử vẫn còn nằm ở nửa trên của màn hình, $\text{TargetOffset}$ mang giá trị âm và được kẹp về $0.0$, giữ cho màn hình tĩnh lặng tự nhiên. Khi người chơi tiếp tục cuộn xuống sâu hơn, khung nhìn trượt êm ái với thời gian 140ms theo đường cong gia tốc $\text{Curves.easeOutCubic}$, giữ cố định phần tử tương tác ở tâm ngang của tầm mắt.
+
+#### 3. Bế tắc của phép ước lượng số học và Giải pháp Render Tree đích thực
+- **Bế tắc của công thức đại số cố định**: Trên thực tế, các thẻ giao diện có chiều cao không đồng nhất (Non-uniform Item Heights): [[ToggleCard]] cao ~65dp, trong khi [[SettingSlider]] có các nút chọn nhanh cao tới ~155dp, xen kẽ với các [[SectionLabel]] cao ~40dp. Việc nhân tuyến tính với một hằng số giả định $115.0 \times \text{Scale}$ tích lũy sai số lên đến 150px - 250px ở các hàng cuối, khiến phần tử bị lệch lên trên hoặc bị kéo quá đà.
+- **Giải pháp bóc tách từ Cây dựng hình (Render Tree First Principles)**: Thay vì phán đoán bằng số học, Flutter Engine lưu trữ tọa độ pixel tuyệt đối của từng phần tử trong bộ nhớ đối tượng [[RenderBox]]. Framework cung cấp cơ chế đo đạc tự động:
+  - `Scrollable.ensureVisible(context, alignment: 0.5)`
+  - Giá trị `alignment: 0.5` chỉ định trực tiếp cho `ScrollPosition` căn chỉnh tâm hình học của RenderBox trùng khớp hoàn hảo với tâm của cổng nhìn Viewport, triệt tiêu 100% sai số tích lũy bất kể widget cao bao nhiêu pixel.
+
+---
+
+## Kiến Trúc Phân Lập Giữa DXGI Borderless Hook Và Direct3D Shared Texture Injection (Display Mode Decoupling Architecture)
+
+### Bản Chất Vật Lý Của Hai Triết Lý Can Thiệp Khung Hình
+
+Hai phương án tương thích trò chơi toàn màn hình đại diện cho hai cơ chế can thiệp đồ họa hoàn toàn đối nghịch nhau ở tầng nhân Direct3D / DXGI:
+
+```mermaid
+flowchart TD
+    Game["Trò chơi Direct3D (DirectX 11 / 12)"] --> SwapChain["Chuỗi Hoán Đổi Khung Hình (IDXGISwapChain)"]
+    SwapChain --> CheckMode{"Kiểm tra Chế độ Hook (g_hookMode)"}
+    subgraph Mode_Borderless["Chế độ 0: DXGI Borderless Hook (Cưỡng bức Cửa sổ DWM)"]
+        CheckMode -->|g_hookMode == 0| ForceWin["Ép pDesc->Windowed = TRUE"]
+        ForceWin --> StripBorder["MakeWindowBorderless: Xóa viền cửa sổ thành Borderless"]
+        StripBorder --> BlockFS["Chặn SetFullscreenState(TRUE) -> Ép chạy DWM iFlip"]
+        BlockFS --> ExtWindow["Cửa sổ ngoài của Flutter phủ đè lên trên"]
+    end
+    subgraph Mode_SharedTexture["Chế độ 1: Direct3D Shared Texture Injection (OBS / Discord Style)"]
+        CheckMode -->|g_hookMode == 1| PassThru["GIỮ NGUYÊN 100% trạng thái hiển thị của Game"]
+        PassThru --> AllowFS["Cho phép Fullscreen Exclusive tự nhiên của DirectX"]
+        AllowFS --> HookPresent["Chỉ can thiệp duy nhất tại hàm IDXGISwapChain::Present"]
+        HookPresent --> CopyTex["CopySubresourceRegion: Chép kết cấu từ g_hSharedTexture vào BackBuffer"]
+        CopyTex --> GPUOutput["GPU xuất thẳng khung hình đã hòa trộn lên màn hình"]
+    end
+```
+
+#### 1. Bế tắc kỹ thuật gây ra hiện tượng "vẫn bị Hook Borderless" khi chọn Shared Texture
+- Trong mã nguồn C++ của thư viện `dxgi_hook.dll`, biến chế độ chia sẻ `g_hookMode` (nằm trong phân vùng dữ liệu dùng chung `#pragma data_seg(".shared")`) **chỉ được kiểm tra duy nhất bên trong hàm `Hooked_Present`** để quyết định có sao chép texture hay không.
+- Ngược lại, tại các hàm quản lý vòng đời cửa sổ và kích thước bộ đệm:
+  1. `Hooked_CreateSwapChain` & `Hooked_CreateSwapChainForHwnd`: Luôn tự ý ghi đè `pDesc->Windowed = TRUE`, xóa bỏ cờ `DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH`, và gọi hàm `MakeWindowBorderless`.
+  2. `Hooked_SetFullscreenState`: Luôn chặn đứng khi game yêu cầu toàn màn hình độc quyền và ép buộc cửa sổ về Borderless.
+  3. `Hooked_ResizeTarget` & `Hooked_ResizeBuffers`: Luôn gọi `MakeWindowBorderless`.
+- Hậu quả: Dù người chơi đã chuyển công tắc trong giao diện sang Shared Texture, mã C++ vẫn âm thầm thực thi toàn bộ logic cưỡng bức Borderless của Phương án 2, tước đoạt chế độ Fullscreen Exclusive gốc của trò chơi.
+
+#### 2. Giải pháp phân lập logic tuyệt đối (Strict Mode Isolation)
+- Toàn bộ các khối lệnh can thiệp kiểu dáng cửa sổ (`MakeWindowBorderless`, cưỡng bức `Windowed = TRUE`, triệt tiêu `ALLOW_MODE_SWITCH`, chặn `SetFullscreenState`) phải được bọc trong điều kiện nghiêm ngặt:
+  $$\text{if } (g\_hookMode == \text{OVERLAY\_HOOK_MODE\_BORDERLESS})$$
+- Khi người chơi chọn `OVERLAY_HOOK_MODE_SHARED_TEXTURE` ($g\_hookMode = 1$), DLL đóng vai trò một lớp trung chuyển trong suốt (Transparent Pass-Through), giữ nguyên vẹn 100% trạng thái hiển thị của trò chơi và chỉ kích hoạt duy nhất luồng tiêm kết cấu Direct3D tại khe thời gian `Present`.
+
+---
+
+## Cơ Chế Phân Tầng Lớp Hiển Thị Z-Order Của DWM Và Thanh Tác Vụ Cảm Ứng Windows 11 (DWM Z-Bands & Touchscreen Taskbar Hierarchy)
+
+### Bản Chất Vật Lý Của Không Gian Phân Tầng Cửa Sổ (Desktop Window Manager Z-Bands)
+
+Trình quản lý cửa sổ máy tính của Windows (Desktop Window Manager - DWM) không xếp chồng các cửa sổ trên một trục Z đơn lẻ, mà chia không gian hiển thị thành các dải phân tầng độc lập (Z-Bands) có thứ bậc ưu tiên từ thấp đến cao:
+
+```mermaid
+flowchart TD
+    subgraph DWM_Hierarchy["Hệ Thống Phân Tầng Z-Band của Windows DWM"]
+        Z_Desktop["Z-Band 1: Màn hình nền (Desktop Wallpaper / Icons)"]
+        Z_Normal["Z-Band 2: Cửa sổ Ứng dụng Tiêu chuẩn (Normal Applications)"]
+        Z_TopMost["Z-Band 3: Cửa sổ Luôn Trên Cùng (WS_EX_TOPMOST tiêu chuẩn)"]
+        Z_ToolWin["Cửa sổ gắn WS_EX_TOOLWINDOW: Bị DWM hạ bậc ưu tiên khi mất Focus"]
+        Z_SysChrome["Z-Band 4: Thành phần Hệ thống Tối cao (Shell_TrayWnd - Taskbar Cảm ứng)"]
+    end
+    Z_Normal --> Z_TopMost
+    Z_TopMost --> Z_ToolWin
+    Z_ToolWin -.->|Bị che lấp dưới| Z_SysChrome
+    Z_TopMost -.->|Đè lên hoàn toàn nếu không có ToolWindow| Z_SysChrome
+```
+
+#### 1. Bế tắc kỹ thuật khiến Quick Panel nằm dưới Taskbar cảm ứng
+- Khi người dùng kích hoạt tính năng "Optimize taskbar for touch interactions" trên Windows 11:
+  - Khi không có cửa sổ trò chơi chiếm trọn màn hình, thanh Taskbar hệ thống (`Shell_TrayWnd`) tự động chuyển sang trạng thái mở rộng (Expanded State) để tối ưu cho thao tác chạm ngón tay.
+  - DWM nâng thứ bậc hiển thị của `Shell_TrayWnd` lên dải Z-Band hệ thống ưu tiên tối cao (`ZBID_SYSTEM_TOOLS`).
+- Trong hàm `NativeWindowService.showOverlayNoActivate()`, cửa sổ lớp phủ được gán cờ kiểu dáng mở rộng:
+  $$\text{WS\_EX\_TOOLWINDOW} \quad (0x00000080)$$
+- **Quy tắc hiển thị của Windows**: Cửa sổ mang cờ `WS_EX_TOOLWINDOW` (dành cho thanh công cụ nổi) kết hợp với cờ không kích hoạt `WS_EX_NOACTIVATE` / `SWP_NOACTIVATE` sẽ bị DWM chủ động hạ bậc Z-order xuống dưới các cửa sổ hệ thống (`Shell_TrayWnd`) khi ở ngoài màn hình Desktop. Kết quả là thanh Taskbar đè lên mép dưới của Quick Settings Panel, che khuất các nút điều khiển quan trọng.
+
+#### 2. Giải pháp khôi phục Z-Order tối cao
+1. **Loại bỏ cờ hạ bậc `WS_EX_TOOLWINDOW`**:
+   - Khi hiển thị lớp phủ, loại bỏ hoàn toàn cờ `WS_EX_TOOLWINDOW` khỏi cấu trúc extended style. Cửa sổ giữ nguyên trạng thái `WS_EX_TOPMOST` thuần túy để DWM xếp ngang hàng hoặc cao hơn `Shell_TrayWnd`.
+2. **Kỹ thuật neo đỉnh Z-Order (Topmost Re-assertion)**:
+   - Khi kích hoạt hiển thị, phát lệnh gọi API `SetWindowPos(hwnd, HWND_TOPMOST, ...)` kết hợp kiểm tra địa chỉ cửa sổ `Shell_TrayWnd` để tái lập quyền ưu tiên hiển thị trước thanh Taskbar.
+3. **Cơ chế khoảng đệm vùng an toàn thích ứng (Adaptive Safe Area Margin)**:
+   - Để đảm bảo giao diện luôn hiển thị trọn vẹn 100% trong mọi tình huống DWM cưỡng bức Taskbar, tầng giao diện [[OverlayScreen]] có thể tự động cộng thêm khoảng đệm đáy (`EdgeInsets.only(bottom: taskbarHeight)`) tương đương chiều cao của thanh Taskbar cảm ứng (khoảng 64px - 72px) khi phát hiện người dùng đang thao tác ngoài màn hình Desktop.
+
+---
+
+## Kiến Trúc Điều Khiển Khung Hình Và Lớp Phủ Thống Kê Qua RivaTuner Statistics Server (RTSS IPC & Native Hook Architecture)
+
+### Bản Chất Vật Lý Của Cơ Chế Lớp Phủ OSD Trong RivaTuner Statistics Server
+
+RivaTuner Statistics Server (RTSS) hoạt động như một máy chủ tiêm mã độc lập (DLL Injector) trong không gian bộ nhớ của Windows:
+
+1. **Vùng nhớ chia sẻ có định danh (Named Shared Memory)**:
+   - RTSS tạo ra một khối bộ nhớ dùng chung được định danh bởi hệ điều hành (`RTSSSharedMemoryV2`).
+   - Cấu trúc tiêu đề (`RTSS_SHARED_MEMORY`) chứa các mảng thông tin về tiến trình đồ họa đang chạy (`RTSS_SHARED_MEMORY_APP_ENTRY`), bao gồm mã định danh tiến trình (Process ID - PID), đường dẫn tệp thực thi (`szProcessPath`), tốc độ khung hình tức thời (`dwStatFramerate`), và bộ đệm văn bản hiển thị lớp phủ (`szOSD`).
+2. **Thư viện can thiệp đồ họa chuyên dụng (`RTSSHooks64.dll`)**:
+   - Khi một ứng dụng đồ họa (Direct3D 9/11/12, Vulkan, OpenGL) được khởi tạo, Windows nạp thư viện `RTSSHooks64.dll` vào không gian bộ nhớ của trò chơi.
+   - DLL này móc chặn chuỗi hiển thị khung hình tại hàm xuất hình phần cứng (`IDXGISwapChain::Present`), trực tiếp vẽ lớp phủ văn bản (On-Screen Display - OSD) lên trên bộ đệm khung hình sau cùng trước khi gửi xuống bộ điều khiển xuất hình.
+
+```mermaid
+flowchart TD
+    subgraph AppSpace["Tiến trình Ứng dụng Quản lý (Handheld Tool)"]
+        Ctrl["Bộ điều khiển RtssService"] -->|Giao tiếp FFI Win32| HooksDLL["Thư viện RTSSHooks64.dll"]
+        Ctrl -->|Đọc RAM trực tiếp MapViewOfFile| SharedMem["Vùng nhớ chia sẻ RTSSSharedMemoryV2"]
+    end
+
+    subgraph ServiceSpace["Tiến trình Nền Máy chủ (RTSS.exe)"]
+        RTSS_Proc["RTSS.exe Server"] <-->|Đồng bộ tín hiệu Win32 Event| HooksDLL
+        RTSS_Proc <--> SharedMem
+    end
+
+    subgraph GameSpace["Không gian Tiến trình Trò chơi (Game Process)"]
+        GameEngine["Nhân đồ họa Game (Direct3D 11/12 / Vulkan)"] --> RenderTarget["Bộ đệm khung hình (BackBuffer)"]
+        HooksDLLInjected["RTSSHooks64.dll (Đã tiêm vào Game)"] -->|Móc hàm Present| RenderTarget
+        RenderTarget --> Display["Bộ điều khiển xuất hình GPU"]
+    end
+```
+
+---
+
+### Bế Tắc Kỹ Thuật Khi Điều Khiển Cấu Hình RTSS Qua Tệp Tin Cục Bộ (INI File I/O)
+
+#### 1. Hiện trạng xử lý cũ
+- Ứng dụng đọc và ghi trực tiếp các tham số cấu hình bằng cách phân tích chuỗi văn bản (String Parsing) trong tệp tin `Profiles\Global` tại thư mục cài đặt `C:\Program Files (x86)\RivaTuner Statistics Server\Profiles`.
+- Để bật OSD, ứng dụng ghi hai cặp khóa-giá trị: `EnableOSD=1` và `ShowForegroundStat=1`.
+
+#### 2. Thảm họa kỹ thuật và bế tắc thực tế
+- **Rào cản đặc quyền truy cập tệp (UAC Permission Denied)**: Thư mục `C:\Program Files (x86)` là vùng được hệ điều hành Windows bảo vệ nghiêm ngặt. Khi ứng dụng chạy dưới quyền hạn người dùng thông thường hoặc luồng không có quyền ghi, việc mở luồng ghi tệp tin thất bại (`Access is denied`), dẫn tới cấu hình không thể lưu xuống đĩa.
+- **Hiện tượng trơ cấu hình do thiếu tín hiệu liên lạc tiến trình (IPC Signal Lack)**: Kể cả khi tệp tin INI được ghi thành công, tiến trình `RTSS.exe` và các trò chơi đang chạy trong RAM không hề biết cấu hình trên đĩa đã thay đổi vì chúng đã nạp cấu hình vào bộ nhớ từ thời điểm khởi động. Thiếu tín hiệu thông báo cưỡng bức làm mới (`UpdateProfiles`), các thay đổi về giới hạn khung hình hay OSD hoàn toàn bị bỏ qua.
+- **Hiện tượng OSD rỗng do nhầm lẫn cờ hiển thị (`EnableOSD` so với `EnableStat`)**: 
+  - Trong cấu trúc quản trị của RTSS, `EnableOSD` chỉ là cờ cho phép kích hoạt hệ thống con OSD bên trong game.
+  - Cờ quyết định việc RTSS **tự động vẽ đồng hồ đo khung hình (FPS Counter) tích hợp của chính nó** lên màn hình là `EnableStat`. 
+  - Nếu `EnableStat = 0`, RTSS vẫn hook thành công vào game nhưng màn hình không hiển thị bất kỳ thông số nào vì bộ đệm OSD rỗng.
+
+#### 3. Cách thức giải quyết triệt để (Native DLL Inter-Process Communication)
+- Chuyển đổi 100% việc quản lý cấu hình sang sử dụng các hàm Win32 API xuất trực tiếp từ `RTSSHooks64.dll` qua FFI:
+  1. Nạp hồ sơ cấu hình toàn cục: `LoadProfile("")`.
+  2. Ghi tham số trực tiếp vào vùng nhớ điều khiển: `SetProfileProperty("EnableOSD", ...)`, `SetProfileProperty("EnableStat", ...)`, `SetProfileProperty("FramerateLimit", ...)`.
+  3. Lưu giữ cấu hình: `SaveProfile("")`.
+  4. **Phát tín hiệu đồng bộ toàn hệ thống (`UpdateProfiles()`)**: Hàm này gửi thông điệp sự kiện IPC tới toàn bộ các ứng dụng 3D đang chạy để đồng bộ ngay lập tức trong khung hình tiếp theo mà không cần khởi động lại trò chơi.
+
+---
+
+### Cơ Chế Giám Sát Và Tự Động Khôi Phục Tiến Trình (Watchdog Process Resurrection)
+
+#### 1. Bế tắc khi người dùng tắt RTSS ở khay hệ thống
+- Người dùng có thể vô tình nhấn "Close" trên biểu tượng RTSS ở khay hệ thống (System Tray). Lúc này tiến trình `RTSS.exe` bị hủy (`TerminateProcess`), vùng nhớ chia sẻ `RTSSSharedMemoryV2` bị đóng.
+- Khi người dùng quay lại trò chơi, toàn bộ tính năng khóa FPS và hiển thị OSD bị tê liệt hoàn toàn mà không có cơ chế nào tự động nhận biết để phục hồi.
+
+#### 2. Kiến trúc Giám sát Cửa sổ Kích hoạt (Foreground Window Watchdog Architecture)
+- Thiết lập một luồng kiểm tra trạng thái định kỳ phối hợp cùng sự kiện cửa sổ:
+  1. **Kiểm tra trạng thái kết nối bộ nhớ chia sẻ**: Sử dụng hàm `OpenFileMappingW(FILE_MAP_READ, FALSE, L"RTSSSharedMemoryV2")`. Nếu trả về con trỏ rỗng (`NULL`), xác định tiến trình RTSS đã biến mất khỏi hệ thống.
+  2. **Nhận diện trạng thái kích hoạt trò chơi**: Gọi hàm `GetForegroundWindow()` từ thư viện `user32.dll` để lấy tay nắm cửa sổ đang hoạt động trên cùng. Lấy đường dẫn tệp thực thi của tiến trình qua `GetWindowThreadProcessId` và `QueryFullProcessImageNameW`.
+  3. **Khởi chạy cưỡng bức ngầm**: Khi phát hiện cửa sổ kích hoạt là một trò chơi (không thuộc các tiến trình hệ thống như `explorer.exe`, `ShellExperienceHost.exe`) hoặc khi người dùng mở [[QuickPanel]], nếu cấu hình OSD hoặc FPS Limit đang ở trạng thái kích hoạt, hệ thống tự động gọi hàm khởi chạy tiến trình tách rời (`ProcessStartMode.detached`) đối với `RTSS.exe` để tái thiết lập toàn bộ chuỗi theo dõi.
+
+```mermaid
+flowchart TD
+    Timer["Bộ đếm thời gian 1 Giây (Watchdog Timer)"] --> CheckMem{"Kiểm tra OpenFileMappingW('RTSSSharedMemoryV2')"}
+    CheckMem -->|Con trỏ hợp lệ| Normal["RTSS đang hoạt động bình thường"]
+    CheckMem -->|Trả về NULL (Tiến trình bị đóng)| CheckUser{"Người dùng có bật OSD / Giới hạn FPS?"}
+    CheckUser -->|Không| Idle["Giữ nguyên trạng thái nghỉ"]
+    CheckUser -->|Có kích hoạt| CheckFG["Đọc GetForegroundWindow() từ user32.dll"]
+    CheckFG --> IsGame{"Tiến trình kích hoạt != explorer.exe?"}
+    IsGame -->|Đúng (Đang trong game hoặc mở Panel)| Revive["Gọi Process.start(RTSS.exe, mode: detached)"]
+    Revive --> Reconnect["Tự động kết nối lại RTSSSharedMemoryV2 & Đồng bộ Profile"]
+    IsGame -->|Sai (Đang ở Desktop)| Idle
+```
+
+---
+
+## Cơ Chế Bơm Dữ Liệu Cảm Biến Và Định Dạng Thẻ Văn Bản Vào RTSS OSD Shared Memory (Dynamic OSD Text Injection & Slot Formatting)
+
+### Bản Chất Vật Lý Của Bộ Đệm Ký Tự OSD (RTSS Shared Memory Text Buffer)
+
+Trong kiến trúc của RivaTuner Statistics Server, việc hiển thị văn bản lớp phủ động không thông qua tệp tin cấu hình tĩnh mà can thiệp trực tiếp vào bộ đệm RAM của tiến trình RTSS:
+
+1. **Cấu trúc Ô nhớ Lớp phủ Độc lập (OSD Slot Descriptor - `RTSS_SHARED_MEMORY_OSD_ENTRY`)**:
+   - Vùng nhớ chia sẻ `RTSSSharedMemoryV2` phân bổ một mảng các cấu trúc ô nhớ tại độ lệch `dwOSDArrOffset` từ đầu khối nhớ.
+   - Mỗi ô nhớ chứa hai trường văn bản ANSI cốt lõi:
+     - Chuỗi định danh quyền sở hữu (`szOSDOwner` - kích thước 256 byte): Ứng dụng khách chiếm quyền ô nhớ bằng cách ghi định danh độc quyền (ví dụ `"WindowsHandheldTool"`).
+     - Chuỗi nội dung lớp phủ mở rộng (`szOSDEx` - kích thước 4096 byte trong phiên bản bộ nhớ 2.7 trở lên): Nơi chứa chuỗi văn bản trực tiếp cần hiển thị đè lên màn hình trò chơi.
+2. **Bộ phân giải thẻ định dạng văn bản (RTSS Tag Formatting Engine)**:
+   - Nhân render Direct3D/Vulkan của RTSS tích hợp trình phân giải ký tự định dạng (Markup Tag Parser):
+     - Thẻ màu sắc: `<C=RRGGBB>` (ví dụ `<C=00FF80>` đổi màu lục, `<C=FFAA00>` đổi màu cam, `<C=FF4444>` đổi màu đỏ cảnh báo nhiệt độ cao).
+     - Thẻ tỉ lệ kích thước font: `<S=Percentage>` (ví dụ `<S=75>` thu nhỏ font xuống 75%, `<S=120>` phóng to 120%).
+     - Ký tự xuống dòng `\r\n`: Chia tách văn bản thành bảng cột nhiều dòng (Multi-line Grid).
+3. **Cơ chế kích hoạt cập nhật khung hình (Global Frame Counter Tick - `dwOSDFrame`)**:
+   - Sau khi sao chép chuỗi định dạng vào ô nhớ `szOSDEx`, ứng dụng tăng giá trị trường số nguyên 32-bit `dwOSDFrame++`.
+   - Vòng lặp xuất hình `Present()` của RTSS bên trong game liên tục kiểm tra biến này; khi phát hiện giá trị thay đổi, bộ tạo font phần cứng (Direct3D Sprite Engine) lập tức kết xuất lại lớp phủ mới mà không gây sụt giảm tốc độ khung hình (Frame Drop).
+
+```mermaid
+flowchart TD
+    subgraph Sensors["Tầng Thu Thập Cảm Biến Phần Cứng (Hardware Telemetry)"]
+        SMU["Bảng Cảm Biến PM Table: Công Suất TDP Watt, Tốc Độ Quạt RPM"]
+        WMI["Trình Giám Sát Hệ Thống: Nhiệt Độ CPU, Tải CPU %, Dung Lượng RAM, Mức Pin %"]
+        RTSS_Live["RTSS Hook: Tốc Độ Khung Hình Live FPS"]
+    end
+
+    subgraph Generator["Bộ Định Dạng Lớp Phủ (OSD Formatter)"]
+        Sensors --> FormatEngine{"Lựa chọn Bố cục Hiển thị (Layout Selector)"}
+        FormatEngine -->|Bố cục Dải Ngang Thu gọn| Compact["Dải 1 Dòng: FPS | TDP | CPU | RAM | BAT"]
+        FormatEngine -->|Bố cục Cột Chi tiết| MultiLine["Bảng Nhiều Hàng: Dòng FPS, Dòng CPU, Dòng PIN..."]
+        Compact --> TagInjector["Bổ sung Thẻ Màu Sắc <C=RRGGBB> Theo Ngưỡng Tải/Nhiệt"]
+        MultiLine --> TagInjector
+    end
+
+    subgraph MemoryBuffer["Bộ Nhớ Chia Sẻ Hệ Thống (RTSSSharedMemoryV2)"]
+        TagInjector -->|Ghi chuỗi vào| Entry["Ô nhớ pEntry->szOSDEx (4096 Byte)"]
+        TagInjector -->|Tăng biến đếm| FrameTick["Tăng biến đếm pMem->dwOSDFrame++"]
+    end
+
+    subgraph GameHook["Tiến Trình Trò Chơi (Game DirectX/Vulkan)"]
+        FrameTick -->|Kích hoạt Present Hook| D3DRender["RTSSHooks64.dll vẽ lớp phủ trực tiếp lên BackBuffer"]
+    end
+```
+
+---
+
+### Bế Tắc Kỹ Thuật Khi Chỉ Sử Dụng Đồng Hồ Đo Mặc Định Của RTSS (The "Why")
+
+#### 1. Hiện trạng xử lý cũ
+- Ứng dụng chỉ kích hoạt cờ hiển thị mặc định của RTSS (`EnableStat = 1`).
+
+#### 2. Thảm họa kỹ thuật và bế tắc thực tế
+- Cờ `EnableStat` là một bộ đếm nội bộ cứng nhắc của RTSS. Nó chỉ có khả năng vẽ duy nhất 1 thông số là tốc độ khung hình (`60 FPS`) hoặc thời gian dựng hình (`16.6 ms`).
+- Trên thiết bị chơi game cầm tay (Windows Handheld PC), người chơi đối mặt với rào cản nghiêm trọng về giới hạn tản nhiệt (Thermal Throttling) và thời lượng pin. Người chơi hoàn toàn không thể theo dõi:
+  - Máy đang tiêu thụ bao nhiêu Watt (TDP thực tế của APU).
+  - Nhiệt độ chip có đang vượt ngưỡng nguy hiểm (> 85°C) hay không.
+  - Tải dung lượng RAM bộ nhớ đồ họa chia sẻ (UMA VRAM).
+  - Tỉ lệ phần trăm pin còn lại để kịp thời cắm sạc.
+
+#### 3. Cách thức giải quyết triệt để (Dynamic OSD Injection)
+- Ứng dụng Handheld Tool chủ động điều phối luồng văn bản bằng cách:
+  1. Cho phép người dùng tùy chọn bật/tắt độc lập 7 chỉ số: Tốc độ khung hình (FPS), Công suất điện (TDP Watt), Nhiệt độ chip (CPU Temp), Tải CPU (CPU %), Dung lượng RAM (RAM GB), Mức độ pin (Battery %), Tốc độ quạt (Fan %).
+  2. Cung cấp 2 kiểu bố cục hiển thị phù hợp với kích thước màn hình cầm tay (7 - 8.4 inch):
+     - **Bố cục Thu gọn 1 dòng (Compact Banner)**: Gom toàn bộ thông số trên 1 dải ngang ở đỉnh màn hình nhằm tối đa hóa diện tích quan sát thế giới game.
+     - **Bố cục Chi tiết nhiều dòng (Detailed Vertical)**: Hiển thị dạng bảng cột truyền thống phân chia rõ từng thành phần.
+  3. Ánh xạ các thuộc tính cấu hình này vào tệp lưu trữ [[ConfigService]] và cập nhật định kỳ mỗi giây qua bộ nhớ chia sẻ.
+
+
+

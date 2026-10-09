@@ -62,29 +62,56 @@ class AutostartService extends ChangeNotifier {
     try {
       if (enable) {
         final exePath = Platform.resolvedExecutable;
-        // Tạo tác vụ với quyền HIGHEST, kích hoạt khi đăng nhập người dùng (ONLOGON)
-        final result = await Process.run('schtasks', [
-          '/create',
-          '/tn',
-          _taskName,
-          '/tr',
-          '"$exePath"',
-          '/sc',
-          'onlogon',
-          '/rl',
-          'highest',
-          '/f',
+        final exeDir = File(exePath).parent.path;
+
+        // Tạo tác vụ bằng PowerShell với đầy đủ thuộc tính:
+        // 1. Cho phép chạy khi dùng nguồn PIN (AllowStartIfOnBatteries, DontStopIfGoingOnBatteries)
+        // 2. Thiết lập thư mục làm việc (WorkingDirectory = exeDir) để nạp đúng config.json và driver
+        // 3. Quyền hạn cao nhất (Highest) bỏ qua rào cản UAC khi đăng nhập (ONLOGON)
+        final psCommand =
+            "\$action = New-ScheduledTaskAction -Execute '$exePath' -WorkingDirectory '$exeDir'; "
+            "\$trigger = New-ScheduledTaskTrigger -AtLogOn; "
+            "\$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0 -Priority 4; "
+            "\$principal = New-ScheduledTaskPrincipal -UserId \$env:USERNAME -LogonType Interactive -RunLevel Highest; "
+            "Register-ScheduledTask -TaskName '$_taskName' -Action \$action -Trigger \$trigger -Settings \$settings -Principal \$principal -Force;";
+
+        final result = await Process.run('powershell', [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          psCommand,
         ]);
 
         if (result.exitCode == 0) {
           _isEnabled = true;
           _config?.set('system.autostart', true);
-          _logger.info('Enabled Windows autostart successfully via Task Scheduler');
+          _logger.info('Enabled Windows autostart successfully via Task Scheduler (Battery-aware & Custom WorkingDir)');
           notifyListeners();
           return true;
         } else {
-          _logger.error('Failed to create autostart Task: ${result.stderr}');
-          return false;
+          _logger.warning('PowerShell Register-ScheduledTask error: ${result.stderr}, falling back to schtasks');
+          final fallback = await Process.run('schtasks', [
+            '/create',
+            '/tn',
+            _taskName,
+            '/tr',
+            '"$exePath"',
+            '/sc',
+            'onlogon',
+            '/rl',
+            'highest',
+            '/f',
+          ]);
+          if (fallback.exitCode == 0) {
+            _isEnabled = true;
+            _config?.set('system.autostart', true);
+            notifyListeners();
+            return true;
+          } else {
+            _logger.error('Failed to create autostart Task: ${fallback.stderr}');
+            return false;
+          }
         }
       } else {
         // Xóa tác vụ khởi động

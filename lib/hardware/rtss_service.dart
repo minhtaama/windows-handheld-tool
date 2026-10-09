@@ -29,8 +29,28 @@ typedef _UnmapViewOfFileDart = int Function(Pointer<Void> lpBaseAddress);
 typedef _CloseHandleC = Int32 Function(Pointer<Void> hObject);
 typedef _CloseHandleDart = int Function(Pointer<Void> hObject);
 
+// Các hàm Win32 API được xuất bởi RTSSHooks64.dll
+typedef _LoadProfileC = Void Function(Pointer<Uint8> lpProfile);
+typedef _LoadProfileDart = void Function(Pointer<Uint8> lpProfile);
+
+typedef _SaveProfileC = Void Function(Pointer<Uint8> lpProfile);
+typedef _SaveProfileDart = void Function(Pointer<Uint8> lpProfile);
+
+typedef _SetProfilePropertyC = Int32 Function(
+    Pointer<Uint8> lpPropertyName, Pointer<Uint8> lpPropertyData, Uint32 dwPropertySize);
+typedef _SetProfilePropertyDart = int Function(
+    Pointer<Uint8> lpPropertyName, Pointer<Uint8> lpPropertyData, int dwPropertySize);
+
+typedef _GetProfilePropertyC = Int32 Function(
+    Pointer<Uint8> lpPropertyName, Pointer<Uint8> lpPropertyData, Uint32 dwPropertySize);
+typedef _GetProfilePropertyDart = int Function(
+    Pointer<Uint8> lpPropertyName, Pointer<Uint8> lpPropertyData, int dwPropertySize);
+
+typedef _UpdateProfilesC = Void Function();
+typedef _UpdateProfilesDart = void Function();
+
 /// Dịch vụ kết nối và điều khiển RivaTuner Statistics Server (RTSS).
-/// Sử dụng trực tiếp Win32 Named Shared Memory (RTSSSharedMemoryV2) qua Dart FFI (First Principles).
+/// Sử dụng trực tiếp Win32 Named Shared Memory (RTSSSharedMemoryV2) và RTSSHooks64.dll qua Dart FFI (First Principles).
 class RtssService {
   static const _logger = AppLogger('RtssService');
   static final RtssService instance = RtssService._();
@@ -39,13 +59,23 @@ class RtssService {
   }
 
   static const int _fileMapRead = 0x0004;
+  static const int _fileMapAllAccess = 0x001F;
   static const int _rtssSignature = 0x53535452; // 'RTSS' trong mã ASCII Hex (Little Endian)
+  static const String _osdAppOwner = 'WindowsHandheldTool';
 
   late final _OpenFileMappingDart _openFileMapping;
   late final _MapViewOfFileDart _mapViewOfFile;
   late final _UnmapViewOfFileDart _unmapViewOfFile;
   late final _CloseHandleDart _closeHandle;
   bool _ffiLoaded = false;
+
+  DynamicLibrary? _rtssHooksDll;
+  _LoadProfileDart? _loadProfile;
+  _SaveProfileDart? _saveProfile;
+  _SetProfilePropertyDart? _setProfileProperty;
+  _GetProfilePropertyDart? _getProfileProperty;
+  _UpdateProfilesDart? _updateProfiles;
+  bool _hooksLoaded = false;
 
   String? _cachedProfilePath;
 
@@ -63,6 +93,110 @@ class RtssService {
       _ffiLoaded = true;
     } catch (_) {
       _ffiLoaded = false;
+    }
+  }
+
+  void _initHooksDll() {
+    if (_hooksLoaded) return;
+    for (final exePath in candidateExePaths) {
+      final dir = File(exePath).parent.path;
+      final dllPath = '$dir\\RTSSHooks64.dll';
+      if (File(dllPath).existsSync()) {
+        try {
+          _rtssHooksDll = DynamicLibrary.open(dllPath);
+          _loadProfile = _rtssHooksDll!
+              .lookupFunction<_LoadProfileC, _LoadProfileDart>('LoadProfile');
+          _saveProfile = _rtssHooksDll!
+              .lookupFunction<_SaveProfileC, _SaveProfileDart>('SaveProfile');
+          _setProfileProperty = _rtssHooksDll!
+              .lookupFunction<_SetProfilePropertyC, _SetProfilePropertyDart>(
+                  'SetProfileProperty');
+          _getProfileProperty = _rtssHooksDll!
+              .lookupFunction<_GetProfilePropertyC, _GetProfilePropertyDart>(
+                  'GetProfileProperty');
+          _updateProfiles = _rtssHooksDll!
+              .lookupFunction<_UpdateProfilesC, _UpdateProfilesDart>(
+                  'UpdateProfiles');
+          _hooksLoaded = true;
+          _logger.info('Connected to RTSSHooks64.dll successfully: $dllPath');
+          break;
+        } catch (e) {
+          _logger.warning('Failed to load functions from RTSSHooks64.dll: $e');
+        }
+      }
+    }
+  }
+
+  Pointer<Uint8> _stringToAnsi(String str) {
+    final units = str.codeUnits;
+    final ptr = calloc<Uint8>(units.length + 1);
+    for (int i = 0; i < units.length; i++) {
+      ptr[i] = units[i];
+    }
+    ptr[units.length] = 0;
+    return ptr;
+  }
+
+  bool _setHookProfilePropertyDword(String propertyName, int value) {
+    _initHooksDll();
+    if (!_hooksLoaded ||
+        _loadProfile == null ||
+        _setProfileProperty == null ||
+        _saveProfile == null ||
+        _updateProfiles == null) {
+      return false;
+    }
+
+    Pointer<Uint8>? namePtr;
+    Pointer<Uint8>? emptyPtr;
+    Pointer<Uint32>? valPtr;
+    try {
+      emptyPtr = _stringToAnsi('');
+      namePtr = _stringToAnsi(propertyName);
+      valPtr = calloc<Uint32>();
+      valPtr.value = value;
+
+      _loadProfile!(emptyPtr);
+      final res = _setProfileProperty!(namePtr, valPtr.cast<Uint8>(), 4);
+      _saveProfile!(emptyPtr);
+      _updateProfiles!();
+      return res != 0;
+    } catch (e) {
+      _logger.warning('Error setting RTSS hook property $propertyName: $e');
+      return false;
+    } finally {
+      if (emptyPtr != null) calloc.free(emptyPtr);
+      if (namePtr != null) calloc.free(namePtr);
+      if (valPtr != null) calloc.free(valPtr);
+    }
+  }
+
+  int? _getHookProfilePropertyDword(String propertyName) {
+    _initHooksDll();
+    if (!_hooksLoaded || _loadProfile == null || _getProfileProperty == null) {
+      return null;
+    }
+
+    Pointer<Uint8>? namePtr;
+    Pointer<Uint8>? emptyPtr;
+    Pointer<Uint32>? valPtr;
+    try {
+      emptyPtr = _stringToAnsi('');
+      namePtr = _stringToAnsi(propertyName);
+      valPtr = calloc<Uint32>();
+
+      _loadProfile!(emptyPtr);
+      final res = _getProfileProperty!(namePtr, valPtr.cast<Uint8>(), 4);
+      if (res != 0) {
+        return valPtr.value;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    } finally {
+      if (emptyPtr != null) calloc.free(emptyPtr);
+      if (namePtr != null) calloc.free(namePtr);
+      if (valPtr != null) calloc.free(valPtr);
     }
   }
 
@@ -398,49 +532,74 @@ class RtssService {
     }
   }
 
-  /// Đọc mức giới hạn FPS hiện tại được cấu hình trong RTSS Profile Global.
+  /// Đọc mức giới hạn FPS hiện tại được cấu hình trong RTSS.
   int getFpsLimit() {
+    final hookVal = _getHookProfilePropertyDword('FramerateLimit');
+    if (hookVal != null) return hookVal;
     final val = _getProfileValue('Framerate', 'Limit');
     return val != null ? (int.tryParse(val) ?? 0) : 0;
   }
 
   /// Thiết lập mức giới hạn FPS (Framerate Limit) cho toàn bộ game trong RTSS.
   bool setFpsLimit(int fps) {
-    return _setProfileValues('Framerate', {
+    _setHookProfilePropertyDword('FramerateLimit', fps);
+    _setProfileValues('Framerate', {
       'Limit': '$fps',
       'LimitDenominator': '1',
     });
+    return true;
   }
 
   /// Kiểm tra xem lớp phủ OSD có đang được kích hoạt hay không.
   bool isOsdEnabled() {
+    final hookVal = _getHookProfilePropertyDword('EnableOSD');
+    if (hookVal != null) return hookVal == 1;
     final val = _getProfileValue('OSD', 'EnableOSD');
     return val == '1';
   }
 
   /// Bật hoặc tắt lớp phủ OSD và thông số FPS trên màn hình game.
+  /// Bật đồng thời EnableOSD (subsystem OSD) và EnableStat (vẽ FPS tích hợp của RTSS).
   bool setOsdEnabled(bool enabled) {
-    return _setProfileValues('OSD', {
-      'EnableOSD': enabled ? '1' : '0',
-      'ShowForegroundStat': enabled ? '1' : '0',
+    final val = enabled ? 1 : 0;
+    _setHookProfilePropertyDword('EnableOSD', val);
+    _setHookProfilePropertyDword('EnableStat', val);
+    _setProfileValues('OSD', {
+      'EnableOSD': '$val',
+      'EnableStat': '$val',
+      'ShowForegroundStat': '$val',
     });
+    return true;
   }
 
   /// Lấy kích thước phóng đại font chữ OSD (ZoomRatio: 1, 2, 3, 4).
   int getOsdZoom() {
+    final hookVal = _getHookProfilePropertyDword('ZoomRatio');
+    if (hookVal != null) return hookVal.clamp(1, 4);
     final val = _getProfileValue('OSD', 'ZoomRatio');
     return val != null ? (int.tryParse(val) ?? 2).clamp(1, 4) : 2;
   }
 
   /// Thiết lập kích thước phóng đại font chữ OSD.
   bool setOsdZoom(int zoom) {
-    return _setProfileValues('OSD', {
-      'ZoomRatio': '${zoom.clamp(1, 4)}',
+    final clamped = zoom.clamp(1, 4);
+    _setHookProfilePropertyDword('ZoomRatio', clamped);
+    _setProfileValues('OSD', {
+      'ZoomRatio': '$clamped',
     });
+    return true;
   }
 
   /// Lấy vị trí góc màn hình hiển thị OSD.
   RtssOsdPosition getOsdPosition() {
+    final hookX = _getHookProfilePropertyDword('PositionX');
+    final hookY = _getHookProfilePropertyDword('PositionY');
+    if (hookX != null && hookY != null) {
+      for (final pos in RtssOsdPosition.values) {
+        if (pos.x == hookX && pos.y == hookY) return pos;
+      }
+    }
+
     final xStr = _getProfileValue('OSD', 'PositionX');
     final yStr = _getProfileValue('OSD', 'PositionY');
     final x = int.tryParse(xStr ?? '') ?? 1;
@@ -454,10 +613,163 @@ class RtssService {
 
   /// Thiết lập vị trí góc màn hình hiển thị OSD.
   bool setOsdPosition(RtssOsdPosition position) {
-    return _setProfileValues('OSD', {
+    _setHookProfilePropertyDword('PositionX', position.x);
+    _setHookProfilePropertyDword('PositionY', position.y);
+    _setProfileValues('OSD', {
       'PositionX': '${position.x}',
       'PositionY': '${position.y}',
     });
+    return true;
+  }
+
+  /// Bơm chuỗi văn bản định dạng vào ô nhớ OSD trong RTSSSharedMemoryV2.
+  /// RTSS sẽ tự động render văn bản này lên màn hình trò chơi Direct3D/Vulkan/OpenGL.
+  bool updateOsdText(String text) {
+    if (!_ffiLoaded) return false;
+
+    final namePtr = 'RTSSSharedMemoryV2'.toNativeUtf16();
+    Pointer<Void> handle = nullptr;
+    Pointer<Void> map = nullptr;
+
+    try {
+      handle = _openFileMapping(_fileMapAllAccess, 0, namePtr);
+      if (handle.address == 0) return false;
+
+      map = _mapViewOfFile(handle, _fileMapAllAccess, 0, 0, 0);
+      if (map.address == 0) return false;
+
+      final data = map.cast<Uint8>();
+      final sig = data.cast<Uint32>()[0];
+      if (sig != _rtssSignature) return false;
+
+      final ver = data.cast<Uint32>()[1];
+      final osdEntrySize = data.cast<Uint32>()[5];
+      final osdArrOffset = data.cast<Uint32>()[6];
+      final osdArrSize = data.cast<Uint32>()[7];
+
+      if (osdEntrySize == 0 || osdArrSize == 0) return false;
+
+      // Duyệt tìm slot của _osdAppOwner hoặc slot trống đầu tiên
+      int targetSlotIndex = -1;
+      for (int i = 0; i < osdArrSize; i++) {
+        final entryOffset = osdArrOffset + (i * osdEntrySize);
+        final entryPtr = data + entryOffset;
+
+        final ownerBytes = <int>[];
+        for (int b = 0; b < 256; b++) {
+          final c = (entryPtr + 256 + b).cast<Uint8>().value;
+          if (c == 0) break;
+          ownerBytes.add(c);
+        }
+        final owner = String.fromCharCodes(ownerBytes);
+
+        if (owner == _osdAppOwner) {
+          targetSlotIndex = i;
+          break;
+        } else if (owner.isEmpty && targetSlotIndex == -1) {
+          targetSlotIndex = i;
+        }
+      }
+
+      if (targetSlotIndex == -1) return false;
+
+      final entryOffset = osdArrOffset + (targetSlotIndex * osdEntrySize);
+      final entryPtr = data + entryOffset;
+
+      // 1. Ghi tên chủ sở hữu slot szOSDOwner (offset 256, dung lượng 256 byte)
+      final ownerUnits = _osdAppOwner.codeUnits;
+      for (int i = 0; i < ownerUnits.length && i < 255; i++) {
+        (entryPtr + 256 + i).cast<Uint8>().value = ownerUnits[i];
+      }
+      (entryPtr + 256 + ownerUnits.length.clamp(0, 255)).cast<Uint8>().value = 0;
+
+      // 2. Ghi chuỗi văn bản OSD
+      // Nếu ver >= 0x00020007 dùng szOSDEx (offset 512, 4096 bytes)
+      final textUnits = text.codeUnits;
+      if (ver >= 0x00020007) {
+        const maxLen = 4095;
+        for (int i = 0; i < textUnits.length && i < maxLen; i++) {
+          (entryPtr + 512 + i).cast<Uint8>().value = textUnits[i];
+        }
+        final endIdx = textUnits.length.clamp(0, maxLen);
+        (entryPtr + 512 + endIdx).cast<Uint8>().value = 0;
+      } else {
+        const maxLen = 255;
+        for (int i = 0; i < textUnits.length && i < maxLen; i++) {
+          (entryPtr + i).cast<Uint8>().value = textUnits[i];
+        }
+        final endIdx = textUnits.length.clamp(0, maxLen);
+        (entryPtr + endIdx).cast<Uint8>().value = 0;
+      }
+
+      // 3. Tăng trường dwOSDFrame (offset 32 trong RTSS_SHARED_MEMORY) để kích hoạt RTSS refresh ngay lập tức
+      final framePtr = (data + 32).cast<Uint32>();
+      framePtr.value = framePtr.value + 1;
+
+      return true;
+    } catch (e) {
+      _logger.warning('Lỗi updateOsdText: $e');
+      return false;
+    } finally {
+      if (map.address != 0) _unmapViewOfFile(map);
+      if (handle.address != 0) _closeHandle(handle);
+      calloc.free(namePtr);
+    }
+  }
+
+  /// Xóa sạch văn bản OSD do ứng dụng bơm vào khi người dùng tắt OSD.
+  bool clearOsdText() {
+    if (!_ffiLoaded) return false;
+
+    final namePtr = 'RTSSSharedMemoryV2'.toNativeUtf16();
+    Pointer<Void> handle = nullptr;
+    Pointer<Void> map = nullptr;
+
+    try {
+      handle = _openFileMapping(_fileMapAllAccess, 0, namePtr);
+      if (handle.address == 0) return false;
+
+      map = _mapViewOfFile(handle, _fileMapAllAccess, 0, 0, 0);
+      if (map.address == 0) return false;
+
+      final data = map.cast<Uint8>();
+      final sig = data.cast<Uint32>()[0];
+      if (sig != _rtssSignature) return false;
+
+      final osdEntrySize = data.cast<Uint32>()[5];
+      final osdArrOffset = data.cast<Uint32>()[6];
+      final osdArrSize = data.cast<Uint32>()[7];
+
+      for (int i = 0; i < osdArrSize; i++) {
+        final entryOffset = osdArrOffset + (i * osdEntrySize);
+        final entryPtr = data + entryOffset;
+
+        final ownerBytes = <int>[];
+        for (int b = 0; b < 256; b++) {
+          final c = (entryPtr + 256 + b).cast<Uint8>().value;
+          if (c == 0) break;
+          ownerBytes.add(c);
+        }
+        final owner = String.fromCharCodes(ownerBytes);
+
+        if (owner == _osdAppOwner) {
+          // Xóa trắng toàn bộ entry
+          for (int b = 0; b < osdEntrySize; b++) {
+            (entryPtr + b).cast<Uint8>().value = 0;
+          }
+          final framePtr = (data + 32).cast<Uint32>();
+          framePtr.value = framePtr.value + 1;
+          break;
+        }
+      }
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      if (map.address != 0) _unmapViewOfFile(map);
+      if (handle.address != 0) _closeHandle(handle);
+      calloc.free(namePtr);
+    }
   }
 }
 
@@ -512,4 +824,8 @@ class RtssFpsController extends HardwareController {
 
   RtssOsdPosition getOsdPosition() => _service.getOsdPosition();
   bool setOsdPosition(RtssOsdPosition pos) => _service.setOsdPosition(pos);
+
+  /// Cập nhật văn bản OSD tùy biến vào Shared Memory
+  bool updateOsdText(String text) => _service.updateOsdText(text);
+  bool clearOsdText() => _service.clearOsdText();
 }
