@@ -129,11 +129,8 @@ Future<void> _initSystemTray() async {
 
     final menu = Menu(
       items: [
-        MenuItem(
-          key: 'toggle_overlay',
-          label: 'Mở Quick Settings (Ctrl+Shift+Q)',
-        ),
-        MenuItem(key: 'virtual_keyboard', label: 'Bàn phím ảo (Ctrl+Shift+K)'),
+        MenuItem(key: 'toggle_overlay', label: 'Mở Panel'),
+        MenuItem(key: 'virtual_keyboard', label: 'Bàn phím ảo'),
         MenuItem(key: 'toggle_touchscreen', label: 'Bật/Tắt màn hình cảm ứng'),
         MenuItem.separator(),
         MenuItem(key: 'exit_app', label: 'Thoát ứng dụng'),
@@ -152,6 +149,11 @@ class _TrayListener extends TrayListener {
   @override
   void onTrayIconMouseDown() {
     OverlayController.instance.toggleOverlay();
+  }
+
+  @override
+  void onTrayIconRightMouseDown() {
+    trayManager.popUpContextMenu();
   }
 
   @override
