@@ -51,10 +51,11 @@
             "current": 50
         },
         "audio": {
-            "current": 60
+            "current": 50
         },
         "rtss": {
-            "fps_limit": 0
+            "fps_limit": 0,
+            "osd_enabled": true
         }
     }
 }

@@ -54,6 +54,11 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late int _widthPercent;
   late double _scale;
 
+  // Cấu hình RTSS OSD
+  late bool _rtssOsdEnabled;
+  late int _rtssOsdZoom;
+  late RtssOsdPosition _rtssOsdPosition;
+
   // Tab đang được chọn (0: Trang chủ, 1: Hiệu năng, 2: Thiết bị, 3: Cài đặt & Tiện ích)
   int _selectedTabIndex = 0;
 
@@ -114,6 +119,24 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     // Lấy cấu hình FPS limit từ file profile của RTSS hoặc từ config.json
     final savedFps = widget.config.get("hardware.rtss.fps_limit", 60);
     _fpsLimit = _rtssCtrl.isAvailable() ? _rtssCtrl.getValue() : savedFps;
+    _rtssOsdEnabled = widget.config.get("hardware.rtss.osd_enabled", true);
+    if (_rtssCtrl.isAvailable()) {
+      _rtssOsdEnabled = _rtssCtrl.isOsdEnabled();
+    }
+    _rtssOsdZoom = widget.config.get("hardware.rtss.osd_zoom", 2);
+    if (_rtssCtrl.isAvailable()) {
+      _rtssOsdZoom = _rtssCtrl.getOsdZoom();
+    }
+    final savedOsdPos = widget.config.get(
+      "hardware.rtss.osd_position",
+      "topLeft",
+    );
+    _rtssOsdPosition = RtssOsdPosition.values.firstWhere(
+      (p) => p.name == savedOsdPos,
+      orElse: () => _rtssCtrl.isAvailable()
+          ? _rtssCtrl.getOsdPosition()
+          : RtssOsdPosition.topLeft,
+    );
     _touchEnabled = TouchscreenService.isEnabled;
     _dxgiHookEnabled = DxgiHookService.instance.isEnabled;
     _widthPercent = widget.config.get("overlay.width_percent", 35);
@@ -123,6 +146,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _liveTdp = (_tdp * 0.85).round().clamp(_tdpCtrl.minVal, _tdp);
     _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
     _isRtssRunning = _rtssCtrl.isAvailable();
+    if (RtssInstallerService.isInstalled() && !_isRtssRunning) {
+      _startRtss();
+    }
     _telemetryData = SystemTelemetryService.instance.getSnapshot();
 
     // Lắng nghe sự kiện điều hướng từ Gamepad
@@ -187,8 +213,14 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           [1],
           [2],
           [3],
-          [4],
-          if (RtssInstallerService.isInstalled()) [5],
+          if (RtssInstallerService.isInstalled()) ...[
+            [4],
+            [5],
+            if (_rtssOsdEnabled) ...[
+              [6],
+              [7],
+            ],
+          ],
         ];
       case 2:
         return [
@@ -352,9 +384,23 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         } else if (_focusedIndex == 3) {
           _updateFan(max(_fanCtrl.minVal, _fan - _fanCtrl.step));
         } else if (_focusedIndex == 4 && RtssInstallerService.isInstalled()) {
-          if (!_isRtssRunning) _startRtss();
-        } else if (_focusedIndex == 5 && RtssInstallerService.isInstalled()) {
           _cyclePreset(const [0, 30, 40, 60], _fpsLimit, -1, _updateFpsLimit);
+        } else if (_focusedIndex == 5 && RtssInstallerService.isInstalled()) {
+          _toggleRtssOsd();
+        } else if (_focusedIndex == 6 && RtssInstallerService.isInstalled()) {
+          _cyclePreset(
+            const [1, 2, 3, 4],
+            _rtssOsdZoom,
+            -1,
+            _updateRtssOsdZoom,
+          );
+        } else if (_focusedIndex == 7 && RtssInstallerService.isInstalled()) {
+          _cyclePreset(
+            RtssOsdPosition.values,
+            _rtssOsdPosition,
+            -1,
+            _updateRtssOsdPosition,
+          );
         }
         break;
       case 2:
@@ -408,9 +454,18 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         } else if (_focusedIndex == 3) {
           _updateFan(min(_fanCtrl.maxVal, _fan + _fanCtrl.step));
         } else if (_focusedIndex == 4 && RtssInstallerService.isInstalled()) {
-          if (!_isRtssRunning) _startRtss();
-        } else if (_focusedIndex == 5 && RtssInstallerService.isInstalled()) {
           _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
+        } else if (_focusedIndex == 5 && RtssInstallerService.isInstalled()) {
+          _toggleRtssOsd();
+        } else if (_focusedIndex == 6 && RtssInstallerService.isInstalled()) {
+          _cyclePreset(const [1, 2, 3, 4], _rtssOsdZoom, 1, _updateRtssOsdZoom);
+        } else if (_focusedIndex == 7 && RtssInstallerService.isInstalled()) {
+          _cyclePreset(
+            RtssOsdPosition.values,
+            _rtssOsdPosition,
+            1,
+            _updateRtssOsdPosition,
+          );
         }
         break;
       case 2:
@@ -455,11 +510,20 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         } else if (_focusedIndex == 4) {
           if (!RtssInstallerService.isInstalled()) {
             _handleInstallRtss();
-          } else if (!_isRtssRunning) {
-            _startRtss();
+          } else {
+            _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
           }
         } else if (_focusedIndex == 5) {
-          _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
+          _toggleRtssOsd();
+        } else if (_focusedIndex == 6) {
+          _cyclePreset(const [1, 2, 3, 4], _rtssOsdZoom, 1, _updateRtssOsdZoom);
+        } else if (_focusedIndex == 7) {
+          _cyclePreset(
+            RtssOsdPosition.values,
+            _rtssOsdPosition,
+            1,
+            _updateRtssOsdPosition,
+          );
         }
         break;
       case 2:
@@ -562,6 +626,25 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     setState(() => _fpsLimit = val);
     _rtssCtrl.setValue(val);
     widget.config.set("hardware.rtss.fps_limit", val);
+  }
+
+  void _toggleRtssOsd() {
+    final next = !_rtssOsdEnabled;
+    setState(() => _rtssOsdEnabled = next);
+    _rtssCtrl.setOsdEnabled(next);
+    widget.config.set("hardware.rtss.osd_enabled", next);
+  }
+
+  void _updateRtssOsdZoom(int val) {
+    setState(() => _rtssOsdZoom = val);
+    _rtssCtrl.setOsdZoom(val);
+    widget.config.set("hardware.rtss.osd_zoom", val);
+  }
+
+  void _updateRtssOsdPosition(RtssOsdPosition pos) {
+    setState(() => _rtssOsdPosition = pos);
+    _rtssCtrl.setOsdPosition(pos);
+    widget.config.set("hardware.rtss.osd_position", pos.name);
   }
 
   void _updateBrightness(int val) {
@@ -759,13 +842,17 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           fpsLimit: _fpsLimit,
           liveFps: _liveFps,
           activeGame: _activeGame,
-          isRtssRunning: _isRtssRunning,
           rtssCtrl: _rtssCtrl,
           onFpsLimitChanged: _updateFpsLimit,
-          onStartRtss: _startRtss,
           isInstallingRtss: _isInstallingRtss,
           rtssInstallMsg: _rtssInstallMsg,
           onInstallRtss: _handleInstallRtss,
+          osdEnabled: _rtssOsdEnabled,
+          onToggleOsd: (_) => _toggleRtssOsd(),
+          osdZoom: _rtssOsdZoom,
+          onOsdZoomChanged: _updateRtssOsdZoom,
+          osdPosition: _rtssOsdPosition,
+          onOsdPositionChanged: _updateRtssOsdPosition,
         );
       case 2:
         return DeviceTab(

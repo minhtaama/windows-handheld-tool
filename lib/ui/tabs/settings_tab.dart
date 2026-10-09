@@ -151,120 +151,28 @@ class SettingsTab extends StatelessWidget {
         const SectionLabel(label: "TÙY BIẾN GIAO DIỆN"),
 
         // Tỷ lệ phóng đại UI Scale
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-          decoration: BoxDecoration(
-            color: AppTheme.cardBackground,
-            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-            border: Border.all(
-              color: focusedIndex == 6 ? AppTheme.accent : AppTheme.cardBorder,
-              width: focusedIndex == 6 ? 1.8 : 1.0,
-            ),
-            boxShadow: focusedIndex == 6
-                ? [
-                    BoxShadow(
-                      color: AppTheme.primary.withValues(alpha: 0.4),
-                      blurRadius: 14,
-                      spreadRadius: 1,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                : null,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.format_size_rounded,
-                    size: AppTheme.scaled(16),
-                    color: AppTheme.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      "Tỷ lệ hiển thị (UI Scale)",
-                      style: AppTheme.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  Text(
-                    "${(scale * 100).toInt()}%",
-                    style: AppTheme.title.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              PresetSelector<double>(
-                presets: const [0.9, 1.0, 1.1, 1.2],
-                selectedValue: scale,
-                labelBuilder: (preset) => "${(preset * 100).toInt()}%",
-                onSelected: onScaleChanged,
-              ),
-            ],
-          ),
+        PresetSelector<double>(
+          title: "Tỷ lệ hiển thị (UI Scale)",
+          icon: Icons.format_size_rounded,
+          currentValueText: "${(scale * 100).toInt()}%",
+          presets: const [0.9, 1.0, 1.1, 1.2],
+          selectedValue: scale,
+          labelBuilder: (preset) => "${(preset * 100).toInt()}%",
+          onSelected: onScaleChanged,
+          isFocused: focusedIndex == 6,
         ),
         const SizedBox(height: 12),
 
         // Độ rộng Side Panel
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-          decoration: BoxDecoration(
-            color: AppTheme.cardBackground,
-            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-            border: Border.all(
-              color: focusedIndex == 7 ? AppTheme.accent : AppTheme.cardBorder,
-              width: focusedIndex == 7 ? 1.8 : 1.0,
-            ),
-            boxShadow: focusedIndex == 7
-                ? [
-                    BoxShadow(
-                      color: AppTheme.primary.withValues(alpha: 0.4),
-                      blurRadius: 14,
-                      spreadRadius: 1,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                : null,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.aspect_ratio_rounded,
-                    size: AppTheme.scaled(16),
-                    color: AppTheme.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      "Độ rộng Side Panel",
-                      style: AppTheme.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  Text(
-                    "$widthPercent %",
-                    style: AppTheme.title.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              PresetSelector<int>(
-                presets: const [30, 35, 40, 45],
-                selectedValue: widthPercent,
-                labelBuilder: (preset) => "$preset%",
-                onSelected: onWidthPercentChanged,
-              ),
-            ],
-          ),
+        PresetSelector<int>(
+          title: "Độ rộng Side Panel",
+          icon: Icons.aspect_ratio_rounded,
+          currentValueText: "$widthPercent %",
+          presets: const [30, 35, 40, 45],
+          selectedValue: widthPercent,
+          labelBuilder: (preset) => "$preset%",
+          onSelected: onWidthPercentChanged,
+          isFocused: focusedIndex == 7,
         ),
         const SizedBox(height: 16),
 
@@ -333,12 +241,9 @@ class SettingsTab extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text("Handheld Gaming Tools", style: AppTheme.body),
+                    Text("Windows Handheld Tools", style: AppTheme.body),
                     const SizedBox(height: 2),
-                    Text(
-                      "Phiên bản 2.0 (Monochrome Clean Edition)",
-                      style: AppTheme.caption,
-                    ),
+                    Text("v1.0", style: AppTheme.caption),
                   ],
                 ),
               ),

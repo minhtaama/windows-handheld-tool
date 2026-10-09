@@ -257,39 +257,78 @@ class RtssService {
     return null;
   }
 
-  /// Đọc mức giới hạn FPS hiện tại được cấu hình trong RTSS Profile Global.
-  int getFpsLimit() {
+  /// Tìm đường dẫn tới thư mục ProfileTemplates của RTSS.
+  String? _findProfileTemplateDirectory() {
+    final candidatePaths = [
+      r'C:\Program Files (x86)\RivaTuner Statistics Server\ProfileTemplates',
+      r'C:\Program Files\RivaTuner Statistics Server\ProfileTemplates',
+      r'D:\Program Files (x86)\RivaTuner Statistics Server\ProfileTemplates',
+      r'D:\Program Files\RivaTuner Statistics Server\ProfileTemplates',
+    ];
+
+    for (final path in candidatePaths) {
+      if (Directory(path).existsSync()) {
+        return path;
+      }
+    }
+    return null;
+  }
+
+  /// Hàm đọc giá trị INI dùng chung (DRY).
+  String? _getProfileValue(String section, String key) {
     final profileDir = _findProfileDirectory();
-    if (profileDir == null) return 0;
+    final templateDir = _findProfileTemplateDirectory();
 
-    final globalFile = File('$profileDir\\Global');
-    if (!globalFile.existsSync()) return 0;
+    // 1. Ưu tiên đọc từ Profiles\Global
+    if (profileDir != null) {
+      final globalFile = File('$profileDir\\Global');
+      if (globalFile.existsSync()) {
+        final val = _readIniKey(globalFile, section, key);
+        if (val != null) return val;
+      }
+    }
 
+    // 2. Fallback đọc từ ProfileTemplates\Global
+    if (templateDir != null) {
+      final templateFile = File('$templateDir\\Global');
+      if (templateFile.existsSync()) {
+        final val = _readIniKey(templateFile, section, key);
+        if (val != null) return val;
+      }
+    }
+
+    return null;
+  }
+
+  String? _readIniKey(File file, String section, String key) {
     try {
-      final lines = globalFile.readAsLinesSync();
-      bool inFramerateSection = false;
+      final lines = file.readAsLinesSync();
+      final targetSection = '[${section.trim().toLowerCase()}]';
+      bool inSection = false;
+
       for (final line in lines) {
         final trimmed = line.trim();
-        if (trimmed == '[Framerate]') {
-          inFramerateSection = true;
+        if (trimmed.isEmpty || trimmed.startsWith(';')) continue;
+        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+          inSection = trimmed.toLowerCase() == targetSection;
           continue;
         }
-        if (inFramerateSection) {
-          if (trimmed.startsWith('[')) break;
-          if (trimmed.startsWith('Limit=')) {
-            final valStr = trimmed.substring('Limit='.length).trim();
-            return int.tryParse(valStr) ?? 0;
+        if (inSection) {
+          final eqIdx = trimmed.indexOf('=');
+          if (eqIdx != -1) {
+            final k = trimmed.substring(0, eqIdx).trim().toLowerCase();
+            if (k == key.trim().toLowerCase()) {
+              return trimmed.substring(eqIdx + 1).trim();
+            }
           }
         }
       }
     } catch (_) {}
-
-    return 0;
+    return null;
   }
 
-  /// Thiết lập mức giới hạn FPS (Framerate Limit) cho toàn bộ game trong RTSS.
-  /// [fps]: Giá trị 0 tương đương với Không giới hạn (Uncapped).
-  bool setFpsLimit(int fps) {
+  /// Hàm ghi cấu hình INI dùng chung vào Profiles\Global (DRY).
+  bool _setProfileValues(String section, Map<String, String> keyValues) {
     final profileDir = _findProfileDirectory();
     if (profileDir == null) return false;
 
@@ -298,47 +337,145 @@ class RtssService {
       List<String> lines = [];
       if (globalFile.existsSync()) {
         lines = globalFile.readAsLinesSync();
+      } else {
+        final templateDir = _findProfileTemplateDirectory();
+        if (templateDir != null) {
+          final templateFile = File('$templateDir\\Global');
+          if (templateFile.existsSync()) {
+            lines = templateFile.readAsLinesSync();
+          }
+        }
       }
 
-      int framerateSectionIdx = -1;
-      int limitLineIdx = -1;
+      final targetSection = '[${section.trim().toLowerCase()}]';
+      int sectionIdx = -1;
+      int nextSectionIdx = lines.length;
 
       for (int i = 0; i < lines.length; i++) {
         final trimmed = lines[i].trim();
-        if (trimmed == '[Framerate]') {
-          framerateSectionIdx = i;
-          continue;
-        }
-        if (framerateSectionIdx != -1) {
-          if (trimmed.startsWith('[')) break;
-          if (trimmed.startsWith('Limit=')) {
-            limitLineIdx = i;
+        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+          if (trimmed.toLowerCase() == targetSection) {
+            sectionIdx = i;
+          } else if (sectionIdx != -1) {
+            nextSectionIdx = i;
             break;
           }
         }
       }
 
-      if (limitLineIdx != -1) {
-        lines[limitLineIdx] = 'Limit=$fps';
-      } else if (framerateSectionIdx != -1) {
-        lines.insert(framerateSectionIdx + 1, 'Limit=$fps');
+      if (sectionIdx == -1) {
+        if (lines.isNotEmpty && lines.last.isNotEmpty) lines.add('');
+        lines.add('[${section.trim()}]');
+        for (final entry in keyValues.entries) {
+          lines.add('${entry.key}=${entry.value}');
+        }
       } else {
-        lines.add('');
-        lines.add('[Framerate]');
-        lines.add('Limit=$fps');
-        lines.add('LimitNumerator=0');
-        lines.add('LimitDenominator=0');
+        final pending = Map<String, String>.from(keyValues);
+        for (int i = sectionIdx + 1; i < nextSectionIdx; i++) {
+          final trimmed = lines[i].trim();
+          final eqIdx = trimmed.indexOf('=');
+          if (eqIdx != -1) {
+            final k = trimmed.substring(0, eqIdx).trim();
+            for (final pk in pending.keys.toList()) {
+              if (pk.toLowerCase() == k.toLowerCase()) {
+                lines[i] = '$k=${pending[pk]}';
+                pending.remove(pk);
+              }
+            }
+          }
+        }
+        int insertPos = nextSectionIdx;
+        for (final entry in pending.entries) {
+          lines.insert(insertPos++, '${entry.key}=${entry.value}');
+        }
       }
 
       globalFile.writeAsStringSync(lines.join('\r\n'));
       return true;
-    } catch (_) {
+    } catch (e) {
+      _logger.warning('Không thể ghi file cấu hình RTSS Global (yêu cầu quyền Admin): $e');
       return false;
     }
   }
+
+  /// Đọc mức giới hạn FPS hiện tại được cấu hình trong RTSS Profile Global.
+  int getFpsLimit() {
+    final val = _getProfileValue('Framerate', 'Limit');
+    return val != null ? (int.tryParse(val) ?? 0) : 0;
+  }
+
+  /// Thiết lập mức giới hạn FPS (Framerate Limit) cho toàn bộ game trong RTSS.
+  bool setFpsLimit(int fps) {
+    return _setProfileValues('Framerate', {
+      'Limit': '$fps',
+      'LimitDenominator': '1',
+    });
+  }
+
+  /// Kiểm tra xem lớp phủ OSD có đang được kích hoạt hay không.
+  bool isOsdEnabled() {
+    final val = _getProfileValue('OSD', 'EnableOSD');
+    return val == '1';
+  }
+
+  /// Bật hoặc tắt lớp phủ OSD và thông số FPS trên màn hình game.
+  bool setOsdEnabled(bool enabled) {
+    return _setProfileValues('OSD', {
+      'EnableOSD': enabled ? '1' : '0',
+      'ShowForegroundStat': enabled ? '1' : '0',
+    });
+  }
+
+  /// Lấy kích thước phóng đại font chữ OSD (ZoomRatio: 1, 2, 3, 4).
+  int getOsdZoom() {
+    final val = _getProfileValue('OSD', 'ZoomRatio');
+    return val != null ? (int.tryParse(val) ?? 2).clamp(1, 4) : 2;
+  }
+
+  /// Thiết lập kích thước phóng đại font chữ OSD.
+  bool setOsdZoom(int zoom) {
+    return _setProfileValues('OSD', {
+      'ZoomRatio': '${zoom.clamp(1, 4)}',
+    });
+  }
+
+  /// Lấy vị trí góc màn hình hiển thị OSD.
+  RtssOsdPosition getOsdPosition() {
+    final xStr = _getProfileValue('OSD', 'PositionX');
+    final yStr = _getProfileValue('OSD', 'PositionY');
+    final x = int.tryParse(xStr ?? '') ?? 1;
+    final y = int.tryParse(yStr ?? '') ?? 1;
+
+    for (final pos in RtssOsdPosition.values) {
+      if (pos.x == x && pos.y == y) return pos;
+    }
+    return RtssOsdPosition.topLeft;
+  }
+
+  /// Thiết lập vị trí góc màn hình hiển thị OSD.
+  bool setOsdPosition(RtssOsdPosition position) {
+    return _setProfileValues('OSD', {
+      'PositionX': '${position.x}',
+      'PositionY': '${position.y}',
+    });
+  }
 }
 
-/// Bộ điều khiển phần cứng cho RTSS FPS Limit kế thừa từ HardwareController (DRY).
+/// Các vị trí neo góc màn hình hiển thị Overlay OSD của RTSS.
+enum RtssOsdPosition {
+  topLeft(1, 1, 'Trái trên'),
+  topRight(-1, 1, 'Phải trên'),
+  bottomLeft(1, -1, 'Trái dưới'),
+  bottomRight(-1, -1, 'Phải dưới');
+
+  final int x;
+  final int y;
+  final String label;
+
+  const RtssOsdPosition(this.x, this.y, this.label);
+}
+
+/// Bộ điều khiển phần cứng cho RTSS FPS Limit & OSD Overlay kế thừa từ HardwareController (DRY).
 class RtssFpsController extends HardwareController {
   final RtssService _service = RtssService.instance;
 
@@ -365,4 +502,14 @@ class RtssFpsController extends HardwareController {
 
   /// Tên game đang kích hoạt.
   String? getActiveGame() => _service.getActiveGameName();
+
+  /// Quản lý lớp phủ OSD
+  bool isOsdEnabled() => _service.isOsdEnabled();
+  bool setOsdEnabled(bool enabled) => _service.setOsdEnabled(enabled);
+
+  int getOsdZoom() => _service.getOsdZoom();
+  bool setOsdZoom(int zoom) => _service.setOsdZoom(zoom);
+
+  RtssOsdPosition getOsdPosition() => _service.getOsdPosition();
+  bool setOsdPosition(RtssOsdPosition pos) => _service.setOsdPosition(pos);
 }

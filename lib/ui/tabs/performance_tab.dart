@@ -9,6 +9,7 @@ import '../widgets/setting_slider.dart';
 import '../widgets/section_label.dart';
 import '../widgets/toggle_card.dart';
 import '../widgets/help_box.dart';
+import '../widgets/preset_selector.dart';
 
 /// Tab điều khiển Hiệu năng & Năng lượng: Quản lý TDP, Tốc độ quạt và Khóa khung hình RTSS.
 class PerformanceTab extends StatelessWidget {
@@ -35,13 +36,19 @@ class PerformanceTab extends StatelessWidget {
   final int fpsLimit;
   final int? liveFps;
   final String? activeGame;
-  final bool isRtssRunning;
   final RtssFpsController rtssCtrl;
   final ValueChanged<int> onFpsLimitChanged;
-  final VoidCallback onStartRtss;
   final bool isInstallingRtss;
   final String? rtssInstallMsg;
   final VoidCallback onInstallRtss;
+
+  // Cấu hình hiển thị Overlay OSD của RTSS
+  final bool osdEnabled;
+  final ValueChanged<bool> onToggleOsd;
+  final int osdZoom;
+  final ValueChanged<int> onOsdZoomChanged;
+  final RtssOsdPosition osdPosition;
+  final ValueChanged<RtssOsdPosition> onOsdPositionChanged;
 
   const PerformanceTab({
     super.key,
@@ -62,13 +69,17 @@ class PerformanceTab extends StatelessWidget {
     required this.fpsLimit,
     required this.liveFps,
     required this.activeGame,
-    required this.isRtssRunning,
     required this.rtssCtrl,
     required this.onFpsLimitChanged,
-    required this.onStartRtss,
     required this.isInstallingRtss,
     required this.rtssInstallMsg,
     required this.onInstallRtss,
+    required this.osdEnabled,
+    required this.onToggleOsd,
+    required this.osdZoom,
+    required this.onOsdZoomChanged,
+    required this.osdPosition,
+    required this.onOsdPositionChanged,
   });
 
   @override
@@ -254,19 +265,6 @@ class PerformanceTab extends StatelessWidget {
             ),
           )
         else ...[
-          ToggleCard(
-            icon: Icons.speed_rounded,
-            title: "Dịch vụ RivaTuner (RTSS)",
-            subtitle: isRtssRunning ? "RTSS đang chạy nền" : "RTSS chưa khởi chạy",
-            value: isRtssRunning,
-            onChanged: (val) {
-              if (!isRtssRunning) onStartRtss();
-            },
-            isFocused: focusedIndex == 4,
-            helpText:
-                "Bật dịch vụ nền RivaTuner Statistics Server để theo dõi số khung hình FPS và giới hạn tốc độ làm tươi màn hình.",
-          ),
-          const SizedBox(height: 8),
           SettingSlider(
             icon: Icons.timelapse_rounded,
             title: activeGame != null
@@ -281,10 +279,51 @@ class PerformanceTab extends StatelessWidget {
             currentColor: AppTheme.accent,
             quickPresets: const [0, 30, 40, 60],
             onChanged: onFpsLimitChanged,
-            isFocused: focusedIndex == 5,
+            isFocused: focusedIndex == 4,
             helpText:
                 "Khóa tốc độ khung hình tối đa trong game. Đặt mức 30, 40 hoặc 60 FPS giúp ổn định độ mượt (Frame Time) và giảm tải nhiệt độ.",
           ),
+          const SizedBox(height: 8),
+          ToggleCard(
+            icon: Icons.subtitles_rounded,
+            title: "Lớp phủ Overlay (OSD)",
+            subtitle: osdEnabled
+                ? "Đang hiển thị trên màn hình"
+                : "Đã tắt hiển thị OSD",
+            value: osdEnabled,
+            onChanged: onToggleOsd,
+            isFocused: focusedIndex == 5,
+            helpText:
+                "Hiển thị lớp phủ theo dõi số khung hình FPS và thông số phần cứng trực tiếp trên màn hình trò chơi qua RivaTuner.",
+          ),
+          if (osdEnabled) ...[
+            const SizedBox(height: 8),
+            PresetSelector<int>(
+              title: "Kích thước chữ OSD",
+              icon: Icons.format_size_rounded,
+              currentValueText: "${osdZoom}x",
+              presets: const [1, 2, 3, 4],
+              selectedValue: osdZoom,
+              labelBuilder: (preset) => "${preset}x",
+              onSelected: onOsdZoomChanged,
+              isFocused: focusedIndex == 6,
+              helpText:
+                  "Phóng to hoặc thu nhỏ kích thước chữ của lớp phủ OSD trên màn hình. Mức 2x hoặc 3x phù hợp nhất cho màn hình Handheld 7-8 inch.",
+            ),
+            const SizedBox(height: 8),
+            PresetSelector<RtssOsdPosition>(
+              title: "Vị trí góc hiển thị OSD",
+              icon: Icons.fullscreen_rounded,
+              currentValueText: osdPosition.label,
+              presets: RtssOsdPosition.values,
+              selectedValue: osdPosition,
+              labelBuilder: (preset) => preset.label,
+              onSelected: onOsdPositionChanged,
+              isFocused: focusedIndex == 7,
+              helpText:
+                  "Chọn 1 trong 4 góc màn hình để neo lớp phủ OSD, tránh che khuất các thành phần HUD hoặc bản đồ nhỏ (Minimap) của game.",
+            ),
+          ],
         ],
       ],
     );
