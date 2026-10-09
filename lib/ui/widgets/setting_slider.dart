@@ -22,6 +22,9 @@ class SettingSlider extends StatelessWidget {
   /// Màu sắc của dải đo thực tế bên trong thanh trượt
   final Color? currentColor;
 
+  /// Màu sắc điểm nhấn chủ đạo của thanh trượt (icon, track mục tiêu)
+  final Color? accentColor;
+
   /// Danh sách mốc chọn nhanh tùy chọn (ví dụ: [0, 30, 40, 60] cho FPS)
   final List<int>? quickPresets;
 
@@ -44,6 +47,7 @@ class SettingSlider extends StatelessWidget {
     this.helpText,
     this.currentValue,
     this.currentColor,
+    this.accentColor,
     this.quickPresets,
     this.shouldShowSlider = true,
     this.isFocused = false,
@@ -58,7 +62,8 @@ class SettingSlider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final liveColor = currentColor ?? AppTheme.secondary;
+    final accent = accentColor ?? AppTheme.primary;
+    final liveColor = currentColor ?? accentColor ?? AppTheme.secondary;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 150),
@@ -87,7 +92,7 @@ class SettingSlider extends StatelessWidget {
           // 1. Dòng tiêu đề và thông số (Gọn gàng, tinh tế, chống tràn pixel tuyệt đối)
           Row(
             children: [
-              Icon(icon, size: AppTheme.scaled(18), color: AppTheme.primary),
+              Icon(icon, size: AppTheme.scaled(18), color: accent),
               const SizedBox(width: 8),
               // Tiêu đề tự co giãn linh hoạt và icon (?) nằm ngay bên cạnh
               Expanded(
@@ -165,7 +170,7 @@ class SettingSlider extends StatelessWidget {
                         width: constraints.maxWidth * targetRatio,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(3),
-                          color: AppTheme.primary.withValues(alpha: 0.85),
+                          color: accent.withValues(alpha: 0.85),
                         ),
                       );
                     },
@@ -216,7 +221,7 @@ class SettingSlider extends StatelessWidget {
                       overlayShape: const RoundSliderOverlayShape(
                         overlayRadius: 14,
                       ),
-                      overlayColor: AppTheme.primary.withValues(alpha: 0.15),
+                      overlayColor: accent.withValues(alpha: 0.15),
                     ),
                     child: Slider(
                       value: value.toDouble().clamp(

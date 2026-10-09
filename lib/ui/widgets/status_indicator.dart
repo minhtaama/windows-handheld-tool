@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../../core/app_theme.dart';
 
 /// Thẻ hiển thị trạng thái kết nối phần cứng / dịch vụ hệ thống kèm đèn LED tín hiệu.
@@ -23,8 +24,8 @@ class StatusIndicatorCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ledColor = isActive
-        ? (activeColor ?? const Color(0xFF22C55E))
-        : (inactiveColor ?? const Color(0xFFEF4444));
+        ? (activeColor ?? AppTheme.active)
+        : (inactiveColor ?? AppTheme.inactive);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -43,7 +44,11 @@ class StatusIndicatorCard extends StatelessWidget {
               color: AppTheme.primary.withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(6),
             ),
-            child: Icon(icon, size: AppTheme.scaled(17), color: AppTheme.primary),
+            child: Icon(
+              icon,
+              size: AppTheme.scaled(17),
+              color: AppTheme.primary,
+            ),
           ),
           const SizedBox(width: 10),
 

@@ -33,7 +33,7 @@ class _OverlayScreenState extends State<OverlayScreen>
       vsync: this,
       duration: Duration(milliseconds: durationMs),
       reverseDuration: Duration(milliseconds: durationMs),
-      value: 1.0, // Ban đầu ở trạng thái sẵn sàng
+      value: 0.0, // Ban đầu ở trạng thái đóng (ẩn ngoài màn hình)
     );
 
     // Hoạt cảnh trượt: từ ngoài mép phải vào sát mép phải

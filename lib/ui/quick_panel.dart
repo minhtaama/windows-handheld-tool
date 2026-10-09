@@ -18,9 +18,10 @@ import '../services/virtual_keyboard_service.dart';
 import '../services/dxgi_hook_service.dart';
 import '../services/overlay_controller.dart';
 import '../services/rtss_installer_service.dart';
+import '../services/system_telemetry_service.dart';
+import 'tabs/home_tab.dart';
 import 'tabs/performance_tab.dart';
 import 'tabs/device_tab.dart';
-import 'tabs/utilities_tab.dart';
 import 'tabs/settings_tab.dart';
 import 'widgets/tab_bar.dart';
 
@@ -53,7 +54,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late int _widthPercent;
   late double _scale;
 
-  // Tab đang được chọn (0: Hiệu năng, 1: Thiết bị, 2: Tiện ích, 3: Cài đặt)
+  // Tab đang được chọn (0: Trang chủ, 1: Hiệu năng, 2: Thiết bị, 3: Cài đặt & Tiện ích)
   int _selectedTabIndex = 0;
 
   // Vị trí điều khiển đang được chọn bằng Gamepad trong Tab hiện tại
@@ -68,6 +69,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   String? _activeGame;
   bool _isRtssRunning = false;
   Timer? _telemetryTimer;
+  SystemTelemetryData _telemetryData = SystemTelemetryData.initial();
 
   bool _isInstallingRtss = false;
   String? _rtssInstallMsg;
@@ -121,6 +123,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _liveTdp = (_tdp * 0.85).round().clamp(_tdpCtrl.minVal, _tdp);
     _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
     _isRtssRunning = _rtssCtrl.isAvailable();
+    _telemetryData = SystemTelemetryService.instance.getSnapshot();
 
     // Lắng nghe sự kiện điều hướng từ Gamepad
     _gamepadSub = GamepadService.buttonEvents.listen(_onGamepadButton);
@@ -131,6 +134,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     ) {
       if (!mounted) return;
       setState(() {
+        _telemetryData = SystemTelemetryService.instance.getSnapshot();
+
         // Cập nhật dao động công suất thực tế tức thời theo tải chip
         final tdpJitter = (DateTime.now().second % 3) - 1;
         _liveTdp = (_tdp * 0.88 + tdpJitter).round().clamp(
@@ -164,6 +169,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _gamepadSub?.cancel();
     _telemetryTimer?.cancel();
     _scrollController.dispose();
+    SystemTelemetryService.instance.dispose();
     super.dispose();
   }
 
@@ -173,27 +179,30 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         return [
           [0],
           [1],
-          [2],
-          [3],
-          [4],
-          if (RtssInstallerService.isInstalled()) [5],
+          [2, 3],
         ];
       case 1:
         return [
           [0],
           [1],
           [2],
+          [3],
+          [4],
+          if (RtssInstallerService.isInstalled()) [5],
         ];
       case 2:
+        return [
+          [0],
+          [1],
+          [2],
+        ];
+      case 3:
         return [
           [0, 1],
           [2, 3],
           [4, 5],
-        ];
-      case 3:
-        return [
-          [0],
-          [1],
+          [6],
+          [7],
         ];
       default:
         return [
@@ -333,7 +342,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
     // Nếu hàng chỉ có 1 phần tử (Slider, Toggle, Preset), điều chỉnh giá trị của phần tử
     switch (_selectedTabIndex) {
-      case 0:
+      case 1:
         if (_focusedIndex == 0) {
           _toggleTdpAuto();
         } else if (_focusedIndex == 1) {
@@ -348,7 +357,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           _cyclePreset(const [0, 30, 40, 60], _fpsLimit, -1, _updateFpsLimit);
         }
         break;
-      case 1:
+      case 2:
         if (_focusedIndex == 0) {
           _updateBrightness(
             max(_brightnessCtrl.minVal, _brightness - _brightnessCtrl.step),
@@ -360,9 +369,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         }
         break;
       case 3:
-        if (_focusedIndex == 0) {
-          _cyclePreset(const [0.8, 1.0, 1.2, 1.4], _scale, -1, _updateScale);
-        } else if (_focusedIndex == 1) {
+        if (_focusedIndex == 6) {
+          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, -1, _updateScale);
+        } else if (_focusedIndex == 7) {
           _cyclePreset(
             const [30, 35, 40, 45],
             _widthPercent,
@@ -389,7 +398,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
     // Nếu hàng chỉ có 1 phần tử (Slider, Toggle, Preset), điều chỉnh giá trị của phần tử
     switch (_selectedTabIndex) {
-      case 0:
+      case 1:
         if (_focusedIndex == 0) {
           _toggleTdpAuto();
         } else if (_focusedIndex == 1) {
@@ -404,7 +413,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
         }
         break;
-      case 1:
+      case 2:
         if (_focusedIndex == 0) {
           _updateBrightness(
             min(_brightnessCtrl.maxVal, _brightness + _brightnessCtrl.step),
@@ -416,9 +425,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         }
         break;
       case 3:
-        if (_focusedIndex == 0) {
-          _cyclePreset(const [0.8, 1.0, 1.2, 1.4], _scale, 1, _updateScale);
-        } else if (_focusedIndex == 1) {
+        if (_focusedIndex == 6) {
+          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+        } else if (_focusedIndex == 7) {
           _cyclePreset(
             const [30, 35, 40, 45],
             _widthPercent,
@@ -433,6 +442,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   void _handleGamepadA() {
     switch (_selectedTabIndex) {
       case 0:
+        break;
+      case 1:
         if (_focusedIndex == 0) {
           _toggleTdpAuto();
         } else if (_focusedIndex == 1) {
@@ -451,7 +462,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
         }
         break;
-      case 1:
+      case 2:
         if (_focusedIndex == 0) {
           _cyclePreset(
             const [25, 50, 75, 100],
@@ -465,7 +476,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           _toggleTouchscreen();
         }
         break;
-      case 2:
+      case 3:
         if (_focusedIndex == 0) {
           OverlayController.instance.hideOverlay();
           VirtualKeyboardService.toggleKeyboard();
@@ -489,12 +500,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           );
         } else if (_focusedIndex == 5) {
           OverlayController.instance.hideOverlay();
-        }
-        break;
-      case 3:
-        if (_focusedIndex == 0) {
-          _cyclePreset(const [0.8, 1.0, 1.2, 1.4], _scale, 1, _updateScale);
-        } else if (_focusedIndex == 1) {
+        } else if (_focusedIndex == 6) {
+          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+        } else if (_focusedIndex == 7) {
           _cyclePreset(
             const [30, 35, 40, 45],
             _widthPercent,
@@ -668,9 +676,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         AppTabBar(
           selectedIndex: _selectedTabIndex,
           items: const [
+            AppTabItem(icon: Icons.home_rounded, label: 'Trang chủ'),
             AppTabItem(icon: Icons.bolt_rounded, label: 'Hiệu năng'),
             AppTabItem(icon: Icons.tune_rounded, label: 'Thiết bị'),
-            AppTabItem(icon: Icons.apps_rounded, label: 'Tiện ích'),
             AppTabItem(icon: Icons.settings_rounded, label: 'Cài đặt'),
           ],
           onTabSelected: _switchTab,
@@ -726,6 +734,13 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   Widget _buildSelectedTabContent() {
     switch (_selectedTabIndex) {
       case 0:
+        return HomeTab(
+          scrollController: _scrollController,
+          focusedIndex: _focusedIndex,
+          telemetry: _telemetryData,
+          liveTdp: _liveTdp,
+        );
+      case 1:
         return PerformanceTab(
           scrollController: _scrollController,
           focusedIndex: _focusedIndex,
@@ -752,7 +767,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           rtssInstallMsg: _rtssInstallMsg,
           onInstallRtss: _handleInstallRtss,
         );
-      case 1:
+      case 2:
         return DeviceTab(
           scrollController: _scrollController,
           focusedIndex: _focusedIndex,
@@ -765,8 +780,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           touchEnabled: _touchEnabled,
           onToggleTouchscreen: _toggleTouchscreen,
         );
-      case 2:
-        return UtilitiesTab(
+      case 3:
+        return SettingsTab(
           scrollController: _scrollController,
           focusedIndex: _focusedIndex,
           dxgiHookEnabled: _dxgiHookEnabled,
@@ -795,11 +810,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             );
           },
           onClosePanel: () => OverlayController.instance.hideOverlay(),
-        );
-      case 3:
-        return SettingsTab(
-          scrollController: _scrollController,
-          focusedIndex: _focusedIndex,
           isRtssRunning: _isRtssRunning,
           activeGame: _activeGame,
           isTdpHardwareActive: _tdpCtrl.isAvailable(),
@@ -848,7 +858,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
           decoration: BoxDecoration(
             color: AppTheme.primary.withValues(alpha: 0.18),
-            borderRadius: BorderRadius.circular(1000),
+            shape: BoxShape.circle,
             border: Border.all(
               color: AppTheme.primary.withValues(alpha: 0.4),
               width: 0.8,

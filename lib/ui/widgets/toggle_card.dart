@@ -118,12 +118,12 @@ class ToggleCard extends StatelessWidget {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(12),
                     color: value
-                        ? AppTheme.positive
+                        ? AppTheme.active
                         : AppTheme.cardBorder.withValues(alpha: 0.4),
                     boxShadow: value
                         ? [
                             BoxShadow(
-                              color: AppTheme.positive.withValues(alpha: 0.4),
+                              color: AppTheme.active.withValues(alpha: 0.4),
                               blurRadius: 8,
                               spreadRadius: 1,
                             ),

@@ -248,12 +248,6 @@ class _HelpBoxState extends State<HelpBox> {
                         children: [
                           Row(
                             children: [
-                              Icon(
-                                Icons.help_outline_rounded,
-                                size: AppTheme.scaled(14),
-                                color: AppTheme.accent,
-                              ),
-                              const SizedBox(width: 6),
                               Text(
                                 "TRỢ GIÚP",
                                 style: AppTheme.caption.copyWith(
@@ -265,23 +259,34 @@ class _HelpBoxState extends State<HelpBox> {
                               ),
                               const Spacer(),
                               Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
-                                ),
+                                padding: const EdgeInsets.all(5),
                                 decoration: BoxDecoration(
                                   color: AppTheme.cardBorder.withValues(
                                     alpha: 0.35,
                                   ),
-                                  borderRadius: BorderRadius.circular(4),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: AppTheme.textPrimary,
+                                    width: 1.2,
+                                  ),
                                 ),
                                 child: Text(
-                                  "[X] Đóng",
+                                  "X",
                                   style: AppTheme.caption.copyWith(
-                                    fontSize: 9,
+                                    fontSize: 8,
                                     fontWeight: FontWeight.w600,
-                                    color: AppTheme.textSecondary,
+                                    color: AppTheme.textPrimary,
+                                    height: 0.5,
                                   ),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                "Đóng",
+                                style: AppTheme.caption.copyWith(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.textSecondary,
                                 ),
                               ),
                             ],

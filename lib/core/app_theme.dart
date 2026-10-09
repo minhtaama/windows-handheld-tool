@@ -29,8 +29,29 @@ class AppTheme {
   static const Color warning = Color(0xFFF59E0B);
 
   // Đỏ cảnh báo nguy hiểm
-  static const Color positive = Color.fromARGB(255, 99, 196, 70);
   static const Color danger = Color(0xFFEF4444);
+
+  // Xanh lục trạng thái tốt / Đang sạc nguồn AC
+  static const Color success = Color(0xFF22C55E);
+
+  // Đèn LED trạng thái hoạt động / không hoạt động
+  static const Color active = success;
+  static const Color inactive = danger;
+
+  // Xanh dương hiển thị thông số CPU & Hệ thống
+  static const Color info = Color(0xFF60A5FA);
+  static const Color cpuAccent = Color(0xFF60A5FA);
+
+  // Tím pastel hiển thị thông số bộ nhớ RAM
+  static const Color ramAccent = Color(0xFFA78BFA);
+
+  // Cam năng lượng cho Công suất TDP (Watt)
+  static const Color tdp = Color(0xFFF97316);
+  static const Color tdpColor = tdp;
+
+  // Xanh ngọc băng tuyết (Cyan) cho Tản nhiệt / Quạt làm mát
+  static const Color fan = Color(0xFF06B6D4);
+  static const Color fanColor = fan;
 
   // Nền thẻ tab Titanium nâng khối
   static const Color tabSelected = Color(0xFF23252E);
