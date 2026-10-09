@@ -101,7 +101,7 @@ class RtssService {
   /// Đảm bảo RTSS đang chạy. Nếu chưa chạy, tự động tìm và khởi động RTSS.exe
   Future<bool> ensureRunning() async {
     if (isRunning()) {
-      _logger.info('RTSS đang chạy ngầm.');
+      _logger.info('RTSS is running in background.');
       return true;
     }
 
@@ -109,16 +109,16 @@ class RtssService {
       if (File(path).existsSync()) {
         try {
           await Process.start(path, [], runInShell: true, mode: ProcessStartMode.detached);
-          _logger.info('Đã tự động khởi chạy RTSS từ: $path');
+          _logger.info('Auto-started RTSS from: $path');
           await Future.delayed(const Duration(milliseconds: 1500));
           return isRunning();
         } catch (e) {
-          _logger.warning('Lỗi khi khởi chạy RTSS: $e');
+          _logger.warning('Error starting RTSS: $e');
         }
       }
     }
 
-    _logger.warning('Không tìm thấy file RTSS.exe để tự động khởi động.');
+    _logger.warning('RTSS.exe not found for auto-start.');
     return false;
   }
 

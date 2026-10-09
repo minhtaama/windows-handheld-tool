@@ -44,9 +44,9 @@ class AutostartService extends ChangeNotifier {
 
       _isEnabled = (result.exitCode == 0);
       _config?.set('system.autostart', _isEnabled);
-      _logger.info('Trạng thái khởi động cùng Windows: ${_isEnabled ? "Đang Bật" : "Đã Tắt"}');
+      _logger.info('Windows autostart status: ${_isEnabled ? "Enabled" : "Disabled"}');
     } catch (e) {
-      _logger.error('Lỗi khi kiểm tra trạng thái Task Scheduler', e);
+      _logger.error('Error checking Task Scheduler status', e);
     } finally {
       _isChecking = false;
       notifyListeners();
@@ -79,11 +79,11 @@ class AutostartService extends ChangeNotifier {
         if (result.exitCode == 0) {
           _isEnabled = true;
           _config?.set('system.autostart', true);
-          _logger.info('Đã bật khởi động cùng Windows thành công qua Task Scheduler');
+          _logger.info('Enabled Windows autostart successfully via Task Scheduler');
           notifyListeners();
           return true;
         } else {
-          _logger.error('Không thể tạo Task khởi động: ${result.stderr}');
+          _logger.error('Failed to create autostart Task: ${result.stderr}');
           return false;
         }
       } else {
@@ -98,16 +98,16 @@ class AutostartService extends ChangeNotifier {
         if (result.exitCode == 0 || result.exitCode == 1) {
           _isEnabled = false;
           _config?.set('system.autostart', false);
-          _logger.info('Đã tắt khởi động cùng Windows');
+          _logger.info('Disabled Windows autostart');
           notifyListeners();
           return true;
         } else {
-          _logger.error('Không thể xóa Task khởi động: ${result.stderr}');
+          _logger.error('Failed to delete autostart Task: ${result.stderr}');
           return false;
         }
       }
     } catch (e) {
-      _logger.error('Lỗi khi thay đổi trạng thái khởi động cùng Windows', e);
+      _logger.error('Error changing Windows autostart state', e);
       return false;
     }
   }

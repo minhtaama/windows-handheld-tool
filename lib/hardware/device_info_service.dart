@@ -115,7 +115,7 @@ class DeviceInfoService {
         }
       }
     } catch (e) {
-      _logger.error('Lỗi khi truy vấn thông tin BIOS từ Registry', e);
+      _logger.error('Error querying BIOS information from Registry', e);
     }
 
     // Ưu tiên System info, nếu là chuỗi giữ chỗ/mặc định thì fallback sang BaseBoard info
@@ -132,8 +132,8 @@ class DeviceInfoService {
 
     _current = _resolveDevice(mfr, prod);
     _logger.info(
-      'Đã nhận diện thiết bị: ${_current!.displayName} '
-      '[Hãng: $mfr, Sản phẩm: $prod, Handheld: ${_current!.isHandheld}]',
+      'Device identified: ${_current!.displayName} '
+      '[Manufacturer: $mfr, Product: $prod, Handheld: ${_current!.isHandheld}]',
     );
 
     return _current!;

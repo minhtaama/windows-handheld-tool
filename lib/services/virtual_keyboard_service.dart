@@ -8,7 +8,7 @@ class VirtualKeyboardService {
 
   /// Kích hoạt Toggle bàn phím ảo (Touch Keyboard) của Windows 10/11.
   static Future<bool> toggleKeyboard() async {
-    _logger.info('Đang gửi lệnh ITipInvocation.Toggle() để đóng/mở bàn phím ảo...');
+    _logger.info('Sending ITipInvocation.Toggle() command to toggle virtual keyboard...');
 
     // Lệnh PowerShell chuẩn kích hoạt COM Interface ITipInvocation::Toggle
     const psScript = '''
@@ -47,13 +47,13 @@ Add-Type -TypeDefinition \$code
 
       final output = result.stdout.toString().trim();
       if (output == '0') {
-        _logger.info('Đã gọi thành công ITipInvocation.Toggle() (Mã: S_OK).');
+        _logger.info('Called ITipInvocation.Toggle() successfully (S_OK).');
         return true;
       } else {
-        _logger.warning('Lệnh ITipInvocation trả về mã lỗi: $output. Thử fallback TabTip.');
+        _logger.warning('ITipInvocation returned error code: $output. Attempting TabTip fallback.');
       }
     } catch (e) {
-      _logger.error('Lỗi khi kích hoạt ITipInvocation qua PowerShell', e);
+      _logger.error('Error triggering ITipInvocation via PowerShell', e);
     }
 
     // Fallback: Chạy trực tiếp TabTip.exe nếu COM chưa kích hoạt
@@ -66,7 +66,7 @@ Add-Type -TypeDefinition \$code
       if (File(path).existsSync()) {
         try {
           await Process.start(path, [], runInShell: true);
-          _logger.info('Đã chạy fallback TabTip.exe: $path');
+          _logger.info('Launched fallback TabTip.exe: $path');
           return true;
         } catch (_) {}
       }

@@ -47,47 +47,40 @@ class PresetSelector<T> extends StatelessWidget {
       final isSelected = (preset == selectedValue);
       final label = labelBuilder(preset);
 
-      final button = Material(
-        color: AppTheme.transparent,
-        child: InkWell(
+      final button = AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+        height: height,
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppTheme.accent.withValues(alpha: 0.2)
+              : AppTheme.cardBackground,
           borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-          onTap: () => onSelected(preset),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            curve: Curves.easeOut,
-            alignment: Alignment.center,
-            height: height,
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? AppTheme.primary.withValues(alpha: 0.22)
-                  : AppTheme.cardBorder.withValues(alpha: 0.25),
-              borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-              border: Border.all(
-                color: isSelected
-                    ? AppTheme.accent.withValues(alpha: 0.8)
-                    : AppTheme.cardBorder,
-                width: isSelected ? 1.2 : 1.0,
+          border: Border.all(color: AppTheme.cardBorder, width: 1.0),
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+            splashColor: AppTheme.primary.withValues(alpha: 0.08),
+            highlightColor: AppTheme.primary.withValues(alpha: 0.04),
+            onTap: () => onSelected(preset),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Center(
+                child: Text(
+                  label,
+                  style: AppTheme.body.copyWith(
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    color: isSelected
+                        ? AppTheme.accent
+                        : AppTheme.textSecondary,
+                    letterSpacing: 0.5,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              boxShadow: isSelected
-                  ? [
-                      BoxShadow(
-                        color: AppTheme.primary.withValues(alpha: 0.25),
-                        blurRadius: 8,
-                        spreadRadius: 1,
-                      ),
-                    ]
-                  : null,
-            ),
-            child: Text(
-              label,
-              style: AppTheme.body.copyWith(
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                color: isSelected ? AppTheme.accent : AppTheme.textSecondary,
-                letterSpacing: 0.5,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
           ),
         ),
@@ -124,7 +117,7 @@ class PresetSelector<T> extends StatelessWidget {
         color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(AppTheme.cardRadius),
         border: Border.all(
-          color: isFocused ? AppTheme.accent : AppTheme.cardBorder,
+          color: isFocused ? AppTheme.accent : AppTheme.cardBackground,
           width: isFocused ? 1.8 : 1.0,
         ),
         boxShadow: isFocused
@@ -173,7 +166,7 @@ class PresetSelector<T> extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 16),
           rowContent,
         ],
       ),

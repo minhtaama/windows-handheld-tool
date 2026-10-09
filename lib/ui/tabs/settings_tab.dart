@@ -79,24 +79,20 @@ class SettingsTab extends StatelessWidget {
             Expanded(
               child: ActionButton(
                 icon: Icons.keyboard_alt_rounded,
-                title: "Bàn phím ảo",
-                subtitle: "Mở TabTip OSK",
+                title: "Mở bàn phím ảo",
                 isFocused: focusedIndex == 0,
                 onTap: onVirtualKeyboard,
-                helpText:
-                    "Mở bàn phím ảo trên màn hình (TabTip) của Windows để nhập liệu nhanh bằng cảm ứng hoặc cần điều khiển.",
+                helpText: "Mở bàn phím ảo trên màn hình (TabTip) của Windows để nhập liệu nhanh bằng cảm ứng hoặc cần điều khiển.",
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
               child: ActionButton(
                 icon: Icons.analytics_outlined,
-                title: "Task Manager",
-                subtitle: "Quản lý tiến trình",
+                title: "Mở Task Manager",
                 isFocused: focusedIndex == 1,
                 onTap: onTaskManager,
-                helpText:
-                    "Mở Trình quản lý tác vụ (Task Manager) để theo dõi tài nguyên phần cứng và quản lý các tiến trình đang chạy.",
+                helpText: "Mở Trình quản lý tác vụ (Task Manager) để theo dõi tài nguyên phần cứng và quản lý các tiến trình đang chạy.",
               ),
             ),
           ],
@@ -107,12 +103,10 @@ class SettingsTab extends StatelessWidget {
             Expanded(
               child: ActionButton(
                 icon: Icons.monitor_rounded,
-                title: "Màn hình",
-                subtitle: "Đổi độ phân giải",
+                title: "Cài đặt màn hình",
                 isFocused: focusedIndex == 2,
                 onTap: onDisplaySettings,
-                helpText:
-                    "Mở cửa sổ cài đặt hiển thị của Windows để thay đổi độ phân giải, tần số quét (Hz) hoặc cấu hình đa màn hình.",
+                helpText: "Mở cửa sổ cài đặt hiển thị của Windows để thay đổi độ phân giải, tần số quét (Hz) hoặc cấu hình đa màn hình.",
               ),
             ),
             const SizedBox(width: 8),
@@ -120,29 +114,17 @@ class SettingsTab extends StatelessWidget {
               child: ActionButton(
                 icon: Icons.cleaning_services_rounded,
                 title: "Dọn dẹp RAM",
-                subtitle: "Tối ưu bộ nhớ",
                 isFocused: focusedIndex == 3,
                 onTap: onTrimMemory,
-                helpText:
-                    "Giải phóng bộ nhớ RAM đệm (Working Set Trimming) của các tiến trình nền để tăng dung lượng bộ nhớ trống cho game.",
+                helpText: "Giải phóng bộ nhớ RAM đệm (Working Set Trimming) của các tiến trình nền để tăng dung lượng bộ nhớ trống cho game.",
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        ActionButton(
-          icon: Icons.fullscreen_exit_rounded,
-          title: "Đóng Panel",
-          subtitle: "Phím: B / Back+RB",
-          isFocused: focusedIndex == 4,
-          onTap: onClosePanel,
-          helpText:
-              "Đóng giao diện Quick Settings Panel và trả quyền điều khiển về cho game. Bạn cũng có thể bấm nút B hoặc tổ hợp Back + RB trên tay cầm.",
-        ),
         const SizedBox(height: 16),
 
         // 2. CẤU HÌNH HỆ THỐNG & TƯƠNG THÍCH
-        const SectionLabel(label: "CẤU HÌNH HỆ THỐNG & TƯƠNG THÍCH"),
+        const SectionLabel(label: "CẤU HÌNH HỆ THỐNG"),
 
         // Khởi động cùng Windows (Auto-start via Task Scheduler)
         ToggleCard(
@@ -152,8 +134,7 @@ class SettingsTab extends StatelessWidget {
           value: autoStartEnabled,
           onChanged: onToggleAutoStart,
           isFocused: focusedIndex == 5,
-          helpText:
-              "Kích hoạt tác vụ Windows Task Scheduler với quyền Quản trị viên tối đa (Highest Privileges) khi đăng nhập, khắc phục triệt để việc UAC chặn ứng dụng tự khởi động.",
+          helpText: "Kích hoạt tác vụ Windows Task Scheduler với quyền Quản trị viên tối đa (Highest Privileges) khi đăng nhập, khắc phục triệt để việc UAC chặn ứng dụng tự khởi động.",
         ),
         const SizedBox(height: 12),
 
@@ -174,8 +155,7 @@ class SettingsTab extends StatelessWidget {
               : "DXGI Borderless",
           onSelected: onHookModeChanged,
           isFocused: focusedIndex == 6,
-          helpText:
-              "DXGI Borderless: Ép game toàn màn hình sang chế độ không viền (iFlip) để Quick Panel hiển thị đè mượt mà.\nShared Texture: Cơ chế OBS/Discord Overlay, nạp kết cấu GPU và vẽ đè trực tiếp lên bộ đệm BackBuffer tại hàm xuất hình Present.",
+          helpText: "DXGI Borderless: Ép game toàn màn hình sang chế độ không viền (iFlip) để Quick Panel hiển thị đè mượt mà.\nShared Texture: Cơ chế OBS/Discord Overlay, nạp kết cấu GPU và vẽ đè trực tiếp lên bộ đệm BackBuffer tại hàm xuất hình Present.",
         ),
         const SizedBox(height: 16),
 
@@ -255,7 +235,6 @@ class SettingsTab extends StatelessWidget {
         const SizedBox(height: 16),
 
         // 5. THÔNG TIN PHẦN MỀM
-        const SectionLabel(label: "THÔNG TIN"),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(

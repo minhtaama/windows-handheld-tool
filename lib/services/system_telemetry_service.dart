@@ -200,9 +200,9 @@ class SystemTelemetryService {
       _dateStringBuffer = calloc<Uint16>(64).cast<Utf16>();
 
       _initialized = true;
-      _logger.info('Khởi tạo thành công Win32 Telemetry FFI');
+      _logger.info('Win32 Telemetry FFI initialized successfully');
     } catch (e) {
-      _logger.error('Lỗi khi nạp Win32 API kernel32.dll', e);
+      _logger.error('Error loading Win32 API kernel32.dll', e);
     }
   }
 

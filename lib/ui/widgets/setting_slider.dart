@@ -72,7 +72,7 @@ class SettingSlider extends StatelessWidget {
         color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(AppTheme.cardRadius),
         border: Border.all(
-          color: isFocused ? AppTheme.accent : AppTheme.cardBorder,
+          color: isFocused ? AppTheme.accent : AppTheme.cardBackground,
           width: isFocused ? 1.8 : 1.0,
         ),
         boxShadow: isFocused

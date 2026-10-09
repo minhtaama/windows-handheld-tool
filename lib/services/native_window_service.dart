@@ -99,7 +99,7 @@ class NativeWindowService {
         _setWindowLongPtrW = user32.lookupFunction<_SetWindowLongPtrWC, _SetWindowLongPtrWDart>('SetWindowLongW');
       }
     } catch (e) {
-      _logger.error('Lỗi khi nạp API user32.dll', e);
+      _logger.error('Error loading user32.dll API', e);
     }
   }
 
@@ -157,7 +157,7 @@ class NativeWindowService {
     _ensureInitialized();
     final hwnd = getWindowHandle();
     if (hwnd == 0) {
-      _logger.warning('Không tìm thấy HWND của cửa sổ Flutter');
+      _logger.warning('Flutter window HWND not found');
       return false;
     }
 
@@ -191,7 +191,7 @@ class NativeWindowService {
     // 3. Yêu cầu vẽ lại frame ngay lập tức
     _invalidateRect?.call(hwnd, nullptr, 1);
 
-    _logger.info('Đã hiển thị Fullscreen Transparent Overlay (${width}x$height)');
+    _logger.info('Displayed Fullscreen Transparent Overlay (${width}x$height)');
     return true;
   }
 
@@ -213,7 +213,7 @@ class NativeWindowService {
       } catch (_) {}
     }
 
-    _logger.info('Đã chuyển Overlay sang trạng thái xuyên thấu (WS_EX_TRANSPARENT Click-Through)');
+    _logger.info('Switched Overlay to click-through state (WS_EX_TRANSPARENT)');
     return true;
   }
 

@@ -50,21 +50,21 @@ class TouchscreenService {
             _isEnabled = status?.toLowerCase().contains('started') ?? true;
             _isDetected = true;
             _logger.info(
-              'Đã tìm thấy màn hình cảm ứng: $_instanceId (Mô tả: "$desc", Trạng thái: ${_isEnabled ? "Bật" : "Tắt"})',
+              'Found touchscreen device: $_instanceId (Description: "$desc", Status: ${_isEnabled ? "Enabled" : "Disabled"})',
             );
             return;
           }
         }
       }
     } catch (e) {
-      _logger.error('Lỗi khi quét màn hình cảm ứng qua pnputil', e);
+      _logger.error('Error scanning touchscreen devices via pnputil', e);
     }
 
     // Fallback ID cho GPD Win 4 (chip Goodix) nếu không bắt được mô tả
     if (!_isDetected) {
       _instanceId = r'HID\GDIX1002\4&231bac70&0&0000';
       _isDetected = true;
-      _logger.info('Sử dụng Fallback Touchscreen ID: $_instanceId');
+      _logger.info('Using fallback touchscreen ID: $_instanceId');
     }
   }
 
@@ -79,30 +79,30 @@ class TouchscreenService {
     if (_instanceId == null) {
       await init();
       if (_instanceId == null) {
-        _logger.warning('Không tìm thấy thiết bị màn hình cảm ứng trên máy.');
+        _logger.warning('No touchscreen device found on system.');
         return false;
       }
     }
 
     final actionFlag = enable ? '/enable-device' : '/disable-device';
-    _logger.info('Đang thực thi pnputil $actionFlag "$_instanceId"...');
+    _logger.info('Executing pnputil $actionFlag "$_instanceId"...');
 
     try {
       final result = await Process.run('pnputil', [actionFlag, _instanceId!]);
       if (result.exitCode == 0) {
         _isEnabled = enable;
-        _logger.info('Đã ${enable ? "BẬT" : "TẮT"} màn hình cảm ứng thành công.');
+        _logger.info('${enable ? "ENABLED" : "DISABLED"} touchscreen successfully.');
         return true;
       } else {
         _logger.warning(
-          'Không thể ${enable ? "bật" : "tắt"} cảm ứng (ExitCode: ${result.exitCode}). '
+          'Failed to ${enable ? "enable" : "disable"} touchscreen (ExitCode: ${result.exitCode}). '
           'Stderr: ${result.stderr.toString().trim()}. '
-          'Yêu cầu chạy ứng dụng với quyền Administrator để thay đổi driver phần cứng.',
+          'Requires running application with Administrator privileges to modify hardware drivers.',
         );
         return false;
       }
     } catch (e) {
-      _logger.error('Lỗi khi thực thi pnputil', e);
+      _logger.error('Error executing pnputil', e);
       return false;
     }
   }

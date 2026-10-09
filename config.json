@@ -32,8 +32,8 @@
             "min": 5,
             "max": 35,
             "step": 1,
-            "current": 15,
-            "auto": false
+            "current": 20,
+            "auto": true
         },
         "fan": {
             "min": 0,
@@ -59,7 +59,8 @@
         },
         "rtss": {
             "fps_limit": 0,
-            "osd_enabled": true
+            "osd_enabled": true,
+            "osd_zoom": 1
         }
     }
 }

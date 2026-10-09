@@ -6,6 +6,7 @@ import 'package:tray_manager/tray_manager.dart';
 
 import 'core/app_theme.dart';
 import 'core/config.dart';
+import 'core/icon_utils.dart';
 import 'core/logger.dart';
 import 'hardware/device_info_service.dart';
 import 'hardware/touchscreen_service.dart';
@@ -38,7 +39,7 @@ void main() async {
   final screenWidth = physicalSize.width;
   final screenHeight = physicalSize.height;
 
-  _logger.info('DEBUG-MAIN-INIT: Physical Screen Size = $physicalSize');
+  _logger.info('Physical screen size initialized: $physicalSize');
 
   final windowOptions = WindowOptions(
     title: 'Windows Handheld Tool',
@@ -78,7 +79,7 @@ void main() async {
     );
   }
 
-  _logger.info('Handheld Quick Settings Flutter đã sẵn sàng chạy ngầm!');
+  _logger.info('Handheld Quick Settings background service ready.');
 
   runApp(HandheldApp(config: config));
 }
@@ -93,15 +94,9 @@ class _WindowBlurListener extends WindowListener {
 
 Future<void> _initSystemTray() async {
   try {
-    final iconFile = File('windows/runner/resources/app_icon.ico');
-    final iconPath = iconFile.existsSync() ? iconFile.absolute.path : '';
-
-    if (iconPath.isNotEmpty) {
-      await trayManager.setIcon(iconPath);
-      _logger.info('Đã tải System Tray icon từ: $iconPath');
-    } else {
-      _logger.warning('Không tìm thấy file app_icon.ico');
-    }
+    final iconPath = await IconUtils.ensureIcoFile(Icons.sports_esports);
+    await trayManager.setIcon(iconPath);
+    _logger.info('Loaded Gamepad System Tray icon from: $iconPath');
 
     await trayManager.setToolTip(
       'Handheld Quick Settings (${DeviceInfoService.currentDevice.displayName})',
@@ -122,9 +117,9 @@ Future<void> _initSystemTray() async {
     await trayManager.setContextMenu(menu);
 
     trayManager.addListener(_TrayListener());
-    _logger.info('Đã cấu hình System Tray thành công.');
+    _logger.info('System Tray configured successfully.');
   } catch (e) {
-    _logger.warning('Khởi tạo System Tray gặp lỗi: $e');
+    _logger.warning('System Tray initialization failed: $e');
   }
 }
 

@@ -156,13 +156,13 @@ class GamepadService {
       try {
         final lib = DynamicLibrary.open(dll);
         _xInputGetState = lib.lookupFunction<_XInputGetStateC, _XInputGetStateDart>('XInputGetState');
-        _logger.info('Đã kết nối thành công với $dll.');
+        _logger.info('Connected to $dll successfully.');
         break;
       } catch (_) {}
     }
 
     if (_xInputGetState == null) {
-      _logger.warning('Không tìm thấy thư viện XInput DLL trên máy.');
+      _logger.warning('XInput DLL not found on system.');
       return;
     }
 
@@ -208,7 +208,7 @@ class GamepadService {
         // 1. Bắt sự kiện tổ hợp phím mở/tắt Overlay (BACK + RB)
         if (anyComboPressed && !_wasComboPressed) {
           _wasComboPressed = true;
-          _logger.info('Nhận tổ hợp phím tay cầm: BACK + RB');
+          _logger.info('Gamepad combo triggered: BACK + RB');
           onTriggerCombo();
           return;
         } else if (!anyComboPressed) {

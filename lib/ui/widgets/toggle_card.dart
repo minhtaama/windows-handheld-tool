@@ -33,7 +33,7 @@ class ToggleCard extends StatelessWidget {
         color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(AppTheme.cardRadius),
         border: Border.all(
-          color: isFocused ? AppTheme.accent : AppTheme.cardBorder,
+          color: isFocused ? AppTheme.accent : AppTheme.cardBackground,
           width: isFocused ? 1.8 : 1.0,
         ),
         boxShadow: isFocused
@@ -58,20 +58,10 @@ class ToggleCard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             child: Row(
               children: [
-                Container(
-                  width: AppTheme.scaled(36),
-                  height: AppTheme.scaled(36),
-                  decoration: BoxDecoration(
-                    color: value
-                        ? AppTheme.accent.withValues(alpha: 0.16)
-                        : AppTheme.primary.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(
-                    icon,
-                    size: AppTheme.scaled(20),
-                    color: value ? AppTheme.accent : AppTheme.textSecondary,
-                  ),
+                Icon(
+                  icon,
+                  size: AppTheme.scaled(20),
+                  color: value ? AppTheme.accent : AppTheme.textSecondary,
                 ),
                 const SizedBox(width: 12),
                 Expanded(

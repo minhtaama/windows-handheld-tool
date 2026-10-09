@@ -97,8 +97,7 @@ class PerformanceTab extends StatelessWidget {
           value: tdpAuto,
           onChanged: (_) => onToggleTdpAuto(),
           isFocused: focusedIndex == 0,
-          helpText:
-              "Tự động điều chỉnh mức tiêu thụ điện năng (Watt) của CPU theo thời gian thực để tối ưu thời lượng pin và hiệu năng khi chơi game.",
+          helpText: "Tự động điều chỉnh mức tiêu thụ điện năng (Watt) của CPU theo thời gian thực để tối ưu thời lượng pin và hiệu năng khi chơi game.",
         ),
         const SizedBox(height: 8),
         SettingSlider(
@@ -112,12 +111,11 @@ class PerformanceTab extends StatelessWidget {
           currentValue: liveTdp,
           currentColor: AppTheme.tdp,
           accentColor: AppTheme.tdp,
-          quickPresets: const [10, 15, 20, 25, 30],
+          quickPresets: tdpAuto ? null : const [10, 15, 20, 25, 30],
           onChanged: onTdpChanged,
           shouldShowSlider: !tdpAuto,
           isFocused: focusedIndex == 1,
-          helpText:
-              "Khóa công suất điện tối đa của bộ xử lý (TDP tính bằng Watt). Tăng TDP để có FPS cao hơn, giảm TDP để máy mát hơn và tiết kiệm pin.",
+          helpText: "Khóa công suất điện tối đa của bộ xử lý (TDP tính bằng Watt). Tăng TDP để có FPS cao hơn, giảm TDP để máy mát hơn và tiết kiệm pin.",
         ),
         const SizedBox(height: 16),
 
@@ -129,8 +127,7 @@ class PerformanceTab extends StatelessWidget {
           value: fanAuto,
           onChanged: (_) => onToggleFanAuto(),
           isFocused: focusedIndex == 2,
-          helpText:
-              "Tự động điều chỉnh vòng quay quạt tản nhiệt dựa theo nhiệt độ linh kiện. Chuyển sang MANUAL nếu muốn tự khóa % quạt cố định.",
+          helpText: "Tự động điều chỉnh vòng quay quạt tản nhiệt dựa theo nhiệt độ linh kiện. Chuyển sang MANUAL nếu muốn tự khóa % quạt cố định.",
         ),
         const SizedBox(height: 8),
         SettingSlider(
@@ -144,12 +141,11 @@ class PerformanceTab extends StatelessWidget {
           currentValue: liveFan,
           currentColor: AppTheme.fan,
           accentColor: AppTheme.fan,
-          quickPresets: const [30, 50, 75, 100],
+          quickPresets: fanAuto ? null : const [30, 50, 75, 100],
           onChanged: onFanChanged,
           shouldShowSlider: !fanAuto,
           isFocused: focusedIndex == 3,
-          helpText:
-              "Điều chỉnh phần trăm tốc độ quạt làm mát của máy Handheld từ 0% đến 100%.",
+          helpText: "Điều chỉnh phần trăm tốc độ quạt làm mát của máy Handheld từ 0% đến 100%.",
         ),
         const SizedBox(height: 16),
 
@@ -162,7 +158,9 @@ class PerformanceTab extends StatelessWidget {
               color: AppTheme.cardBackground,
               borderRadius: BorderRadius.circular(AppTheme.cardRadius),
               border: Border.all(
-                color: focusedIndex == 4 ? AppTheme.accent : AppTheme.cardBorder,
+                color: focusedIndex == 4
+                    ? AppTheme.accent
+                    : AppTheme.cardBorder,
                 width: focusedIndex == 4 ? 1.8 : 1.0,
               ),
               boxShadow: focusedIndex == 4
@@ -201,8 +199,7 @@ class PerformanceTab extends StatelessWidget {
                           ),
                           const SizedBox(width: 6),
                           HelpBox(
-                            helpText:
-                                "RTSS (RivaTuner Statistics Server) là dịch vụ giám sát và khóa tốc độ khung hình (FPS). Bấm nút A trên tay cầm để tự động tải và cài đặt nhanh qua Winget.",
+                            helpText: "RTSS (RivaTuner Statistics Server) là dịch vụ giám sát và khóa tốc độ khung hình (FPS). Bấm nút A trên tay cầm để tự động tải và cài đặt nhanh qua Winget.",
                             isFocused: focusedIndex == 4,
                           ),
                         ],
@@ -221,11 +218,8 @@ class PerformanceTab extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  rtssInstallMsg ??
-                      "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
-                  style: AppTheme.caption.copyWith(
-                    fontSize: 11,
-                  ),
+                  rtssInstallMsg ?? "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
+                  style: AppTheme.caption.copyWith(fontSize: 11),
                 ),
                 const SizedBox(height: 10),
                 SizedBox(
@@ -280,8 +274,7 @@ class PerformanceTab extends StatelessWidget {
             quickPresets: const [0, 30, 40, 60],
             onChanged: onFpsLimitChanged,
             isFocused: focusedIndex == 4,
-            helpText:
-                "Khóa tốc độ khung hình tối đa trong game. Đặt mức 30, 40 hoặc 60 FPS giúp ổn định độ mượt (Frame Time) và giảm tải nhiệt độ.",
+            helpText: "Khóa tốc độ khung hình tối đa trong game. Đặt mức 30, 40 hoặc 60 FPS giúp ổn định độ mượt (Frame Time) và giảm tải nhiệt độ.",
           ),
           const SizedBox(height: 8),
           ToggleCard(
@@ -293,8 +286,7 @@ class PerformanceTab extends StatelessWidget {
             value: osdEnabled,
             onChanged: onToggleOsd,
             isFocused: focusedIndex == 5,
-            helpText:
-                "Hiển thị lớp phủ theo dõi số khung hình FPS và thông số phần cứng trực tiếp trên màn hình trò chơi qua RivaTuner.",
+            helpText: "Hiển thị lớp phủ theo dõi số khung hình FPS và thông số phần cứng trực tiếp trên màn hình trò chơi qua RivaTuner.",
           ),
           if (osdEnabled) ...[
             const SizedBox(height: 8),
@@ -307,8 +299,7 @@ class PerformanceTab extends StatelessWidget {
               labelBuilder: (preset) => "${preset}x",
               onSelected: onOsdZoomChanged,
               isFocused: focusedIndex == 6,
-              helpText:
-                  "Phóng to hoặc thu nhỏ kích thước chữ của lớp phủ OSD trên màn hình. Mức 2x hoặc 3x phù hợp nhất cho màn hình Handheld 7-8 inch.",
+              helpText: "Phóng to hoặc thu nhỏ kích thước chữ của lớp phủ OSD trên màn hình. Mức 2x hoặc 3x phù hợp nhất cho màn hình Handheld 7-8 inch.",
             ),
             const SizedBox(height: 8),
             PresetSelector<RtssOsdPosition>(
@@ -320,8 +311,7 @@ class PerformanceTab extends StatelessWidget {
               labelBuilder: (preset) => preset.label,
               onSelected: onOsdPositionChanged,
               isFocused: focusedIndex == 7,
-              helpText:
-                  "Chọn 1 trong 4 góc màn hình để neo lớp phủ OSD, tránh che khuất các thành phần HUD hoặc bản đồ nhỏ (Minimap) của game.",
+              helpText: "Chọn 1 trong 4 góc màn hình để neo lớp phủ OSD, tránh che khuất các thành phần HUD hoặc bản đồ nhỏ (Minimap) của game.",
             ),
           ],
         ],

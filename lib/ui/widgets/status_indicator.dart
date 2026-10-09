@@ -27,13 +27,8 @@ class StatusIndicatorCard extends StatelessWidget {
         ? (activeColor ?? AppTheme.active)
         : (inactiveColor ?? AppTheme.inactive);
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppTheme.cardBackground,
-        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-        border: Border.all(color: AppTheme.cardBorder, width: 1.0),
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
           // Icon dịch vụ

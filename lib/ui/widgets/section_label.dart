@@ -11,12 +11,13 @@ class SectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      padding: const EdgeInsets.only(left: 4, bottom: 8, top: 16),
       child: Text(
         label,
         style: AppTheme.title.copyWith(
           fontWeight: FontWeight.w700,
           letterSpacing: 1.0,
+          color: AppTheme.textSecondary,
         ),
       ),
     );

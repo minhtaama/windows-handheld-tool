@@ -124,9 +124,9 @@ class DxgiHookService extends ChangeNotifier {
       try {
         final modeInt = mode == OverlayHookMode.sharedTexture ? 1 : 0;
         _setOverlayHookMode!(modeInt);
-        _logger.info('Đã chuyển đổi chế độ Hook sang: ${mode.name} (Code: $modeInt)');
+        _logger.info('Switched Hook mode to: ${mode.name} (Code: $modeInt)');
       } catch (e) {
-        _logger.error('Lỗi khi gọi SetOverlayHookMode: $e');
+        _logger.error('Error calling SetOverlayHookMode: $e');
       }
     }
     notifyListeners();
@@ -137,9 +137,9 @@ class DxgiHookService extends ChangeNotifier {
     if (!_isAvailable || _setSharedTextureHandle == null) return;
     try {
       _setSharedTextureHandle!(handle);
-      _logger.info('Đã cập nhật SharedTextureHandle: 0x${handle.toRadixString(16)}');
+      _logger.info('Updated SharedTextureHandle: 0x${handle.toRadixString(16)}');
     } catch (e) {
-      _logger.error('Lỗi khi gọi SetSharedTextureHandle: $e');
+      _logger.error('Error calling SetSharedTextureHandle: $e');
     }
   }
 
@@ -158,7 +158,7 @@ class DxgiHookService extends ChangeNotifier {
         final file = File(path);
         if (file.existsSync() || !path.contains('/')) {
           _lib = DynamicLibrary.open(path);
-          _logger.info('Đã nạp thành công thư viện DXGI Hook từ: $path');
+          _logger.info('Loaded DXGI Hook library successfully from: $path');
           break;
         }
       } catch (e) {
@@ -167,7 +167,7 @@ class DxgiHookService extends ChangeNotifier {
     }
 
     if (_lib == null) {
-      _logger.warning('Không tìm thấy hoặc không thể nạp dxgi_hook.dll');
+      _logger.warning('Could not find or load dxgi_hook.dll');
       _isAvailable = false;
       return;
     }
@@ -211,13 +211,13 @@ class DxgiHookService extends ChangeNotifier {
           'SetSharedTextureHandle',
         );
       } catch (e) {
-        _logger.warning('Thư viện DLL chưa có hàm Shared Texture APIs: $e');
+        _logger.warning('DLL does not export Shared Texture APIs yet: $e');
       }
 
       _isAvailable = true;
-      _logger.info('Khởi tạo thành công các API điều khiển DXGI Hook & Shared Texture');
+      _logger.info('Initialized DXGI Hook & Shared Texture control APIs successfully');
     } catch (e) {
-      _logger.error('Lỗi khi liên kết hàm từ dxgi_hook.dll', e);
+      _logger.error('Error binding functions from dxgi_hook.dll', e);
       _isAvailable = false;
     }
   }
@@ -228,7 +228,7 @@ class DxgiHookService extends ChangeNotifier {
     try {
       _setOverlayActive!(active ? 1 : 0);
     } catch (e) {
-      _logger.error('Lỗi khi cập nhật SetOverlayActive: $e');
+      _logger.error('Error updating SetOverlayActive: $e');
     }
   }
 
@@ -248,14 +248,14 @@ class DxgiHookService extends ChangeNotifier {
     try {
       final result = _installGlobalHook!() != 0;
       if (result) {
-        _logger.info('Đã kích hoạt Global DXGI Borderless Hook thành công');
+        _logger.info('Activated Global DXGI Borderless Hook successfully');
       } else {
-        _logger.warning('Kích hoạt Global DXGI Borderless Hook thất bại');
+        _logger.warning('Failed to activate Global DXGI Borderless Hook');
       }
       notifyListeners();
       return result;
     } catch (e) {
-      _logger.error('Lỗi khi kích hoạt Global DXGI Hook', e);
+      _logger.error('Error activating Global DXGI Hook', e);
       return false;
     }
   }
@@ -266,12 +266,12 @@ class DxgiHookService extends ChangeNotifier {
     try {
       final result = _uninstallGlobalHook!() != 0;
       if (result) {
-        _logger.info('Đã gỡ bỏ Global DXGI Borderless Hook');
+        _logger.info('Removed Global DXGI Borderless Hook');
       }
       notifyListeners();
       return result;
     } catch (e) {
-      _logger.error('Lỗi khi gỡ bỏ Global DXGI Hook', e);
+      _logger.error('Error removing Global DXGI Hook', e);
       return false;
     }
   }
@@ -297,10 +297,10 @@ class DxgiHookService extends ChangeNotifier {
     if (!_isAvailable || _injectHook == null) return false;
     try {
       final result = _injectHook!(processId) != 0;
-      _logger.info('Chèn DXGI Hook vào tiến trình PID $processId: ${result ? "Thành công" : "Thất bại"}');
+      _logger.info('Injected DXGI Hook into process PID $processId: ${result ? "Success" : "Failed"}');
       return result;
     } catch (e) {
-      _logger.error('Lỗi khi chèn DXGI Hook vào PID $processId', e);
+      _logger.error('Error injecting DXGI Hook into PID $processId', e);
       return false;
     }
   }
@@ -311,7 +311,7 @@ class DxgiHookService extends ChangeNotifier {
     try {
       return _ejectHook!(processId) != 0;
     } catch (e) {
-      _logger.error('Lỗi khi rút DXGI Hook khỏi PID $processId', e);
+      _logger.error('Error ejecting DXGI Hook from PID $processId', e);
       return false;
     }
   }
@@ -322,7 +322,7 @@ class DxgiHookService extends ChangeNotifier {
     try {
       return _makeWindowBorderless!(hwnd) != 0;
     } catch (e) {
-      _logger.error('Lỗi khi gọi MakeWindowBorderless cho HWND $hwnd', e);
+      _logger.error('Error calling MakeWindowBorderless for HWND $hwnd', e);
       return false;
     }
   }

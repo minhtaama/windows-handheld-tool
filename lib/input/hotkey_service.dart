@@ -57,9 +57,9 @@ class HotkeyService {
       final user32 = DynamicLibrary.open('user32.dll');
       _getAsyncKeyState = user32
           .lookupFunction<_GetAsyncKeyStateC, _GetAsyncKeyStateDart>('GetAsyncKeyState');
-      _logger.info('Đã kết nối thành công với user32.dll GetAsyncKeyState.');
+      _logger.info('Connected to user32.dll GetAsyncKeyState successfully.');
     } catch (e) {
-      _logger.warning('Không thể nạp GetAsyncKeyState từ user32.dll: $e');
+      _logger.warning('Could not load GetAsyncKeyState from user32.dll: $e');
     }
 
     // 2. Vòng lặp quét trạng thái phần cứng bàn phím định kỳ mỗi 20ms (nhạy và hoạt động xuyên game Fullscreen)
@@ -75,12 +75,12 @@ class HotkeyService {
             final isK = _isKeyDown(vkK);
 
             if (_overlayCombo.update(isQ)) {
-              _logger.info('Nhận phím tắt phần cứng: Ctrl + Shift + Q (GetAsyncKeyState)');
+              _logger.info('Hardware hotkey triggered: Ctrl + Shift + Q (GetAsyncKeyState)');
               onToggleOverlay();
             }
 
             if (_keyboardCombo.update(isK)) {
-              _logger.info('Nhận phím tắt phần cứng: Ctrl + Shift + K (GetAsyncKeyState)');
+              _logger.info('Hardware hotkey triggered: Ctrl + Shift + K (GetAsyncKeyState)');
               onToggleKeyboard();
             }
           } else {
@@ -104,7 +104,7 @@ class HotkeyService {
         await hotKeyManager.register(
           overlayHotKey,
           keyDownHandler: (hotKey) {
-            _logger.info('Nhận tín hiệu phím tắt: Ctrl + Shift + Q (hotkey_manager fallback)');
+            _logger.info('Hotkey triggered: Ctrl + Shift + Q (hotkey_manager fallback)');
             onToggleOverlay();
           },
         );
@@ -117,12 +117,12 @@ class HotkeyService {
         await hotKeyManager.register(
           keyboardHotKey,
           keyDownHandler: (hotKey) {
-            _logger.info('Nhận tín hiệu phím tắt: Ctrl + Shift + K (hotkey_manager fallback)');
+            _logger.info('Hotkey triggered: Ctrl + Shift + K (hotkey_manager fallback)');
             onToggleKeyboard();
           },
         );
 
-        _logger.info('Đã đăng ký thành công các phím tắt toàn cục hệ thống (hotkey_manager fallback).');
+        _logger.info('Registered hotkeys successfully via hotkey_manager fallback.');
       } catch (e) {
         _logger.warning('hotkey_manager fallback: $e');
       }
