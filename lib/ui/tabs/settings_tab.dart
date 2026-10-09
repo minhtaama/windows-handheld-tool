@@ -1,19 +1,25 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
+import '../../services/dxgi_hook_service.dart';
 import '../widgets/action_button.dart';
 import '../widgets/preset_selector.dart';
 import '../widgets/section_label.dart';
 import '../widgets/status_indicator.dart';
+import '../widgets/toggle_card.dart';
 
-/// Tab Cài đặt & Tiện ích: Phím tắt công cụ Windows, Tùy chỉnh hiển thị Side Panel và Trạng thái kết nối phần cứng.
+/// Tab Cài đặt & Tiện ích: Phím tắt công cụ Windows, Cấu hình khởi động, Chế độ Hook và Tùy chỉnh hiển thị Side Panel.
 class SettingsTab extends StatelessWidget {
   final ScrollController scrollController;
   final int focusedIndex;
 
-  // Trạng thái & Callback DXGI Hook
-  final bool dxgiHookEnabled;
-  final VoidCallback onToggleDxgiHook;
+  // Khởi động cùng Windows
+  final bool autoStartEnabled;
+  final ValueChanged<bool> onToggleAutoStart;
+
+  // Chế độ Overlay Hook (Phương án 2 Borderless vs Phương án 3 Shared Texture)
+  final OverlayHookMode hookMode;
+  final ValueChanged<OverlayHookMode> onHookModeChanged;
 
   // Callbacks công cụ hệ thống
   final VoidCallback onVirtualKeyboard;
@@ -39,8 +45,10 @@ class SettingsTab extends StatelessWidget {
     super.key,
     required this.scrollController,
     required this.focusedIndex,
-    required this.dxgiHookEnabled,
-    required this.onToggleDxgiHook,
+    required this.autoStartEnabled,
+    required this.onToggleAutoStart,
+    required this.hookMode,
+    required this.onHookModeChanged,
     required this.onVirtualKeyboard,
     required this.onTaskManager,
     required this.onDisplaySettings,
@@ -64,7 +72,7 @@ class SettingsTab extends StatelessWidget {
       controller: scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       children: [
-        // 1. CÔNG CỤ HỆ THỐNG (Chuyển dịch từ Tab Tiện ích sang)
+        // 1. CÔNG CỤ HỆ THỐNG
         const SectionLabel(label: "CÔNG CỤ HỆ THỐNG"),
         Row(
           children: [
@@ -75,7 +83,8 @@ class SettingsTab extends StatelessWidget {
                 subtitle: "Mở TabTip OSK",
                 isFocused: focusedIndex == 0,
                 onTap: onVirtualKeyboard,
-                helpText: "Mở bàn phím ảo trên màn hình (TabTip) của Windows để nhập liệu nhanh bằng cảm ứng hoặc cần điều khiển.",
+                helpText:
+                    "Mở bàn phím ảo trên màn hình (TabTip) của Windows để nhập liệu nhanh bằng cảm ứng hoặc cần điều khiển.",
               ),
             ),
             const SizedBox(width: 8),
@@ -86,7 +95,8 @@ class SettingsTab extends StatelessWidget {
                 subtitle: "Quản lý tiến trình",
                 isFocused: focusedIndex == 1,
                 onTap: onTaskManager,
-                helpText: "Mở Trình quản lý tác vụ (Task Manager) để theo dõi tài nguyên phần cứng và quản lý các tiến trình đang chạy.",
+                helpText:
+                    "Mở Trình quản lý tác vụ (Task Manager) để theo dõi tài nguyên phần cứng và quản lý các tiến trình đang chạy.",
               ),
             ),
           ],
@@ -101,53 +111,75 @@ class SettingsTab extends StatelessWidget {
                 subtitle: "Đổi độ phân giải",
                 isFocused: focusedIndex == 2,
                 onTap: onDisplaySettings,
-                helpText: "Mở cửa sổ cài đặt hiển thị của Windows để thay đổi độ phân giải, tần số quét (Hz) hoặc cấu hình đa màn hình.",
+                helpText:
+                    "Mở cửa sổ cài đặt hiển thị của Windows để thay đổi độ phân giải, tần số quét (Hz) hoặc cấu hình đa màn hình.",
               ),
             ),
             const SizedBox(width: 8),
-            Expanded(
-              child: ActionButton(
-                icon: Icons.layers_rounded,
-                title: "DXGI Hook",
-                subtitle: dxgiHookEnabled
-                    ? "Đang Bật (Borderless)"
-                    : "Đã Tắt (FSE Gốc)",
-                isFocused: focusedIndex == 3,
-                onTap: onToggleDxgiHook,
-                helpText: "Ép chế độ Borderless Fullscreen cho các game chạy Exclusive Fullscreen, giúp Quick Panel hiển thị đè mượt mà không bị đen màn hình.",
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
             Expanded(
               child: ActionButton(
                 icon: Icons.cleaning_services_rounded,
                 title: "Dọn dẹp RAM",
                 subtitle: "Tối ưu bộ nhớ",
-                isFocused: focusedIndex == 4,
+                isFocused: focusedIndex == 3,
                 onTap: onTrimMemory,
-                helpText: "Giải phóng bộ nhớ RAM đệm (Working Set Trimming) của các tiến trình nền để tăng dung lượng bộ nhớ trống cho game.",
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: ActionButton(
-                icon: Icons.fullscreen_exit_rounded,
-                title: "Đóng Panel",
-                subtitle: "Phím: B / Back+RB",
-                isFocused: focusedIndex == 5,
-                onTap: onClosePanel,
-                helpText: "Đóng giao diện Quick Settings Panel và trả quyền điều khiển về cho game. Bạn cũng có thể bấm nút B hoặc tổ hợp Back + RB trên tay cầm.",
+                helpText:
+                    "Giải phóng bộ nhớ RAM đệm (Working Set Trimming) của các tiến trình nền để tăng dung lượng bộ nhớ trống cho game.",
               ),
             ),
           ],
         ),
+        const SizedBox(height: 8),
+        ActionButton(
+          icon: Icons.fullscreen_exit_rounded,
+          title: "Đóng Panel",
+          subtitle: "Phím: B / Back+RB",
+          isFocused: focusedIndex == 4,
+          onTap: onClosePanel,
+          helpText:
+              "Đóng giao diện Quick Settings Panel và trả quyền điều khiển về cho game. Bạn cũng có thể bấm nút B hoặc tổ hợp Back + RB trên tay cầm.",
+        ),
         const SizedBox(height: 16),
 
-        // 2. TÙY BIẾN GIAO DIỆN (UI SCALE & WIDTH)
+        // 2. CẤU HÌNH HỆ THỐNG & TƯƠNG THÍCH
+        const SectionLabel(label: "CẤU HÌNH HỆ THỐNG & TƯƠNG THÍCH"),
+
+        // Khởi động cùng Windows (Auto-start via Task Scheduler)
+        ToggleCard(
+          icon: Icons.power_settings_new_rounded,
+          title: "Khởi động cùng Windows",
+          subtitle: "Tự chạy với quyền Quản trị viên (Task Scheduler)",
+          value: autoStartEnabled,
+          onChanged: onToggleAutoStart,
+          isFocused: focusedIndex == 5,
+          helpText:
+              "Kích hoạt tác vụ Windows Task Scheduler với quyền Quản trị viên tối đa (Highest Privileges) khi đăng nhập, khắc phục triệt để việc UAC chặn ứng dụng tự khởi động.",
+        ),
+        const SizedBox(height: 12),
+
+        // Chế độ Overlay Hook: DXGI Borderless Hook vs Direct3D Shared Texture Injection
+        PresetSelector<OverlayHookMode>(
+          title: "Chế độ tương thích Game (Hook)",
+          icon: Icons.layers_rounded,
+          currentValueText: hookMode == OverlayHookMode.sharedTexture
+              ? "Shared Texture"
+              : "DXGI Borderless",
+          presets: const [
+            OverlayHookMode.dxgiBorderless,
+            OverlayHookMode.sharedTexture,
+          ],
+          selectedValue: hookMode,
+          labelBuilder: (m) => m == OverlayHookMode.sharedTexture
+              ? "Shared Texture"
+              : "DXGI Borderless",
+          onSelected: onHookModeChanged,
+          isFocused: focusedIndex == 6,
+          helpText:
+              "DXGI Borderless: Ép game toàn màn hình sang chế độ không viền (iFlip) để Quick Panel hiển thị đè mượt mà.\nShared Texture: Cơ chế OBS/Discord Overlay, nạp kết cấu GPU và vẽ đè trực tiếp lên bộ đệm BackBuffer tại hàm xuất hình Present.",
+        ),
+        const SizedBox(height: 16),
+
+        // 3. TÙY BIẾN GIAO DIỆN (UI SCALE & WIDTH)
         const SectionLabel(label: "TÙY BIẾN GIAO DIỆN"),
 
         // Tỷ lệ phóng đại UI Scale
@@ -159,7 +191,7 @@ class SettingsTab extends StatelessWidget {
           selectedValue: scale,
           labelBuilder: (preset) => "${(preset * 100).toInt()}%",
           onSelected: onScaleChanged,
-          isFocused: focusedIndex == 6,
+          isFocused: focusedIndex == 7,
         ),
         const SizedBox(height: 12),
 
@@ -172,11 +204,11 @@ class SettingsTab extends StatelessWidget {
           selectedValue: widthPercent,
           labelBuilder: (preset) => "$preset%",
           onSelected: onWidthPercentChanged,
-          isFocused: focusedIndex == 7,
+          isFocused: focusedIndex == 8,
         ),
         const SizedBox(height: 16),
 
-        // 3. BẢNG TRẠNG THÁI KẾT NỐI (STATUS)
+        // 4. BẢNG TRẠNG THÁI KẾT NỐI (STATUS)
         const SectionLabel(label: "TRẠNG THÁI HỆ THỐNG"),
         StatusIndicatorCard(
           icon: Icons.speed_rounded,
@@ -202,10 +234,12 @@ class SettingsTab extends StatelessWidget {
 
         StatusIndicatorCard(
           icon: Icons.layers_rounded,
-          title: "DXGI Borderless Hook",
+          title: "Chế độ Game Hook",
           statusText: isDxgiHookActive
-              ? "Hỗ trợ Borderless iFlip (Chống giật lag)"
-              : "Đã tắt (Chế độ FSE gốc)",
+              ? (hookMode == OverlayHookMode.sharedTexture
+                    ? "Direct3D Shared Texture Injection (Present Hook)"
+                    : "DXGI Borderless Hook (iFlip Mode)")
+              : "Chưa kích hoạt Hook",
           isActive: isDxgiHookActive,
         ),
         const SizedBox(height: 8),
@@ -220,7 +254,7 @@ class SettingsTab extends StatelessWidget {
         ),
         const SizedBox(height: 16),
 
-        // 4. THÔNG TIN PHẦN MỀM
+        // 5. THÔNG TIN PHẦN MỀM
         const SectionLabel(label: "THÔNG TIN"),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

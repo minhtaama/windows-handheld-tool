@@ -8,6 +8,9 @@ EXPORTS
     MakeWindowBorderless
     SetOverlayActive
     IsOverlayActive
+    SetOverlayHookMode
+    GetOverlayHookMode
+    SetSharedTextureHandle
     CreateDXGIFactory
     CreateDXGIFactory1
     CreateDXGIFactory2

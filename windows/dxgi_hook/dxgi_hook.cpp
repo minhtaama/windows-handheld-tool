@@ -20,6 +20,8 @@ HINSTANCE g_hInstance = nullptr;
 #pragma data_seg(".shared")
 HHOOK g_hHook = nullptr;
 BOOL g_isOverlayActive = FALSE;
+int g_hookMode = 0; // 0: Borderless, 1: Shared Texture
+HANDLE g_hSharedTexture = nullptr;
 #pragma data_seg()
 #pragma comment(linker, "/SECTION:.shared,RWS")
 
@@ -89,6 +91,11 @@ typedef HRESULT(STDMETHODCALLTYPE* PFN_MakeWindowAssociation)(
 typedef DWORD(WINAPI* PFN_XInputGetState)(DWORD dwUserIndex, XINPUT_STATE* pState);
 typedef DWORD(WINAPI* PFN_XInputGetStateEx)(DWORD dwUserIndex, void* pState);
 
+typedef HRESULT(STDMETHODCALLTYPE* PFN_Present)(
+    IDXGISwapChain* pThis,
+    UINT SyncInterval,
+    UINT Flags);
+
 // Con trỏ tới hàm gốc
 PFN_CreateDXGIFactory             g_origCreateDXGIFactory = nullptr;
 PFN_CreateDXGIFactory1            g_origCreateDXGIFactory1 = nullptr;
@@ -100,6 +107,7 @@ PFN_SetFullscreenState            g_origSetFullscreenState = nullptr;
 PFN_ResizeTarget                  g_origResizeTarget = nullptr;
 PFN_ResizeBuffers                 g_origResizeBuffers = nullptr;
 PFN_MakeWindowAssociation         g_origMakeWindowAssociation = nullptr;
+PFN_Present                       g_origPresent = nullptr;
 
 PFN_XInputGetState                g_origXInputGetState = nullptr;
 PFN_XInputGetStateEx              g_origXInputGetStateEx = nullptr;
@@ -196,6 +204,51 @@ DWORD WINAPI Hooked_XInputGetStateEx(DWORD dwUserIndex, void* pState) {
         ZeroMemory(&pStateEx->Gamepad, sizeof(XINPUT_GAMEPAD));
     }
     return res;
+}
+
+// Hook hàm Present trên SwapChain (Slot 8)
+// Xử lý Phương án 3: Direct3D Shared Texture Injection (OBS / Discord style)
+HRESULT STDMETHODCALLTYPE Hooked_Present(
+    IDXGISwapChain* pThis,
+    UINT SyncInterval,
+    UINT Flags)
+{
+    // Nếu đang chạy chế độ Shared Texture Injection và Overlay đang mở
+    if (g_hookMode == OVERLAY_HOOK_MODE_SHARED_TEXTURE && g_isOverlayActive && g_hSharedTexture) {
+        ID3D11Device* pDevice = nullptr;
+        if (SUCCEEDED(pThis->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&pDevice))) && pDevice) {
+            ID3D11DeviceContext* pContext = nullptr;
+            pDevice->GetImmediateContext(&pContext);
+            if (pContext) {
+                ID3D11Texture2D* pSharedTexture = nullptr;
+                HRESULT hrOpen = pDevice->OpenSharedResource(
+                    g_hSharedTexture,
+                    __uuidof(ID3D11Texture2D),
+                    reinterpret_cast<void**>(&pSharedTexture)
+                );
+
+                if (SUCCEEDED(hrOpen) && pSharedTexture) {
+                    ID3D11Texture2D* pBackBuffer = nullptr;
+                    if (SUCCEEDED(pThis->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer))) && pBackBuffer) {
+                        // Sao chép texture trực tiếp vào BackBuffer trước khi xuất hình
+                        pContext->CopySubresourceRegion(
+                            pBackBuffer, 0, 0, 0, 0,
+                            pSharedTexture, 0, nullptr
+                        );
+                        pBackBuffer->Release();
+                    }
+                    pSharedTexture->Release();
+                }
+                pContext->Release();
+            }
+            pDevice->Release();
+        }
+    }
+
+    if (g_origPresent) {
+        return g_origPresent(pThis, SyncInterval, Flags);
+    }
+    return S_OK;
 }
 
 // Hook hàm SetFullscreenState trên SwapChain
@@ -324,6 +377,13 @@ void HookSwapChain(IDXGISwapChain* pSwapChain) {
 
     void** vtable = *reinterpret_cast<void***>(pSwapChain);
     if (!vtable) return;
+
+    // 0. Hook Present (Slot 8) - Direct3D Shared Texture Injection
+    if (vtable[8] != Hooked_Present) {
+        PatchVTable(vtable, 8, reinterpret_cast<void*>(Hooked_Present),
+                    reinterpret_cast<void**>(&g_origPresent));
+        OutputDebugStringA("[DXGI-Hook] IDXGISwapChain::Present VTable hooked!\n");
+    }
 
     // 1. Hook SetFullscreenState (Slot 10)
     if (vtable[10] != Hooked_SetFullscreenState) {
@@ -698,6 +758,24 @@ DXGI_HOOK_API void WINAPI SetOverlayActive(BOOL active) {
 
 DXGI_HOOK_API BOOL WINAPI IsOverlayActive(void) {
     return g_isOverlayActive;
+}
+
+DXGI_HOOK_API void WINAPI SetOverlayHookMode(int mode) {
+    g_hookMode = mode;
+    if (mode == OVERLAY_HOOK_MODE_SHARED_TEXTURE) {
+        OutputDebugStringA("[DXGI-Hook] Switch to Direct3D Shared Texture Injection Mode\n");
+    } else {
+        OutputDebugStringA("[DXGI-Hook] Switch to DXGI Borderless Hook Mode\n");
+    }
+}
+
+DXGI_HOOK_API int WINAPI GetOverlayHookMode(void) {
+    return g_hookMode;
+}
+
+DXGI_HOOK_API void WINAPI SetSharedTextureHandle(HANDLE hSharedTexture) {
+    g_hSharedTexture = hSharedTexture;
+    OutputDebugStringA("[DXGI-Hook] SetSharedTextureHandle updated\n");
 }
 
 DXGI_HOOK_API BOOL WINAPI InjectDxgiHook(DWORD dwProcessId) {

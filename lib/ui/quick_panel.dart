@@ -15,6 +15,7 @@ import '../hardware/touchscreen_service.dart';
 import '../input/gamepad_service.dart';
 import '../services/system_optimizer.dart';
 import '../services/virtual_keyboard_service.dart';
+import '../services/autostart_service.dart';
 import '../services/dxgi_hook_service.dart';
 import '../services/overlay_controller.dart';
 import '../services/rtss_installer_service.dart';
@@ -50,7 +51,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late int _audio;
   late int _fpsLimit;
   late bool _touchEnabled;
-  late bool _dxgiHookEnabled;
+  late bool _autoStartEnabled;
+  late OverlayHookMode _hookMode;
   late int _widthPercent;
   late double _scale;
 
@@ -138,7 +140,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           : RtssOsdPosition.topLeft,
     );
     _touchEnabled = TouchscreenService.isEnabled;
-    _dxgiHookEnabled = DxgiHookService.instance.isEnabled;
+    _autoStartEnabled = AutostartService.instance.isEnabled;
+    _hookMode = DxgiHookService.instance.hookMode;
     _widthPercent = widget.config.get("overlay.width_percent", 35);
     _scale = (widget.config.get("overlay.scale", 1.0) as num).toDouble();
     AppTheme.uiScale = _scale;
@@ -232,9 +235,11 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         return [
           [0, 1],
           [2, 3],
-          [4, 5],
+          [4],
+          [5],
           [6],
           [7],
+          [8],
         ];
       default:
         return [
@@ -415,9 +420,18 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         }
         break;
       case 3:
-        if (_focusedIndex == 6) {
-          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, -1, _updateScale);
+        if (_focusedIndex == 5) {
+          _toggleAutoStart(!_autoStartEnabled);
+        } else if (_focusedIndex == 6) {
+          _cyclePreset(
+            OverlayHookMode.values,
+            _hookMode,
+            -1,
+            _updateHookMode,
+          );
         } else if (_focusedIndex == 7) {
+          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, -1, _updateScale);
+        } else if (_focusedIndex == 8) {
           _cyclePreset(
             const [30, 35, 40, 45],
             _widthPercent,
@@ -480,9 +494,18 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         }
         break;
       case 3:
-        if (_focusedIndex == 6) {
-          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+        if (_focusedIndex == 5) {
+          _toggleAutoStart(!_autoStartEnabled);
+        } else if (_focusedIndex == 6) {
+          _cyclePreset(
+            OverlayHookMode.values,
+            _hookMode,
+            1,
+            _updateHookMode,
+          );
         } else if (_focusedIndex == 7) {
+          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+        } else if (_focusedIndex == 8) {
           _cyclePreset(
             const [30, 35, 40, 45],
             _widthPercent,
@@ -553,8 +576,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             'ms-settings:display',
           ], runInShell: true);
         } else if (_focusedIndex == 3) {
-          _toggleDxgiHook();
-        } else if (_focusedIndex == 4) {
           SystemOptimizer.trimMemory();
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -562,11 +583,20 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
               duration: Duration(seconds: 1),
             ),
           );
-        } else if (_focusedIndex == 5) {
+        } else if (_focusedIndex == 4) {
           OverlayController.instance.hideOverlay();
+        } else if (_focusedIndex == 5) {
+          _toggleAutoStart(!_autoStartEnabled);
         } else if (_focusedIndex == 6) {
-          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+          _cyclePreset(
+            OverlayHookMode.values,
+            _hookMode,
+            1,
+            _updateHookMode,
+          );
         } else if (_focusedIndex == 7) {
+          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+        } else if (_focusedIndex == 8) {
           _cyclePreset(
             const [30, 35, 40, 45],
             _widthPercent,
@@ -734,22 +764,42 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     }
   }
 
-  void _toggleDxgiHook() {
-    setState(() {
-      DxgiHookService.instance.toggle();
-      _dxgiHookEnabled = DxgiHookService.instance.isEnabled;
-    });
+  void _toggleAutoStart(bool val) async {
+    setState(() => _autoStartEnabled = val);
+    final success = await AutostartService.instance.setEnabled(val);
+    if (mounted) {
+      setState(() => _autoStartEnabled = AutostartService.instance.isEnabled);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            success
+                ? (val
+                    ? 'Đã bật khởi động cùng Windows (Task Scheduler elevated)!'
+                    : 'Đã tắt khởi động cùng Windows!')
+                : 'Không thể thay đổi tác vụ khởi động (Cần quyền Admin).',
+          ),
+          duration: const Duration(seconds: 2),
+          backgroundColor: success ? AppTheme.accent : AppTheme.danger,
+        ),
+      );
+    }
+  }
+
+  void _updateHookMode(OverlayHookMode mode) {
+    setState(() => _hookMode = mode);
+    DxgiHookService.instance.setHookMode(mode);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          _dxgiHookEnabled
-              ? 'Đã kích hoạt DXGI Borderless Hook (Chống văng game Exclusive)!'
-              : 'Đã tắt DXGI Borderless Hook!',
+          mode == OverlayHookMode.sharedTexture
+              ? 'Chuyển sang Direct3D Shared Texture Injection (Present Hook)'
+              : 'Chuyển sang DXGI Borderless Hook (iFlip Mode)',
         ),
         duration: const Duration(seconds: 2),
       ),
     );
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -871,8 +921,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         return SettingsTab(
           scrollController: _scrollController,
           focusedIndex: _focusedIndex,
-          dxgiHookEnabled: _dxgiHookEnabled,
-          onToggleDxgiHook: _toggleDxgiHook,
+          autoStartEnabled: _autoStartEnabled,
+          onToggleAutoStart: _toggleAutoStart,
+          hookMode: _hookMode,
+          onHookModeChanged: _updateHookMode,
           onVirtualKeyboard: () {
             OverlayController.instance.hideOverlay();
             VirtualKeyboardService.toggleKeyboard();
@@ -901,7 +953,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           activeGame: _activeGame,
           isTdpHardwareActive: _tdpCtrl.isAvailable(),
           isDxgiHookActive:
-              DxgiHookService.instance.isHookActive || _dxgiHookEnabled,
+              DxgiHookService.instance.isHookActive ||
+              DxgiHookService.instance.isEnabled,
           isGamepadConnected: GamepadService.isConnected,
           scale: _scale,
           onScaleChanged: _updateScale,

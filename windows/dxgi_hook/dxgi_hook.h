@@ -47,6 +47,27 @@ DXGI_HOOK_API void WINAPI SetOverlayActive(BOOL active);
 /// Lấy trạng thái kích hoạt hiện tại của Overlay.
 DXGI_HOOK_API BOOL WINAPI IsOverlayActive(void);
 
+// =========================================================================
+// Direct3D Shared Texture Injection APIs (Phương án 3 trong note.md)
+// =========================================================================
+
+/// Chế độ hoạt động của Hook:
+/// 0: DXGI Borderless Hook (Cưỡng bức game thành Borderless iFlip, cửa sổ Flutter đè lên)
+/// 1: Direct3D Shared Texture Injection (OBS / Discord style, vẽ đè kết cấu vào BackBuffer tại Present)
+enum OverlayHookMode {
+    OVERLAY_HOOK_MODE_BORDERLESS = 0,
+    OVERLAY_HOOK_MODE_SHARED_TEXTURE = 1
+};
+
+/// Đặt chế độ Hook (0: Borderless, 1: Shared Texture Injection)
+DXGI_HOOK_API void WINAPI SetOverlayHookMode(int mode);
+
+/// Lấy chế độ Hook hiện tại
+DXGI_HOOK_API int WINAPI GetOverlayHookMode(void);
+
+/// Thiết lập con trỏ tài nguyên GPU được chia sẻ (D3D11 Shared Texture Handle)
+DXGI_HOOK_API void WINAPI SetSharedTextureHandle(HANDLE hSharedTexture);
+
 #ifdef __cplusplus
 }
 #endif

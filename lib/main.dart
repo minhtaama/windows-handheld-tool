@@ -12,6 +12,7 @@ import 'hardware/touchscreen_service.dart';
 import 'hardware/rtss_service.dart';
 import 'input/hotkey_service.dart';
 import 'input/gamepad_service.dart';
+import 'services/autostart_service.dart';
 import 'services/dxgi_hook_service.dart';
 import 'services/native_window_service.dart';
 import 'services/overlay_controller.dart';
@@ -28,6 +29,7 @@ void main() async {
   final config = ConfigManager();
   OverlayController.instance.config = config;
   DxgiHookService.instance.init(config);
+  AutostartService.instance.init(config);
 
   // 1. Cấu hình Cửa sổ Fullscreen Transparent Overlay (Chuẩn Handheld Gaming Overlay)
   await windowManager.ensureInitialized();

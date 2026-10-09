@@ -29,9 +29,25 @@ typedef _SetOverlayActiveDart = void Function(int active);
 typedef _IsOverlayActiveC = Int32 Function();
 typedef _IsOverlayActiveDart = int Function();
 
-/// Dịch vụ quản lý DXGI Borderless Hook (Phương án 2).
-/// Can thiệp vào DirectX SwapChain của Game để cưỡng bức chạy ở chế độ Cửa sổ Không viền (Borderless Windowed / iFlip),
-/// giúp Quick Settings Overlay hiển thị đè lên game 100% mượt mà và không bao giờ bị văng hoặc minimize.
+typedef _SetOverlayHookModeC = Void Function(Int32 mode);
+typedef _SetOverlayHookModeDart = void Function(int mode);
+
+typedef _GetOverlayHookModeC = Int32 Function();
+typedef _GetOverlayHookModeDart = int Function();
+
+typedef _SetSharedTextureHandleC = Void Function(IntPtr handle);
+typedef _SetSharedTextureHandleDart = void Function(int handle);
+
+/// Chế độ hoạt động của Overlay Hook:
+/// - `dxgiBorderless`: Phương án 2 - Cưỡng bức game thành Cửa sổ Không viền (Borderless Windowed / iFlip), cửa sổ Flutter đè lên mượt mà.
+/// - `sharedTexture`: Phương án 3 - Direct3D Shared Texture Injection (OBS / Discord style), vẽ trực tiếp kết cấu vào BackBuffer tại Present.
+enum OverlayHookMode {
+  dxgiBorderless,
+  sharedTexture,
+}
+
+/// Dịch vụ quản lý DXGI Hook (Phương án 2 & Phương án 3 trong note.md).
+/// Hỗ trợ cả DXGI Borderless Hook và Direct3D Shared Texture Injection.
 class DxgiHookService extends ChangeNotifier {
   static const _logger = AppLogger('DxgiHookService');
   static final DxgiHookService instance = DxgiHookService._();
@@ -49,6 +65,9 @@ class DxgiHookService extends ChangeNotifier {
   _MakeWindowBorderlessDart? _makeWindowBorderless;
   _SetOverlayActiveDart? _setOverlayActive;
   _IsOverlayActiveDart? _isOverlayActive;
+  _SetOverlayHookModeDart? _setOverlayHookMode;
+  _GetOverlayHookModeDart? _getOverlayHookMode;
+  _SetSharedTextureHandleDart? _setSharedTextureHandle;
 
   bool _isAvailable = false;
   bool get isAvailable => _isAvailable;
@@ -66,13 +85,61 @@ class DxgiHookService extends ChangeNotifier {
   /// Trạng thái bật/tắt trong file config
   bool get isEnabled => _config?.get("dxgi_hook.enabled", true) ?? true;
 
+  /// Chế độ Hook hiện tại
+  OverlayHookMode get hookMode {
+    final modeStr = _config?.get("dxgi_hook.mode", "dxgiBorderless");
+    return OverlayHookMode.values.firstWhere(
+      (m) => m.name == modeStr,
+      orElse: () => OverlayHookMode.dxgiBorderless,
+    );
+  }
+
+  /// Lấy mã chế độ Hook thực tế đang lưu trong DLL qua FFI
+  int get activeNativeHookMode {
+    if (!_isAvailable || _getOverlayHookMode == null) return 0;
+    try {
+      return _getOverlayHookMode!();
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /// Khởi tạo và nạp thư viện dxgi_hook.dll
   void init(ConfigManager config) {
     _config = config;
     _loadLibrary();
 
-    if (_isAvailable && isEnabled) {
-      installGlobalHook();
+    if (_isAvailable) {
+      setHookMode(hookMode);
+      if (isEnabled) {
+        installGlobalHook();
+      }
+    }
+  }
+
+  /// Chuyển đổi giữa chế độ DXGI Borderless và Direct3D Shared Texture Injection
+  void setHookMode(OverlayHookMode mode) {
+    _config?.set("dxgi_hook.mode", mode.name);
+    if (_isAvailable && _setOverlayHookMode != null) {
+      try {
+        final modeInt = mode == OverlayHookMode.sharedTexture ? 1 : 0;
+        _setOverlayHookMode!(modeInt);
+        _logger.info('Đã chuyển đổi chế độ Hook sang: ${mode.name} (Code: $modeInt)');
+      } catch (e) {
+        _logger.error('Lỗi khi gọi SetOverlayHookMode: $e');
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Cập nhật con trỏ GPU Shared Texture Handle cho Direct3D Shared Texture Injection
+  void setSharedTextureHandle(int handle) {
+    if (!_isAvailable || _setSharedTextureHandle == null) return;
+    try {
+      _setSharedTextureHandle!(handle);
+      _logger.info('Đã cập nhật SharedTextureHandle: 0x${handle.toRadixString(16)}');
+    } catch (e) {
+      _logger.error('Lỗi khi gọi SetSharedTextureHandle: $e');
     }
   }
 
@@ -133,8 +200,22 @@ class DxgiHookService extends ChangeNotifier {
         );
       } catch (_) {}
 
+      try {
+        _setOverlayHookMode = _lib!.lookupFunction<_SetOverlayHookModeC, _SetOverlayHookModeDart>(
+          'SetOverlayHookMode',
+        );
+        _getOverlayHookMode = _lib!.lookupFunction<_GetOverlayHookModeC, _GetOverlayHookModeDart>(
+          'GetOverlayHookMode',
+        );
+        _setSharedTextureHandle = _lib!.lookupFunction<_SetSharedTextureHandleC, _SetSharedTextureHandleDart>(
+          'SetSharedTextureHandle',
+        );
+      } catch (e) {
+        _logger.warning('Thư viện DLL chưa có hàm Shared Texture APIs: $e');
+      }
+
       _isAvailable = true;
-      _logger.info('Khởi tạo thành công các API điều khiển DXGI Borderless Hook');
+      _logger.info('Khởi tạo thành công các API điều khiển DXGI Hook & Shared Texture');
     } catch (e) {
       _logger.error('Lỗi khi liên kết hàm từ dxgi_hook.dll', e);
       _isAvailable = false;

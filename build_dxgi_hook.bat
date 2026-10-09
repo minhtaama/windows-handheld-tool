@@ -5,11 +5,19 @@ echo ========================================================
 echo   Building DXGI Borderless Hook DLL (x64 Release)
 echo ========================================================
 
-set "VS_BUILDTOOLS_PATH=C:\Users\h\dev-tools\VisualStudio BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+set "VS_BUILDTOOLS_PATH=D:\dev-tools\VS BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+if not exist "%VS_BUILDTOOLS_PATH%" (
+    set "VS_BUILDTOOLS_PATH=C:\Users\h\dev-tools\VisualStudio BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+)
 if exist "%VS_BUILDTOOLS_PATH%" (
     call "%VS_BUILDTOOLS_PATH%"
 ) else (
-    echo [!] vcvars64.bat not found at default location, trying environment PATH...
+    echo [!] Searching via vswhere...
+    for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
+        if exist "%%i\VC\Auxiliary\Build\vcvars64.bat" (
+            call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+        )
+    )
 )
 
 set "SRC_DIR=%~dp0windows\dxgi_hook"
