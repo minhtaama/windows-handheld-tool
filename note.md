@@ -280,3 +280,45 @@ flowchart TD
 - Thay thế hoàn toàn sổ đăng ký bằng Trình lập lịch tác vụ hệ điều hành (Windows Task Scheduler thông qua tiện ích dòng lệnh `schtasks.exe` đóng gói trong [[AutostartService]]).
 - Thiết lập tác vụ hệ thống với mức ưu tiên đặc quyền tối cao (`/RL HIGHEST`) liên kết trực tiếp với sự kiện người dùng đăng nhập tài khoản (`/SC ONLOGON`).
 - Đồng thời gỡ bỏ điều kiện tiết kiệm pin của máy tính xách tay (`DisallowStartIfOnBatteries=false`) nhằm đảm bảo thiết bị Handheld luôn tự động khởi chạy bảng điều khiển dù đang cắm sạc hay sử dụng nguồn pin tích hợp.
+
+### Vòng Đời Tác Vụ Và Hiện Tượng Rác Hệ Thống Khi Xóa Bản Di Động (Portable Cleanup & Orphaned Task Lifecycle)
+
+Khi phân phối dưới dạng gói di động không qua cài đặt (Portable Binary):
+- Toàn bộ tệp mã máy (`.exe`), thư viện động (`.dll`) và tệp cấu hình (`config.json`) nằm cô lập trong một thư mục cục bộ trên ổ cứng. Xóa thư mục này chỉ đơn thuần giải phóng các cung từ/ô nhớ flash (Storage Blocks) của thư mục đó.
+- Tuy nhiên, khi người dùng kích hoạt "Khởi động cùng Windows", ứng dụng đã gọi tiến trình hệ thống `schtasks.exe` để tạo một bản ghi tác vụ độc lập trong nhân quản lý lập lịch của hệ điều hành.
+
+```mermaid
+flowchart TD
+    subgraph Storage_Clean["Tầng Ổ Đĩa (Storage)"]
+        DelDir["Người dùng xóa thư mục Portable"] --> BinaryGone["Tệp thực thi .exe bị xóa khỏi ổ cứng"]
+    end
+
+    subgraph OS_Task_State["Tầng Quản Lý Tác Vụ Hệ Thống (Task Scheduler)"]
+        TaskDef["Tệp định nghĩa XML: C:\\Windows\\System32\\Tasks\\..."]
+        TaskReg["Khóa đăng ký: HKLM\\SOFTWARE\\Microsoft\\Windows NT\\...\\TaskCache"]
+    end
+
+    BinaryGone -.->|Không tự động dọn| OS_Task_State
+    BootEvent["Sự kiện Đăng nhập (ONLOGON)"] --> svchost["Tiến trình dịch vụ svchost.exe (Schedule)"]
+    svchost -->|Đọc bản ghi tác vụ mồ côi| OS_Task_State
+    svchost -->|Tìm tệp .exe không tồn tại| Fail["Lỗi nạp mã nhị phân vào RAM (0x80070002)"]
+    Fail --> EventLog["Ghi lỗi vào Nhật ký Hệ thống (Event Log)"]
+```
+
+#### 1. Các thành phần còn sót lại trong hệ điều hành (Orphaned Artifacts)
+1. **Tệp siêu dữ liệu XML định nghĩa tác vụ (Task Definition XML)**:
+   - Vị trí vật lý: `C:\Windows\System32\Tasks\WindowsHandheldTool_AutoStart`.
+2. **Khóa chỉ mục trong cây cơ sở dữ liệu cấu hình hệ thống (Registry Hive)**:
+   - Nhánh phân cấp: `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\WindowsHandheldTool_AutoStart`.
+   - Bản ghi định danh duy nhất: `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks\{GUID}`.
+
+#### 2. Hiện tượng kỹ thuật khi chỉ xóa thư mục mà không hủy tác vụ
+- Tác vụ trở thành một **tác vụ mồ côi (Orphaned Task)**.
+- Mỗi chu kỳ khởi động và đăng nhập tài khoản người dùng (`ONLOGON`), tiến trình dịch vụ lập lịch của Windows (`svchost.exe` đảm nhiệm dịch vụ `Schedule`) kích hoạt ngắt, nạp tệp XML và tra cứu đường dẫn nhị phân được lưu sẵn.
+- Do tệp `.exe` không còn tồn tại trên ổ cứng, hệ điều hành không thể phân bổ không gian địa chỉ ảo (Virtual Address Space) để nạp mã máy vào bộ nhớ RAM, dẫn đến việc tiến trình lập lịch trả về mã lỗi `0x80070002` (`ERROR_FILE_NOT_FOUND`) và ghi nhận vào nhật ký sự kiện hệ thống (Windows Event Viewer - Event ID 101/200).
+
+#### 3. Quy trình dọn dẹp triệt để (Complete Decommissioning Workflow)
+- **Phương án chủ động (Khuyến nghị)**: Trước khi xóa thư mục Portable, mở ứng dụng và chuyển công tắc "Khởi động cùng Windows" sang trạng thái Tắt trong [[SettingsTab]]. Hàm `AutostartService.setEnabled(false)` sẽ phát lệnh xóa trực tiếp qua tiến trình hệ thống: `schtasks /delete /tn "WindowsHandheldTool_AutoStart" /f`, triệt tiêu hoàn toàn tệp XML và các khóa Registry liên quan.
+- **Phương án khắc phục sau khi đã xóa thư mục**:
+  - Giao diện quản lý tác vụ: Nhấn tổ hợp phím `Win + R`, mở tiện ích `taskschd.msc`, truy cập vào danh mục `Task Scheduler Library`, tìm tác vụ `WindowsHandheldTool_AutoStart` và chọn Delete.
+  - Giao diện dòng lệnh đặc quyền cao: Mở PowerShell hoặc Command Prompt dưới quyền Quản trị viên (Run as Administrator) và chạy lệnh: `schtasks /delete /tn "WindowsHandheldTool_AutoStart" /f`.

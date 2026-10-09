@@ -10,80 +10,80 @@ echo.
 
 cd /d "%~dp0"
 
-:: 1. Tắt tiến trình cũ đang chạy để tránh lỗi khóa tệp (File Lock)
-echo [*] Kiem tra va dong tien trinh dang chay (windows_handheld_tool.exe)...
+:: 1. Check and close running process to avoid file lock error
+echo [*] Check and close running process (windows_handheld_tool.exe)...
 taskkill /F /IM "windows_handheld_tool.exe" 2>nul
 echo.
 
-:: 2. Bien dich thu vien C++ DXGI Hook DLL
-echo [*] Buoc 1/4: Bien dich thu vien C++ DXGI Hook DLL...
+:: 2. Compile DXGI Hook DLL
+echo [*] Step 1/4: Compile C++ DXGI Hook DLL...
 if exist "build_dxgi_hook.bat" (
     call build_dxgi_hook.bat
     if !ERRORLEVEL! NEQ 0 (
-        echo [ERROR] Bien dich dxgi_hook.dll that bai!
+        echo [ERROR] Compile dxgi_hook.dll failed!
         pause
         exit /b !ERRORLEVEL!
     )
 ) else (
-    echo [!] Khong tim thay build_dxgi_hook.bat, bo qua buoc nay.
+    echo [!] build_dxgi_hook.bat not found! Skip this step.
 )
 echo.
 
-:: 3. Bien dich Flutter Windows sang che do Release
-echo [*] Buoc 2/4: Bien dich Flutter Windows Release...
+:: 3. Compile Flutter Windows Release
+echo [*] Step 2/4: Compile Flutter Windows Release...
 call flutter build windows --release
 if !ERRORLEVEL! NEQ 0 (
-    echo [ERROR] Flutter build release that bai!
+    echo [ERROR] Flutter build release failed!
     pause
     exit /b !ERRORLEVEL!
 )
 echo.
 
-:: 4. Sao chep cac tep driver phan cung va tep cau hinh vao thu muc Release
-echo [*] Buoc 3/4: Sao chep driver nhi phan (bin\) va config.json...
+:: 4. Copy binary drivers and config.json to Release folder
+echo [*] Step 3/4: Copy binary drivers (bin\) and config.json...
 set "RELEASE_DIR=%~dp0build\windows\x64\runner\Release"
 
 if not exist "%RELEASE_DIR%\bin" mkdir "%RELEASE_DIR%\bin"
 xcopy /E /I /Y "bin\*" "%RELEASE_DIR%\bin\" >nul
 copy /Y "config.json" "%RELEASE_DIR%\config.json" >nul
 
-echo [OK] Da sao chep day du thu muc bin\ va config.json vao Release.
+echo [OK] Copied all bin\ and config.json to Release.
 echo.
 
-:: 5. Dong goi ban Portable ZIP vao dist\portable\
-echo [*] Buoc 4/4: Nen ban Portable ZIP bang PowerShell...
+:: 5. Package Portable ZIP to dist\portable\
+echo [*] Step 4/4: Package Portable ZIP to dist\portable\...
 set "DIST_DIR=%~dp0dist\portable"
 if not exist "%DIST_DIR%" mkdir "%DIST_DIR%"
 
 set "ZIP_FILE=%DIST_DIR%\windows-handheld-tool-v1.0.0-portable.zip"
 if exist "%ZIP_FILE%" del /F /Q "%ZIP_FILE%"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Write-Host 'Dang nen du lieu...' -ForegroundColor Cyan; Compress-Archive -Path '%RELEASE_DIR%\*' -DestinationPath '%ZIP_FILE%' -Force"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Write-Host 'Packaging Portable ZIP...' -ForegroundColor Cyan; Compress-Archive -Path '%RELEASE_DIR%\*' -DestinationPath '%ZIP_FILE%' -Force"
 
 if !ERRORLEVEL! NEQ 0 (
-    echo [ERROR] Nen file zip that bai!
+    echo [ERROR] Zip failed!
     pause
     exit /b !ERRORLEVEL!
 )
 
 echo.
 echo ========================================================
-echo   [THANH CONG] Da tao ban phat hanh Portable hoan chinh!
+echo   [SUCCESS] Created complete Portable release!
 echo ========================================================
-echo   Tep nen: %ZIP_FILE%
+echo   Zip file: %ZIP_FILE%
 echo ========================================================
 echo.
 
 :: Tuy chon mo thu muc hoac chay thu ung dung voi quyen Administrator
-echo Tuy chon:
-echo   [1] Mo thu muc chua file Portable (dist\portable)
-echo   [2] Khoi chay ngay ung dung Release voi quyen Administrator (Run as Admin)
-echo   [3] Thoat
+echo Options:
+echo   [1] Open folder containing Portable file (dist\portable)
+echo   [2] Run Release application (Run as Admin)
+echo   [3] Exit
 echo.
-set /p "CHOICE=Nhap lua chon cua ban (1/2/3, mac dinh la 1): "
+set /p "CHOICE=Choose your option (1/2/3, default is 1): "
 
 if "%CHOICE%"=="2" (
-    echo Dang khoi chay windows_handheld_tool.exe voi quyen Administrator...
+    echo Running windows_handheld_tool.exe as Administrator...
     powershell -NoProfile -Command "Start-Process '%RELEASE_DIR%\windows_handheld_tool.exe' -Verb RunAs"
 ) else if "%CHOICE%"=="3" (
     exit /b 0
