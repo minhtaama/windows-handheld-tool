@@ -39,15 +39,29 @@ if !ERRORLEVEL! NEQ 0 (
 )
 echo.
 
-:: 4. Copy binary drivers and config.json to Release folder
-echo [*] Step 3/4: Copy binary drivers (bin\) and config.json...
+:: 4. Copy binary drivers and config.json to Release folder (only copy essential runtime binaries, remove all .ps1, .bat, .py scripts and debug files)
+echo [*] Step 3/4: Copy clean binary drivers (bin\) and config.json...
 set "RELEASE_DIR=%~dp0build\windows\x64\runner\Release"
 
-if not exist "%RELEASE_DIR%\bin" mkdir "%RELEASE_DIR%\bin"
-xcopy /E /I /Y "bin\*" "%RELEASE_DIR%\bin\" >nul
+if exist "%RELEASE_DIR%\bin" rmdir /S /Q "%RELEASE_DIR%\bin"
+mkdir "%RELEASE_DIR%\bin"
+
+:: Only copy essential runtime binaries, remove all .ps1, .bat, .py scripts and debug files
+for %%F in (
+    "ryzenadj.dll"
+    "libryzenadj.dll"
+    "WinRing0x64.dll"
+    "WinRing0x64.sys"
+    "inpoutx64.dll"
+    "dxgi_hook.dll"
+) do (
+    if exist "bin\%%~F" (
+        copy /Y "bin\%%~F" "%RELEASE_DIR%\bin\" >nul
+    )
+)
 copy /Y "config.json" "%RELEASE_DIR%\config.json" >nul
 
-echo [OK] Copied all bin\ and config.json to Release.
+echo [OK] Copied clean runtime binaries and config.json to Release.
 echo.
 
 :: 5. Package Portable ZIP to dist\portable\
@@ -55,10 +69,10 @@ echo [*] Step 4/4: Package Portable ZIP to dist\portable\...
 set "DIST_DIR=%~dp0dist\portable"
 if not exist "%DIST_DIR%" mkdir "%DIST_DIR%"
 
-set "ZIP_FILE=%DIST_DIR%\windows-handheld-tool-v1.0.0-portable.zip"
+set "ZIP_FILE=%DIST_DIR%\windows-handheld-tool-v1.1.0-portable.zip"
 if exist "%ZIP_FILE%" del /F /Q "%ZIP_FILE%"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Write-Host 'Packaging Portable ZIP...' -ForegroundColor Cyan; Compress-Archive -Path '%RELEASE_DIR%\*' -DestinationPath '%ZIP_FILE%' -Force"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Write-Host 'Packaging Portable ZIP...' -ForegroundColor Cyan; Compress-Archive -Path '%RELEASE_DIR%\*' -DestinationPath '%ZIP_FILE%' -Force; if (Test-Path '%ZIP_FILE%') { Unblock-File -Path '%ZIP_FILE%' }"
 
 if !ERRORLEVEL! NEQ 0 (
     echo [ERROR] Zip failed!
