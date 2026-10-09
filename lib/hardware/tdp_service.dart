@@ -1,7 +1,11 @@
 import 'dart:ffi';
 import 'dart:io';
+import 'package:ffi/ffi.dart';
 import '../core/logger.dart';
 import 'hardware_base.dart';
+
+typedef _SetDllDirectoryC = Int32 Function(Pointer<Utf16> lpPathName);
+typedef _SetDllDirectoryDart = int Function(Pointer<Utf16> lpPathName);
 
 typedef _InitRyzenAdjC = Pointer<Void> Function();
 typedef _InitRyzenAdjDart = Pointer<Void> Function();
@@ -61,7 +65,22 @@ class TdpController extends HardwareController {
 
     if (foundPath != null) {
       try {
-        _ryzenDll = DynamicLibrary.open(foundPath);
+        final absPath = File(foundPath).absolute.path;
+        final dirPath = File(absPath).parent.path;
+
+        // Bổ sung thư mục bin vào danh sách tìm kiếm DLL của Windows để nạp được WinRing0x64.dll và inpoutx64.dll
+        try {
+          final kernel32 = DynamicLibrary.open('kernel32.dll');
+          final setDllDirectory = kernel32
+              .lookupFunction<_SetDllDirectoryC, _SetDllDirectoryDart>(
+                'SetDllDirectoryW',
+              );
+          final dirPtr = dirPath.toNativeUtf16();
+          setDllDirectory(dirPtr);
+          calloc.free(dirPtr);
+        } catch (_) {}
+
+        _ryzenDll = DynamicLibrary.open(absPath);
         final initFunc = _ryzenDll!
             .lookupFunction<_InitRyzenAdjC, _InitRyzenAdjDart>('init_ryzenadj');
         _setStapmLimit = _ryzenDll!
@@ -74,15 +93,23 @@ class TdpController extends HardwareController {
         _ryzenHandle = initFunc();
         if (_ryzenHandle != null && _ryzenHandle != nullptr) {
           _isHardwareActive = true;
-          _logger.info('Khởi tạo thành công kết nối phần cứng RyzenAdj DLL ($foundPath).');
+          _logger.info(
+            'Khởi tạo thành công kết nối phần cứng RyzenAdj DLL ($absPath).',
+          );
         } else {
-          _logger.warning('Đã tìm thấy $foundPath nhưng không thể mở handle (cần quyền Administrator để nạp Ring 0 Driver). Chuyển sang mô phỏng.');
+          _logger.warning(
+            'Đã tìm thấy $absPath nhưng không thể mở handle (cần quyền Administrator để nạp Ring 0 Driver). Chuyển sang mô phỏng.',
+          );
         }
       } catch (e) {
-        _logger.warning('Không thể nạp ryzenadj.dll: $e. Sử dụng chế độ mô phỏng.');
+        _logger.warning(
+          'Không thể nạp ryzenadj.dll: $e. Sử dụng chế độ mô phỏng.',
+        );
       }
     } else {
-      _logger.info('Chưa phát hiện ryzenadj.dll. Hoạt động ở chế độ mô phỏng an toàn.');
+      _logger.info(
+        'Chưa phát hiện ryzenadj.dll. Hoạt động ở chế độ mô phỏng an toàn.',
+      );
     }
   }
 

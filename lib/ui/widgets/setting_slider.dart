@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
+import 'help_box.dart';
 import 'preset_selector.dart';
 
 /// Widget thanh trượt điều khiển dùng chung (DRY) chuẩn Handheld Gaming với thanh đo kép đồng trục (Coaxial Dual-Gauge).
@@ -13,13 +14,16 @@ class SettingSlider extends StatelessWidget {
   final int step;
   final String unit;
   final ValueChanged<int> onChanged;
-  final Widget? trailing;
+  final String? helpText;
 
   /// Giá trị thực tế tức thời đo được từ phần cứng (Live Telemetry)
   final int? currentValue;
 
   /// Màu sắc của dải đo thực tế bên trong thanh trượt
   final Color? currentColor;
+
+  /// Màu sắc điểm nhấn chủ đạo của thanh trượt (icon, track mục tiêu)
+  final Color? accentColor;
 
   /// Danh sách mốc chọn nhanh tùy chọn (ví dụ: [0, 30, 40, 60] cho FPS)
   final List<int>? quickPresets;
@@ -40,9 +44,10 @@ class SettingSlider extends StatelessWidget {
     required this.step,
     required this.unit,
     required this.onChanged,
-    this.trailing,
+    this.helpText,
     this.currentValue,
     this.currentColor,
+    this.accentColor,
     this.quickPresets,
     this.shouldShowSlider = true,
     this.isFocused = false,
@@ -57,7 +62,8 @@ class SettingSlider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final liveColor = currentColor ?? AppTheme.secondary;
+    final accent = accentColor ?? AppTheme.primary;
+    final liveColor = currentColor ?? accentColor ?? AppTheme.secondary;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 150),
@@ -66,7 +72,7 @@ class SettingSlider extends StatelessWidget {
         color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(AppTheme.cardRadius),
         border: Border.all(
-          color: isFocused ? AppTheme.accent : AppTheme.cardBorder,
+          color: isFocused ? AppTheme.accent : AppTheme.cardBackground,
           width: isFocused ? 1.8 : 1.0,
         ),
         boxShadow: isFocused
@@ -86,25 +92,34 @@ class SettingSlider extends StatelessWidget {
           // 1. Dòng tiêu đề và thông số (Gọn gàng, tinh tế, chống tràn pixel tuyệt đối)
           Row(
             children: [
-              Icon(icon, size: 18, color: AppTheme.primary),
+              Icon(icon, size: AppTheme.scaled(18), color: accent),
               const SizedBox(width: 8),
-              // Tiêu đề tự co giãn linh hoạt
+              // Tiêu đề tự co giãn linh hoạt và icon (?) nằm ngay bên cạnh
               Expanded(
-                child: Text(
-                  title,
-                  style: AppTheme.cardTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        style: AppTheme.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (helpText != null) ...[
+                      const SizedBox(width: 6),
+                      HelpBox(helpText: helpText, isFocused: isFocused),
+                    ],
+                  ],
                 ),
               ),
               const SizedBox(width: 6),
-              // Widget bổ trợ nếu có (ví dụ nút AUTO/MANUAL)
-              if (trailing != null) ...[trailing!, const SizedBox(width: 8)],
               // Thông số hiển thị: nếu có giá trị thực tế thì hiển thị "Live / Target"
               if (currentValue != null) ...[
                 Text(
                   '$currentValue',
-                  style: TextStyle(
+                  style: AppTheme.body.copyWith(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
                     color: liveColor,
@@ -112,14 +127,16 @@ class SettingSlider extends StatelessWidget {
                 ),
                 Text(
                   ' / ',
-                  style: TextStyle(
+                  style: AppTheme.caption.copyWith(
                     fontSize: 12,
-                    fontWeight: FontWeight.w400,
                     color: AppTheme.textSecondary.withValues(alpha: 0.6),
                   ),
                 ),
               ],
-              Text(_formatTargetValue(value), style: AppTheme.cardValue),
+              Text(
+                _formatTargetValue(value),
+                style: AppTheme.title.copyWith(fontWeight: FontWeight.w700),
+              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -153,7 +170,7 @@ class SettingSlider extends StatelessWidget {
                         width: constraints.maxWidth * targetRatio,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(3),
-                          color: AppTheme.primary.withValues(alpha: 0.85),
+                          color: accent.withValues(alpha: 0.85),
                         ),
                       );
                     },
@@ -204,7 +221,7 @@ class SettingSlider extends StatelessWidget {
                       overlayShape: const RoundSliderOverlayShape(
                         overlayRadius: 14,
                       ),
-                      overlayColor: AppTheme.primary.withValues(alpha: 0.15),
+                      overlayColor: accent.withValues(alpha: 0.15),
                     ),
                     child: Slider(
                       value: value.toDouble().clamp(

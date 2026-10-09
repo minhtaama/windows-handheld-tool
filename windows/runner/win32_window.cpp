@@ -120,6 +120,37 @@ Win32Window::~Win32Window() {
   Destroy();
 }
 
+// Windows Z-Order Bands (user32.dll internal APIs for System Overlays)
+enum ZBID {
+  ZBID_DEFAULT = 0,
+  ZBID_DESKTOP = 1,
+  ZBID_SYSTEM_TOOLS = 2,
+  ZBID_LOCK = 3,
+  ZBID_ABOVELOCK_APP = 4,
+  ZBID_ALWAYSONTOP = 5,
+  ZBID_IMMERSIVE_BACKGROUND = 6,
+  ZBID_IMMERSIVE_APPCHROME = 15,
+  ZBID_IMMERSIVE_MOMENT = 16,
+  ZBID_GENUINE_WINDOWS = 17,
+};
+
+typedef HWND(WINAPI* fnCreateWindowInBand)(
+    DWORD dwExStyle,
+    LPCWSTR lpClassName,
+    LPCWSTR lpWindowName,
+    DWORD dwStyle,
+    int X,
+    int Y,
+    int nWidth,
+    int nHeight,
+    HWND hWndParent,
+    HMENU hMenu,
+    HINSTANCE hInstance,
+    LPVOID lpParam,
+    DWORD dwBand);
+
+typedef BOOL(WINAPI* fnSetWindowBand)(HWND hWnd, HWND hwndInsertAfter, DWORD dwBand);
+
 bool Win32Window::Create(const std::wstring& title,
                          const Point& origin,
                          const Size& size) {
@@ -134,16 +165,44 @@ bool Win32Window::Create(const std::wstring& title,
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
-  HWND window = CreateWindowEx(
-      WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-      window_class, title.c_str(), WS_POPUP,
-      Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
-      Scale(size.width, scale_factor), Scale(size.height, scale_factor),
-      nullptr, nullptr, GetModuleHandle(nullptr), this);
+  HWND window = nullptr;
+  HMODULE user32_module = GetModuleHandleA("user32.dll");
+  if (!user32_module) {
+    user32_module = LoadLibraryA("user32.dll");
+  }
+
+  if (user32_module) {
+    auto pCreateWindowInBand = reinterpret_cast<fnCreateWindowInBand>(
+        GetProcAddress(user32_module, "CreateWindowInBand"));
+    if (!pCreateWindowInBand) {
+      pCreateWindowInBand = reinterpret_cast<fnCreateWindowInBand>(
+          GetProcAddress(user32_module, MAKEINTRESOURCEA(2503)));
+    }
+    if (pCreateWindowInBand) {
+      window = pCreateWindowInBand(
+          WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+          window_class, title.c_str(), WS_POPUP,
+          Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
+          Scale(size.width, scale_factor), Scale(size.height, scale_factor),
+          nullptr, nullptr, GetModuleHandle(nullptr), this,
+          ZBID_SYSTEM_TOOLS);
+    }
+  }
+
+  if (!window) {
+    window = CreateWindowEx(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+        window_class, title.c_str(), WS_POPUP,
+        Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
+        Scale(size.width, scale_factor), Scale(size.height, scale_factor),
+        nullptr, nullptr, GetModuleHandle(nullptr), this);
+  }
 
   if (!window) {
     return false;
   }
+
+  SetLayeredWindowAttributes(window, 0, 255, LWA_ALPHA);
 
   UpdateTheme(window);
 
@@ -151,9 +210,20 @@ bool Win32Window::Create(const std::wstring& title,
 }
 
 bool Win32Window::Show() {
-  SetWindowPos(window_handle_, HWND_TOPMOST, 0, 0, 0, 0,
-               SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-  return ShowWindow(window_handle_, SW_SHOW);
+  HMONITOR monitor = MonitorFromWindow(window_handle_, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO monitor_info = {sizeof(MONITORINFO)};
+  if (GetMonitorInfo(monitor, &monitor_info)) {
+    int width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+    int height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+    SetWindowPos(window_handle_, HWND_TOPMOST,
+                 monitor_info.rcMonitor.left, monitor_info.rcMonitor.top,
+                 width, height,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  } else {
+    SetWindowPos(window_handle_, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  }
+  return ShowWindow(window_handle_, SW_SHOWNOACTIVATE);
 }
 
 // static
@@ -190,14 +260,13 @@ Win32Window::MessageHandler(HWND hwnd,
       }
       return 0;
 
+    case WM_DISPLAYCHANGE:
     case WM_DPICHANGED: {
-      auto newRectSize = reinterpret_cast<RECT*>(lparam);
-      LONG newWidth = newRectSize->right - newRectSize->left;
-      LONG newHeight = newRectSize->bottom - newRectSize->top;
-
-      SetWindowPos(hwnd, nullptr, newRectSize->left, newRectSize->top, newWidth,
-                   newHeight, SWP_NOZORDER | SWP_NOACTIVATE);
-
+      RECT rect = GetClientArea();
+      if (child_content_ != nullptr) {
+        MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
+                   rect.bottom - rect.top, TRUE);
+      }
       return 0;
     }
     case WM_GETMINMAXINFO: {
@@ -224,10 +293,16 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
     }
 
+    case WM_MOUSEACTIVATE:
+      return MA_NOACTIVATE;
+
     case WM_ACTIVATE:
-      if (child_content_ != nullptr) {
-        SetFocus(child_content_);
-      }
+      return 0;
+
+    case WM_NCACTIVATE:
+      return TRUE;
+
+    case WM_SETFOCUS:
       return 0;
 
     case WM_DWMCOLORIZATIONCOLORCHANGED:
@@ -262,8 +337,6 @@ void Win32Window::SetChildContent(HWND content) {
 
   MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
              frame.bottom - frame.top, true);
-
-  SetFocus(child_content_);
 }
 
 RECT Win32Window::GetClientArea() {

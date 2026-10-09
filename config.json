@@ -1,21 +1,29 @@
 {
     "overlay": {
         "width": 360,
-        "width_percent": 35,
+        "width_percent": 30,
         "animation_duration_ms": 400,
-        "side": "right"
+        "side": "right",
+        "scale_percent": 100,
+        "scale": 1.0
     },
     "hotkey": {
-        "toggle_overlay": "ctrl+shift+q",
-        "toggle_keyboard": "ctrl+shift+k"
+        "toggle_overlay": "Ctrl+Shift+Q",
+        "toggle_keyboard": "Ctrl+Shift+K"
     },
     "gamepad": {
         "enabled": true,
         "poll_interval_ms": 50,
-        "toggle_combo": [
-            "BACK",
-            "RIGHT_SHOULDER"
-        ]
+        "overlay_combo": "",
+        "keyboard_combo": ""
+    },
+    "system": {
+        "autostart": false
+    },
+    "dxgi_hook": {
+        "enabled": true,
+        "mode": "dxgiBorderless",
+        "auto_borderless": true
     },
     "hardware": {
         "tdp": {
@@ -23,13 +31,13 @@
             "max": 35,
             "step": 1,
             "current": 20,
-            "auto": false
+            "auto": true
         },
         "fan": {
             "min": 0,
             "max": 100,
             "step": 5,
-            "current": 75,
+            "current": 50,
             "auto": true
         },
         "brightness": {
@@ -45,10 +53,12 @@
             "current": 50
         },
         "audio": {
-            "current": 60
+            "current": 50
         },
         "rtss": {
-            "fps_limit": 60
+            "fps_limit": 0,
+            "osd_enabled": true,
+            "osd_zoom": 1
         }
     }
 }

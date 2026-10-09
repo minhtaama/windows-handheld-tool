@@ -46,6 +46,31 @@ class DeviceInfoService {
   static const _logger = AppLogger('DeviceInfoService');
   static DeviceInfo? _current;
 
+  /// Danh sách các chuỗi giữ chỗ mặc định (placeholders) do nhà sản xuất BIOS để lại
+  static const Set<String> _smbiosPlaceholders = {
+    'SYSTEM PRODUCT NAME',
+    'SYSTEM VERSION',
+    'DEFAULT STRING',
+    'TO BE FILLED BY O.E.M.',
+    'TO BE FILLED BY OEM',
+    'UNKNOWN',
+    'ALL SERIES',
+    'SKU',
+    'NOT APPLICABLE',
+    'N/A',
+    'GENERIC',
+    'EMPTY',
+    'NONE',
+  };
+
+  /// Kiểm tra xem giá trị SMBIOS có phải là chuỗi thực tế hay chỉ là placeholder giữ chỗ
+  static bool _isValidSmbiosString(String? value) {
+    if (value == null) return false;
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return false;
+    return !_smbiosPlaceholders.contains(trimmed.toUpperCase());
+  }
+
   /// Lấy thông tin thiết bị đã nhận diện hoặc fallback mặc định.
   static DeviceInfo get currentDevice =>
       _current ??
@@ -90,21 +115,25 @@ class DeviceInfoService {
         }
       }
     } catch (e) {
-      _logger.error('Lỗi khi truy vấn thông tin BIOS từ Registry', e);
+      _logger.error('Error querying BIOS information from Registry', e);
     }
 
-    // Ưu tiên System info, nếu là chuỗi rác/mặc định thì dùng BaseBoard info
-    final mfr = (systemMfr.isNotEmpty && systemMfr != 'Default string')
+    // Ưu tiên System info, nếu là chuỗi giữ chỗ/mặc định thì fallback sang BaseBoard info
+    final mfr = _isValidSmbiosString(systemMfr)
         ? systemMfr
-        : boardMfr;
-    final prod = (systemProd.isNotEmpty && systemProd != 'Default string')
+        : (_isValidSmbiosString(boardMfr)
+            ? boardMfr
+            : (systemMfr.isNotEmpty ? systemMfr : boardMfr));
+    final prod = _isValidSmbiosString(systemProd)
         ? systemProd
-        : boardProd;
+        : (_isValidSmbiosString(boardProd)
+            ? boardProd
+            : (systemProd.isNotEmpty ? systemProd : boardProd));
 
     _current = _resolveDevice(mfr, prod);
     _logger.info(
-      'Đã nhận diện thiết bị: ${_current!.displayName} '
-      '[Hãng: $mfr, Sản phẩm: $prod, Handheld: ${_current!.isHandheld}]',
+      'Device identified: ${_current!.displayName} '
+      '[Manufacturer: $mfr, Product: $prod, Handheld: ${_current!.isHandheld}]',
     );
 
     return _current!;
@@ -273,11 +302,23 @@ class DeviceInfoService {
     }
 
     // 8. Máy tính PC thông thường
+    String displayName = 'Windows PC';
+    if (_isValidSmbiosString(rawProd)) {
+      if (_isValidSmbiosString(rawMfr) &&
+          !rawProd.toUpperCase().contains(rawMfr.toUpperCase())) {
+        displayName = '$rawMfr $rawProd';
+      } else {
+        displayName = rawProd;
+      }
+    } else if (_isValidSmbiosString(rawMfr)) {
+      displayName = '$rawMfr PC';
+    }
+
     return DeviceInfo(
       manufacturer: rawMfr.isEmpty ? 'Unknown' : rawMfr,
       productName: rawProd.isEmpty ? 'Generic PC' : rawProd,
       model: HandheldModel.genericPc,
-      displayName: rawProd.isNotEmpty ? rawProd : 'Windows PC',
+      displayName: displayName,
       isHandheld: false,
     );
   }

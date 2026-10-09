@@ -18,14 +18,14 @@ class ConfigManager {
       if (file.existsSync()) {
         final content = file.readAsStringSync();
         _data = jsonDecode(content) as Map<String, dynamic>;
-        _logger.info('Đã tải cấu hình thành công từ $filePath');
+        _logger.info('Loaded configuration successfully from $filePath');
       } else {
-        _logger.warning('Không tìm thấy $filePath, sử dụng cấu hình mặc định.');
+        _logger.warning('$filePath not found, using default configuration.');
         _data = _defaultConfig();
         save();
       }
     } catch (e) {
-      _logger.error('Lỗi khi đọc file config, sử dụng mặc định', e);
+      _logger.error('Error reading config file, using defaults', e);
       _data = _defaultConfig();
     }
   }
@@ -73,7 +73,7 @@ class ConfigManager {
       const encoder = JsonEncoder.withIndent('    ');
       file.writeAsStringSync(encoder.convert(_data));
     } catch (e) {
-      _logger.error('Lỗi khi lưu cấu hình', e);
+      _logger.error('Error saving configuration', e);
     }
   }
 
@@ -92,6 +92,10 @@ class ConfigManager {
           "enabled": true,
           "poll_interval_ms": 50,
           "toggle_combo": ["BACK", "RIGHT_SHOULDER"],
+        },
+        "dxgi_hook": {
+          "enabled": true,
+          "auto_borderless": true,
         },
         "hardware": {
           "tdp": {"min": 5, "max": 35, "step": 1, "current": 15},

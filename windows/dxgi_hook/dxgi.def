@@ -1,0 +1,20 @@
+LIBRARY dxgi_hook
+EXPORTS
+    InstallGlobalDxgiHook
+    UninstallGlobalDxgiHook
+    IsGlobalDxgiHookActive
+    InjectDxgiHook
+    EjectDxgiHook
+    MakeWindowBorderless
+    SetOverlayActive
+    IsOverlayActive
+    SetOverlayHookMode
+    GetOverlayHookMode
+    SetSharedTextureHandle
+    CreateDXGIFactory
+    CreateDXGIFactory1
+    CreateDXGIFactory2
+    DXGID3D10CreateDevice
+    DXGID3D10CreateLayeredDevice
+    DXGID3D10GetProviderFactoryAddress
+    DXGID3D10RegisterLayers
