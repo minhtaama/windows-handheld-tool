@@ -1,0 +1,97 @@
+name: Build & Publish Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows Release Package
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Visual Studio MSVC Build Tools
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Setup Flutter Environment
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Compile DXGI Hook C++ DLL
+        run: |
+          cmd.exe /c build_dxgi_hook.bat
+
+      - name: Build Flutter Windows Application (Release)
+        run: flutter build windows --release
+
+      - name: Assemble Release Distribution Folder
+        shell: pwsh
+        run: |
+          $distDir = "dist/windows-handheld-tool"
+          New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+          
+          # Copy Flutter Release output
+          Copy-Item -Recurse -Force "build/windows/x64/runner/Release/*" $distDir/
+          
+          # Copy bin directory dependencies (ryzenadj, WinRing0, dxgi_hook, etc.)
+          $distBin = "$distDir/bin"
+          New-Item -ItemType Directory -Force -Path $distBin | Out-Null
+          Copy-Item -Recurse -Force "bin/*" $distBin/
+          
+          # Copy config file
+          Copy-Item -Force "config.json" "$distDir/config.json"
+          
+          # Copy README and notes
+          Copy-Item -Force "README.md" "$distDir/README.md"
+
+      - name: Setup Inno Setup Compiler
+        uses: GuillaumeFalourd/setup-windows10-sdk-action@v2
+        continue-on-error: true
+
+      - name: Install Inno Setup via Chocolatey
+        run: choco install innosetup -y
+
+      - name: Compile Windows Installer (Setup.exe)
+        shell: pwsh
+        run: |
+          if (Test-Path "installer.iss") {
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          }
+
+      - name: Compress Portable Zip Package
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          if (-not $version -or $version -eq "") { $version = "latest" }
+          Compress-Archive -Path "dist/windows-handheld-tool/*" -DestinationPath "dist/windows-handheld-tool-$version-portable.zip" -Force
+
+      - name: Create GitHub Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Windows Handheld Tool ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
