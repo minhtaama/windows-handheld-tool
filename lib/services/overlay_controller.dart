@@ -19,6 +19,7 @@ class OverlayController extends ChangeNotifier {
 
   DateTime _lastToggleTime = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _topmostWatchdogTimer;
+  Timer? _sharedTextureTimer;
 
   ConfigManager? config;
 
@@ -57,15 +58,32 @@ class OverlayController extends ChangeNotifier {
       // 1. Ngắt (Mute) tín hiệu Gamepad gửi đến game để tránh nhận nhầm thao tác
       DxgiHookService.instance.setOverlayActive(true);
 
+      // Kích hoạt đồng bộ Direct3D Shared Texture liên tục (30fps) nếu đang ở chế độ sharedTexture
+      _sharedTextureTimer?.cancel();
+      if (DxgiHookService.instance.hookMode == OverlayHookMode.sharedTexture) {
+        final hwnd = NativeWindowService.getWindowHandle();
+        if (hwnd != 0) {
+          DxgiHookService.instance.updateSharedTextureFromHwnd(hwnd);
+          _sharedTextureTimer = Timer.periodic(
+            const Duration(milliseconds: 33),
+            (_) {
+              if (_isVisible) {
+                DxgiHookService.instance.updateSharedTextureFromHwnd(hwnd);
+              }
+            },
+          );
+        }
+      }
+
       // 2. Hiển thị cửa sổ Fullscreen Transparent Overlay ở trạng thái SWP_NOACTIVATE & Always-on-Top
       NativeWindowService.showOverlayNoActivate();
 
-      // 3. Kích hoạt bộ canh gác Z-Order (Topmost Watchdog):
-      // Định kỳ tái khẳng định vị thế đỉnh của Overlay để chống lại việc Windows Tablet Taskbar
-      // thức giấc và cướp ngôi vị Topmost khi có cử chỉ chạm ở cạnh đáy.
+      // 3. Kích hoạt bộ canh gác Z-Order tần số cao (High-Frequency Topmost Watchdog - 200ms):
+      // Định kỳ tái khẳng định vị thế đỉnh của Overlay và cưỡng bức đẩy lùi Tablet Taskbar ra sau
+      // để chống lại việc Windows Tablet Taskbar thức giấc và cướp ngôi vị Topmost khi có cử chỉ chạm ở cạnh đáy.
       _topmostWatchdogTimer?.cancel();
       _topmostWatchdogTimer = Timer.periodic(
-        const Duration(milliseconds: 500),
+        const Duration(milliseconds: 200),
         (_) {
           if (_isVisible) {
             NativeWindowService.reassertTopmost();
@@ -88,9 +106,11 @@ class OverlayController extends ChangeNotifier {
       _isVisible = false;
       notifyListeners();
 
-      // 1. Hủy ngay lập tức bộ canh gác Z-Order để giải phóng 100% CPU/Timer
+      // 1. Hủy ngay lập tức các timer để giải phóng 100% CPU
       _topmostWatchdogTimer?.cancel();
       _topmostWatchdogTimer = null;
+      _sharedTextureTimer?.cancel();
+      _sharedTextureTimer = null;
 
       // 2. Khôi phục tín hiệu Gamepad cho game ngay lập tức
       DxgiHookService.instance.setOverlayActive(false);

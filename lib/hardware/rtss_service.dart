@@ -30,6 +30,22 @@ typedef _UnmapViewOfFileDart = int Function(Pointer<Void> lpBaseAddress);
 typedef _CloseHandleC = Int32 Function(Pointer<Void> hObject);
 typedef _CloseHandleDart = int Function(Pointer<Void> hObject);
 
+// Con trỏ hàm ShellExecuteW từ shell32.dll để khởi chạy tiến trình với UAC Administrator
+typedef _ShellExecuteWC = IntPtr Function(
+    IntPtr hwnd,
+    Pointer<Utf16> lpOperation,
+    Pointer<Utf16> lpFile,
+    Pointer<Utf16> lpParameters,
+    Pointer<Utf16> lpDirectory,
+    Int32 nShowCmd);
+typedef _ShellExecuteWDart = int Function(
+    int hwnd,
+    Pointer<Utf16> lpOperation,
+    Pointer<Utf16> lpFile,
+    Pointer<Utf16> lpParameters,
+    Pointer<Utf16> lpDirectory,
+    int nShowCmd);
+
 // Các hàm Win32 API được xuất bởi RTSSHooks64.dll
 typedef _LoadProfileC = Void Function(Pointer<Uint8> lpProfile);
 typedef _LoadProfileDart = void Function(Pointer<Uint8> lpProfile);
@@ -69,6 +85,7 @@ class RtssService {
   late final _MapViewOfFileDart _mapViewOfFile;
   late final _UnmapViewOfFileDart _unmapViewOfFile;
   late final _CloseHandleDart _closeHandle;
+  _ShellExecuteWDart? _shellExecute;
   bool _ffiLoaded = false;
 
   DynamicLibrary? _rtssHooksDll;
@@ -93,6 +110,12 @@ class RtssService {
       _closeHandle = kernel32
           .lookupFunction<_CloseHandleC, _CloseHandleDart>('CloseHandle');
       _ffiLoaded = true;
+
+      try {
+        final shell32 = DynamicLibrary.open('shell32.dll');
+        _shellExecute = shell32
+            .lookupFunction<_ShellExecuteWC, _ShellExecuteWDart>('ShellExecuteW');
+      } catch (_) {}
     } catch (_) {
       _ffiLoaded = false;
     }
@@ -234,7 +257,7 @@ class RtssService {
     return false;
   }
 
-  /// Đảm bảo RTSS đang chạy. Nếu chưa chạy, tự động tìm và khởi động RTSS.exe
+  /// Đảm bảo RTSS đang chạy. Nếu chưa chạy, tự động tìm và khởi động RTSS.exe với quyền Administrator (UAC)
   Future<bool> ensureRunning() async {
     if (isRunning()) {
       _logger.info('RTSS is running in background.');
@@ -244,17 +267,53 @@ class RtssService {
     for (final path in candidateExePaths) {
       if (File(path).existsSync()) {
         try {
-          await Process.start(path, [], runInShell: true, mode: ProcessStartMode.detached);
-          _logger.info('Auto-started RTSS from: $path');
-          await Future.delayed(const Duration(milliseconds: 1500));
-          return isRunning();
+          final dir = File(path).parent.path;
+          bool started = false;
+
+          if (_shellExecute != null) {
+            final opPtr = 'runas'.toNativeUtf16();
+            final filePtr = path.toNativeUtf16();
+            final dirPtr = dir.toNativeUtf16();
+            try {
+              // SW_SHOWMINNOACTIVE = 7: Khởi chạy ở trạng thái thu nhỏ khay hệ thống, không cướp focus
+              final res = _shellExecute!(0, opPtr, filePtr, nullptr, dirPtr, 7);
+              if (res > 32) {
+                started = true;
+                _logger.info('Auto-started RTSS via ShellExecuteW (runas): $path');
+              }
+            } finally {
+              calloc.free(opPtr);
+              calloc.free(filePtr);
+              calloc.free(dirPtr);
+            }
+          }
+
+          if (!started) {
+            // Fallback sang PowerShell Start-Process với -Verb RunAs
+            final proc = await Process.run('powershell', [
+              '-NoProfile',
+              '-NonInteractive',
+              '-Command',
+              'Start-Process "$path" -Verb RunAs -ErrorAction SilentlyContinue',
+            ]);
+            _logger.info('Auto-started RTSS via PowerShell RunAs (ExitCode: ${proc.exitCode})');
+          }
+
+          // Chờ tối đa 3 giây (6 x 500ms) để nhân Windows hoàn tất khởi tạo Shared Memory
+          for (int attempt = 0; attempt < 6; attempt++) {
+            await Future.delayed(const Duration(milliseconds: 500));
+            if (isRunning()) {
+              _logger.info('RTSS successfully detected running.');
+              return true;
+            }
+          }
         } catch (e) {
           _logger.warning('Error starting RTSS: $e');
         }
       }
     }
 
-    _logger.warning('RTSS.exe not found for auto-start.');
+    _logger.warning('RTSS.exe not found or failed to start.');
     return false;
   }
 
@@ -583,6 +642,12 @@ class RtssService {
       'EnableStat': '0',
       'ShowForegroundStat': '0',
     });
+    _initHooksDll();
+    if (_hooksLoaded && _updateProfiles != null) {
+      try {
+        _updateProfiles!();
+      } catch (_) {}
+    }
     return true;
   }
 
@@ -727,40 +792,55 @@ class RtssService {
       final entryOffset = osdArrOffset + (targetSlotIndex * osdEntrySize);
       final entryPtr = data + entryOffset;
 
-      // 1. Ghi tên chủ sở hữu slot szOSDOwner (offset 256, dung lượng 256 byte)
-      final ownerEncoded = utf8.encode(_osdAppOwner);
-      for (int i = 0; i < ownerEncoded.length && i < 255; i++) {
-        (entryPtr + 256 + i).cast<Uint8>().value = ownerEncoded[i];
-      }
-      (entryPtr + 256 + ownerEncoded.length.clamp(0, 255)).cast<Uint8>().value = 0;
-
-      // 2. Ghi chuỗi văn bản OSD theo chuẩn RTSS SDK:
-      final textBytes = utf8.encode(text);
-
-      if (ver >= 0x00020007) {
-        // Với shared memory v2.7 trở lên: Sử dụng szOSDEx (offset 512, 4096 byte) hỗ trợ đầy đủ markup tag
-        const maxLenEx = 4095;
-        for (int i = 0; i < textBytes.length && i < maxLenEx; i++) {
-          (entryPtr + 512 + i).cast<Uint8>().value = textBytes[i];
+      // 1. Kiểm tra cơ chế đồng bộ khóa dwBusy (v2.14+ tại offset 36)
+      Pointer<Int32>? busyPtr;
+      if (ver >= 0x0002000e) {
+        busyPtr = (data + 36).cast<Int32>();
+        // Bit 0 của dwBusy: 1 nếu Renderer RTSS đang khóa đọc bộ đệm để vẽ lên frame game
+        if ((busyPtr.value & 1) != 0) {
+          return false;
         }
-        final endEx = textBytes.length.clamp(0, maxLenEx);
-        (entryPtr + 512 + endEx).cast<Uint8>().value = 0;
+        busyPtr.value = busyPtr.value | 1; // Chiếm quyền ghi
+      }
 
-        // Xóa sạch szOSD cơ bản (offset 0) để RTSS chỉ đọc szOSDEx mở rộng
-        (entryPtr + 0).cast<Uint8>().value = 0;
-      } else {
-        // Phiên bản cũ hơn v2.7: Ghi vào szOSD cơ bản (offset 0, 256 byte)
+      try {
+        // Ghi tên chủ sở hữu slot szOSDOwner (offset 256, dung lượng 256 byte)
+        final ownerEncoded = utf8.encode(_osdAppOwner);
+        for (int i = 0; i < ownerEncoded.length && i < 255; i++) {
+          (entryPtr + 256 + i).cast<Uint8>().value = ownerEncoded[i];
+        }
+        (entryPtr + 256 + ownerEncoded.length.clamp(0, 255)).cast<Uint8>().value = 0;
+
+        // Ghi chuỗi văn bản OSD theo chuẩn RTSS SDK
+        final textBytes = utf8.encode(text);
+
+        // Luôn ghi chuỗi vào szOSD cơ bản (offset 0, tối đa 255 byte) để các phiên bản RTSS luôn nhận diện slot có dữ liệu
         const maxLenBasic = 255;
         for (int i = 0; i < textBytes.length && i < maxLenBasic; i++) {
           (entryPtr + i).cast<Uint8>().value = textBytes[i];
         }
         final endBasic = textBytes.length.clamp(0, maxLenBasic);
         (entryPtr + endBasic).cast<Uint8>().value = 0;
-      }
 
-      // 3. Tăng trường dwOSDFrame (offset 32 trong RTSS_SHARED_MEMORY) để kích hoạt RTSS refresh ngay lập tức
-      final framePtr = (data + 32).cast<Uint32>();
-      framePtr.value = framePtr.value + 1;
+        // Nếu là v2.7 trở lên, ghi thêm vào szOSDEx (offset 512, 4096 byte) hỗ trợ đầy đủ markup tag
+        if (ver >= 0x00020007) {
+          const maxLenEx = 4095;
+          for (int i = 0; i < textBytes.length && i < maxLenEx; i++) {
+            (entryPtr + 512 + i).cast<Uint8>().value = textBytes[i];
+          }
+          final endEx = textBytes.length.clamp(0, maxLenEx);
+          (entryPtr + 512 + endEx).cast<Uint8>().value = 0;
+        }
+
+        // Tăng trường dwOSDFrame (offset 32 trong RTSS_SHARED_MEMORY) để kích hoạt RTSS refresh ngay lập tức
+        final framePtr = (data + 32).cast<Uint32>();
+        framePtr.value = framePtr.value + 1;
+      } finally {
+        // Giải phóng khóa dwBusy sau khi hoàn tất ghi
+        if (busyPtr != null) {
+          busyPtr.value = 0;
+        }
+      }
 
       return true;
     } catch (e) {

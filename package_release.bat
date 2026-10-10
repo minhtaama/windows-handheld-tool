@@ -45,6 +45,7 @@ set "RELEASE_DIR=%~dp0build\windows\x64\runner\Release"
 
 :: Clean legacy Release\bin folder if exists to avoid duplicated files
 if exist "%RELEASE_DIR%\bin" rmdir /S /Q "%RELEASE_DIR%\bin"
+del /F /Q "%RELEASE_DIR%\*.old" 2>nul
 
 :: Copy essential runtime binaries directly to Release root (WinRing0 requires WinRing0x64.sys alongside caller process)
 for %%F in (

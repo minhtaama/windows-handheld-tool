@@ -698,6 +698,19 @@ flowchart TD
   $$\text{if } (g\_hookMode == \text{OVERLAY\_HOOK_MODE\_BORDERLESS})$$
 - Khi người chơi chọn `OVERLAY_HOOK_MODE_SHARED_TEXTURE` ($g\_hookMode = 1$), DLL đóng vai trò một lớp trung chuyển trong suốt (Transparent Pass-Through), giữ nguyên vẹn 100% trạng thái hiển thị của trò chơi và chỉ kích hoạt duy nhất luồng tiêm kết cấu Direct3D tại khe thời gian `Present`.
 
+#### 3. Bế tắc kỹ thuật và giải pháp triệt để cho Direct3D Shared Texture Pipeline (Surface Sharing & Format Family Harmonization)
+- **Bản chất vật lý của Direct3D Inter-Process Texture Sharing**: Để đưa được hình ảnh từ một ứng dụng độc lập vào trong bộ đệm khung hình của trò chơi DirectX mà không tạo thêm cửa sổ ngoài, tiến trình nguồn (Host) phải khởi tạo một đối tượng kết cấu Direct3D 11 (`ID3D11Texture2D`) mang cờ tài nguyên chia sẻ `D3D11_RESOURCE_MISC_SHARED` trong nhân đồ họa (DXGKRNL). Sau đó, tiến trình nguồn lấy con trỏ định danh tài nguyên chia sẻ (`HANDLE hSharedTexture`) qua giao diện `IDXGIResource::GetSharedHandle` và đưa vào phân đoạn nhớ dùng chung toàn hệ thống (`#pragma data_seg(".shared")`).
+- **Bế tắc 1: Thiếu đường ống tạo và chụp kết cấu (Missing Surface Capture Pipeline)**:
+  * Trong mã nguồn trước đây, biến `g_hSharedTexture` luôn luôn mang giá trị `0` (`nullptr`) vì ứng dụng Flutter render vào cửa sổ Win32 riêng biệt (`FLUTTER_RUNNER_WIN32_WINDOW`) mà không có đường ống trích xuất khung hình sang GPU VRAM.
+  * *Giải pháp*: Triển khai hàm `CreateOverlaySharedTexture(width, height)` khởi tạo thiết bị đồ họa Direct3D 11 trên Host và tạo bộ đệm GDI 32-bit DIB Section song song. Hàm `UpdateOverlaySharedTextureFromHwnd(hWnd)` định kỳ sử dụng `PrintWindow(hWnd, hDC, PW_RENDERFULLCONTENT)` (kết hợp `BitBlt`) trích xuất bề mặt render của cửa sổ Flutter và nạp thẳng vào VRAM qua `UpdateSubresource` với chu kỳ 30 FPS khi panel đang mở, tự động hủy bỏ khi đóng panel để giải phóng 100% CPU.
+- **Bế tắc 2: Xung đột họ định dạng điểm ảnh trong nhân đồ họa (Direct3D Format Family Incompatibility)**:
+  * Đa số các tựa game Direct3D hiện đại (Unreal Engine, Unity, Frostbite) sử dụng chuỗi hoán đổi khung hình định dạng `DXGI_FORMAT_R8G8B8A8_UNORM` (thuộc họ `R8G8B8A8_TYPELESS`), trong khi bề mặt render Win32 GDI mặc định là `DXGI_FORMAT_B8G8R8A8_UNORM` (thuộc họ `B8G8R8A8_TYPELESS`).
+  * Đặc tả phần cứng Direct3D 11 của hàm `CopySubresourceRegion` **nghiêm cấm sao chép dữ liệu giữa hai họ định dạng khác nhau**. Lời gọi sao chép sẽ bị nhân đồ họa âm thầm từ chối (Silent Drop) hoặc báo lỗi D3D11 Error.
+  * *Giải pháp*: Xây dựng đường ống kết cấu kép (`Dual Shared Texture Pipeline`): Host tạo đồng thời hai kết cấu GPU chia sẻ (`g_hSharedTextureBGRA` và `g_hSharedTextureRGBA`). Khi chụp điểm ảnh, hệ thống cập nhật kết cấu BGRA và thực hiện thuật toán hoán đổi kênh màu (Color Channel Swizzle: đảo bit $R \leftrightarrow B$) nạp vào kết cấu RGBA. Tại hàm `Hooked_Present`, hook đọc `pBackBuffer->GetDesc(&backDesc)` và tự động chọn đúng handle cùng họ định dạng với game, đảm bảo tương thích 100% mọi tựa game DirectX 11.
+- **Bế tắc 3: Bảo toàn không gian quan sát của game (Subresource Region Dock Clipping)**:
+  * Sao chép toàn bộ màn hình sẽ khiến 60% vùng trong suốt bên trái của cửa sổ Flutter đè nền đen lên thế giới game.
+  * *Giải pháp*: Hàm `CopySubresourceRegion` sử dụng cấu trúc `D3D11_BOX` chỉ trích xuất và ghi đè duy nhất khu vực Side Dock Panel (40% bề rộng mép phải màn hình), giữ nguyên vẹn 60% không gian hiển thị bên trái cho trò chơi. Đồng thời, tại `Hooked_SetFullscreenState`, nếu chưa sẵn sàng kết cấu dùng chung, hệ thống tự động fallback sang `MakeWindowBorderless` để bảo vệ hiển thị cho người dùng.
+
 ---
 
 ## Cơ Chế Phân Tầng Lớp Hiển Thị Z-Order Của DWM Và Thanh Tác Vụ Cảm Ứng Windows 11 (DWM Z-Bands & Touchscreen Taskbar Hierarchy)
@@ -729,13 +742,17 @@ flowchart TD
   $$\text{WS\_EX\_TOOLWINDOW} \quad (0x00000080)$$
 - **Quy tắc hiển thị của Windows**: Cửa sổ mang cờ `WS_EX_TOOLWINDOW` (dành cho thanh công cụ nổi) kết hợp với cờ không kích hoạt `WS_EX_NOACTIVATE` / `SWP_NOACTIVATE` sẽ bị DWM chủ động hạ bậc Z-order xuống dưới các cửa sổ hệ thống (`Shell_TrayWnd`) khi ở ngoài màn hình Desktop. Kết quả là thanh Taskbar đè lên mép dưới của Quick Settings Panel, che khuất các nút điều khiển quan trọng.
 
-#### 2. Giải pháp khôi phục Z-Order tối cao
-1. **Loại bỏ cờ hạ bậc `WS_EX_TOOLWINDOW`**:
-   - Khi hiển thị lớp phủ, loại bỏ hoàn toàn cờ `WS_EX_TOOLWINDOW` khỏi cấu trúc extended style. Cửa sổ giữ nguyên trạng thái `WS_EX_TOPMOST` thuần túy để DWM xếp ngang hàng hoặc cao hơn `Shell_TrayWnd`.
-2. **Kỹ thuật neo đỉnh Z-Order (Topmost Re-assertion)**:
-   - Khi kích hoạt hiển thị, phát lệnh gọi API `SetWindowPos(hwnd, HWND_TOPMOST, ...)` kết hợp kiểm tra địa chỉ cửa sổ `Shell_TrayWnd` để tái lập quyền ưu tiên hiển thị trước thanh Taskbar.
-3. **Cơ chế khoảng đệm vùng an toàn thích ứng (Adaptive Safe Area Margin)**:
-   - Để đảm bảo giao diện luôn hiển thị trọn vẹn 100% trong mọi tình huống DWM cưỡng bức Taskbar, tầng giao diện [[OverlayScreen]] có thể tự động cộng thêm khoảng đệm đáy (`EdgeInsets.only(bottom: taskbarHeight)`) tương đương chiều cao của thanh Taskbar cảm ứng (khoảng 64px - 72px) khi phát hiện người dùng đang thao tác ngoài màn hình Desktop.
+#### 2. Giải pháp khôi phục Z-Order tối cao (Taskbar Demotion Order & Pure Topmost)
+1. **Loại bỏ triệt để cờ hạ bậc `WS_EX_TOOLWINDOW`**:
+   - Về bản chất vật lý của Windows Shell, cửa sổ lớp phủ được tạo với kiểu dáng `WS_POPUP`. Một cửa sổ `WS_POPUP` vốn dĩ không bao giờ xuất hiện biểu tượng trên thanh Taskbar trừ khi có cờ `WS_EX_APPWINDOW`. Việc gán `WS_EX_TOOLWINDOW` là hoàn toàn dư thừa và là nguyên nhân trực tiếp khiến DWM hạ bậc Z-order của Overlay xuống dưới `Shell_TrayWnd`.
+   - Cần loại bỏ hoàn toàn `WS_EX_TOOLWINDOW` cả tại thời điểm khởi tạo cửa sổ Win32 ([win32_window.cpp](file:///d:/dev-projects/windows-handheld-tool/windows/runner/win32_window.cpp)) lẫn trong hàm cập nhật kiểu dáng ([native_window_service.dart](file:///d:/dev-projects/windows-handheld-tool/lib/services/native_window_service.dart)), đưa cửa sổ về vị thế `WS_EX_TOPMOST` thuần túy.
+2. **Kỹ thuật cưỡng bức đẩy lùi Taskbar ra sau (`Explicit Taskbar Demotion Order`)**:
+   - Khi gọi API `SetWindowPos`, tham số thứ hai `hWndInsertAfter` không chỉ nhận các hằng số đặc biệt (`HWND_TOPMOST`), mà còn cho phép truyền vào chính xác tay nắm của một cửa sổ khác.
+   - Để đảo ngược thứ bậc khi Taskbar cố tình thức giấc trên Desktop, hệ thống tìm tay nắm của thanh Taskbar chính (`FindWindowW("Shell_TrayWnd")`) và thanh Taskbar phụ (`FindWindowW("Shell_SecondaryTrayWnd")`), sau đó phát lệnh:
+     $$\text{SetWindowPos}(hTaskbar, hwndOverlay, 0, 0, 0, 0, \text{SWP\_NOMOVE} \mid \text{SWP\_NOSIZE} \mid \text{SWP\_NOACTIVATE})$$
+   - Lời gọi này chỉ thị trực tiếp cho nhân hệ điều hành: "Hãy đặt toàn bộ thanh Taskbar nằm ngay phía sau cửa sổ `hwndOverlay`", giải quyết triệt để hiện tượng Taskbar đè lên mép dưới của Quick Panel.
+3. **Bộ canh gác Z-Order tần số cao (High-Frequency Topmost Watchdog)**:
+   - Trong [[OverlayController]], duy trì bộ đếm thời gian kiểm tra định kỳ mỗi 200ms khi Side Dock Panel đang mở, liên tục tái khẳng định vị thế đỉnh và đẩy lùi Taskbar nếu người dùng thực hiện thao tác vuốt chạm từ cạnh đáy màn hình.
 
 ---
 
@@ -922,6 +939,15 @@ Khi kích hoạt hiển thị lớp phủ, người chơi chỉ nhìn thấy duy
   - Khi RTSS khởi chạy với tư cách dịch vụ hệ thống hoặc tiến trình có đặc quyền quản trị viên (Elevated Administrator Process), đối tượng ánh xạ tệp nhân Windows `RTSSSharedMemoryV2` được bảo vệ bởi danh sách kiểm soát truy cập (Discretionary Access Control List - DACL).
   - Lời gọi mở vùng nhớ `OpenFileMapping` với cờ toàn quyền `FILE_MAP_ALL_ACCESS (0x001F)` từ tiến trình người dùng thông thường sẽ bị Windows Kernel từ chối thẳng thừng với mã lỗi `ERROR_ACCESS_DENIED (5)`.
   - Giải pháp bắt buộc là yêu cầu mức quyền tối giản vừa đủ: `FILE_MAP_READ | FILE_MAP_WRITE = 0x0006`, cho phép ghi nhận chuỗi định dạng OSD an toàn qua mọi mức đặc quyền UAC.
+
+- **Nguyên nhân 6: Thiếu Đồng Bộ Khóa Ô Nhớ `dwBusy` Trong RTSS Shared Memory v2.14+ (`Interlocked Busy Lock`)**:
+  - Trong đặc tả chuẩn của RTSS SDK (`RTSSSharedMemory.h`), kể từ phiên bản bộ nhớ `0x0002000e` (v2.14 trở lên, các bản RTSS hiện nay là v2.20), cấu trúc chia sẻ bổ sung biến trạng thái khóa `LONG dwBusy` tại Offset 36 (ngay sau `dwOSDFrame`).
+  - Bit 0 của `dwBusy` được bật lên khi bộ dựng hình (Renderer) của RTSS đang đọc dữ liệu để vẽ lên khung hình của game. Nếu một ứng dụng ghi dữ liệu mà không kiểm tra hoặc không giải phóng khóa này, RTSS sẽ phát hiện xung đột đọc-ghi và bỏ qua việc cập nhật chuỗi OSD mới.
+  - Ngoài ra, việc xóa trắng byte đầu tiên của bộ đệm cũ `(entryPtr + 0).value = 0` (`szOSD[0] = 0`) khiến các module hook cũ hiểu nhầm rằng ô nhớ này không chứa văn bản hợp lệ, từ đó không render nội dung mở rộng `szOSDEx`.
+
+- **Nguyên nhân 7: Rào Cản Tiến Trình UAC Khi Khởi Chạy Tự Động Và Điều Kiện Kích Hoạt Game 3D**:
+  - `RTSS.exe` được biên dịch với tệp kê khai Windows Manifest yêu cầu quyền quản trị viên tối cao (`requireAdministrator`). Lệnh `Process.start` thông thường từ một ứng dụng chạy ở mức quyền người dùng thông thường (`asInvoker`) sẽ bị hệ điều hành chặn lại trong im lặng, khiến tiến trình RTSS không thể tự khởi động trong nền.
+  - Về bản chất vật lý, RTSS không phải là một cửa sổ nổi độc lập, mà là một **bộ tiêm mã DLL (DLL Injector)**: RTSS chỉ kích hoạt vòng lặp vẽ OSD khi có một ứng dụng Direct3D / Vulkan / OpenGL đang chạy và được móc chặn (hook) thành công. Khi người chơi đang ở màn hình Desktop hoặc cửa sổ 2D thông thường, RTSS sẽ hoàn toàn không xuất hiện trên màn hình.
 
 ---
 

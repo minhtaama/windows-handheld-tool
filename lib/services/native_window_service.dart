@@ -202,14 +202,15 @@ class NativeWindowService {
     final width = physicalSize.width.toInt();
     final height = physicalSize.height.toInt();
 
-    // 1. Cấu hình Extended Styles: Bỏ cờ WS_EX_TRANSPARENT để nhận cảm ứng/chuột
+    // 1. Cấu hình Extended Styles: Bỏ cờ WS_EX_TRANSPARENT và WS_EX_TOOLWINDOW để nhận cảm ứng/chuột
+    // và đảm bảo DWM không hạ bậc Z-order của Overlay xuống dưới Shell_TrayWnd
     if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
       try {
         final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
         _setWindowLongPtrW!(
           hwnd,
           gwlExStyle,
-          (currentExStyle & ~wsExTransparent) | wsExLayered | wsExNoActivate | wsExTopMost | wsExToolWindow,
+          (currentExStyle & ~(wsExTransparent | wsExToolWindow)) | wsExLayered | wsExTopMost,
         );
       } catch (_) {}
     }
@@ -228,7 +229,10 @@ class NativeWindowService {
       swpNoActivate | swpShowWindow | swpFrameChanged,
     );
 
-    // 3. Yêu cầu vẽ lại frame ngay lập tức
+    // 3. Cưỡng bức đẩy lùi thanh Taskbar chính và phụ nằm ngay sau cửa sổ Overlay
+    _demoteTaskbars(hwnd);
+
+    // 4. Yêu cầu vẽ lại frame ngay lập tức
     _invalidateRect?.call(hwnd, nullptr, 1);
 
     _logger.info('Displayed Fullscreen Transparent Overlay (${width}x$height)');
@@ -251,7 +255,7 @@ class NativeWindowService {
         _setWindowLongPtrW!(
           hwnd,
           gwlExStyle,
-          currentExStyle | wsExTransparent | wsExNoActivate,
+          (currentExStyle & ~wsExToolWindow) | wsExTransparent | wsExNoActivate,
         );
       } catch (_) {}
     }
@@ -269,7 +273,7 @@ class NativeWindowService {
   }
 
   /// Tái khẳng định vị thế Topmost của cửa sổ Overlay (chống bị Tablet Taskbar đè lên).
-  /// Hàm cực nhẹ, chỉ cập nhật con trỏ danh sách liên kết DWM mà không thay đổi kích thước hay vẽ lại.
+  /// Vừa đưa cửa sổ lên HWND_TOPMOST, vừa đẩy lùi thanh Taskbar của Windows nằm ra phía sau.
   static bool reassertTopmost() {
     _ensureInitialized();
     final hwnd = getWindowHandle();
@@ -283,6 +287,34 @@ class NativeWindowService {
       0,
       swpNoActivate | swpNoMove | swpNoSize,
     );
-    return res != 0;
+    _demoteTaskbars(hwnd);
+    return (res ?? 0) != 0;
+  }
+
+  /// Đẩy lùi toàn bộ thanh Taskbar của Windows (Shell_TrayWnd & Shell_SecondaryTrayWnd)
+  /// nằm ngay sau cửa sổ Overlay trong danh sách liên kết Z-Order của Win32 Kernel (DRY).
+  static void _demoteTaskbars(int overlayHwnd) {
+    if (_findWindowW == null || _setWindowPos == null || overlayHwnd == 0) return;
+
+    for (final taskbarClass in ['Shell_TrayWnd', 'Shell_SecondaryTrayWnd']) {
+      final classNamePtr = taskbarClass.toNativeUtf16();
+      try {
+        final hTaskbar = _findWindowW!(classNamePtr, nullptr);
+        if (hTaskbar != 0 && hTaskbar != overlayHwnd) {
+          _setWindowPos!(
+            hTaskbar,
+            overlayHwnd,
+            0,
+            0,
+            0,
+            0,
+            swpNoActivate | swpNoMove | swpNoSize,
+          );
+        }
+      } catch (_) {
+      } finally {
+        calloc.free(classNamePtr);
+      }
+    }
   }
 }

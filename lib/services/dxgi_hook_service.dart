@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import '../core/config.dart';
 import '../core/logger.dart';
+import 'native_window_service.dart';
 
 // Native typedefs
 typedef _InstallGlobalDxgiHookC = Int32 Function();
@@ -38,6 +39,18 @@ typedef _GetOverlayHookModeDart = int Function();
 typedef _SetSharedTextureHandleC = Void Function(IntPtr handle);
 typedef _SetSharedTextureHandleDart = void Function(int handle);
 
+typedef _GetSharedTextureHandleC = IntPtr Function();
+typedef _GetSharedTextureHandleDart = int Function();
+
+typedef _CreateOverlaySharedTextureC = Int32 Function(Uint32 width, Uint32 height);
+typedef _CreateOverlaySharedTextureDart = int Function(int width, int height);
+
+typedef _ReleaseOverlaySharedTextureC = Void Function();
+typedef _ReleaseOverlaySharedTextureDart = void Function();
+
+typedef _UpdateOverlaySharedTextureFromHwndC = Int32 Function(IntPtr hWnd);
+typedef _UpdateOverlaySharedTextureFromHwndDart = int Function(int hWnd);
+
 /// Chế độ hoạt động của Overlay Hook:
 /// - `dxgiBorderless`: Phương án 2 - Cưỡng bức game thành Cửa sổ Không viền (Borderless Windowed / iFlip), cửa sổ Flutter đè lên mượt mà.
 /// - `sharedTexture`: Phương án 3 - Direct3D Shared Texture Injection (OBS / Discord style), vẽ trực tiếp kết cấu vào BackBuffer tại Present.
@@ -68,6 +81,10 @@ class DxgiHookService extends ChangeNotifier {
   _SetOverlayHookModeDart? _setOverlayHookMode;
   _GetOverlayHookModeDart? _getOverlayHookMode;
   _SetSharedTextureHandleDart? _setSharedTextureHandle;
+  _GetSharedTextureHandleDart? _getSharedTextureHandle;
+  _CreateOverlaySharedTextureDart? _createOverlaySharedTexture;
+  _ReleaseOverlaySharedTextureDart? _releaseOverlaySharedTexture;
+  _UpdateOverlaySharedTextureFromHwndDart? _updateOverlaySharedTextureFromHwnd;
 
   bool _isAvailable = false;
   bool get isAvailable => _isAvailable;
@@ -110,6 +127,8 @@ class DxgiHookService extends ChangeNotifier {
     _loadLibrary();
 
     if (_isAvailable) {
+      final physicalSize = NativeWindowService.getPhysicalScreenSize();
+      createOverlaySharedTexture(physicalSize.width.toInt(), physicalSize.height.toInt());
       setHookMode(hookMode);
       if (isEnabled) {
         installGlobalHook();
@@ -140,6 +159,51 @@ class DxgiHookService extends ChangeNotifier {
       _logger.info('Updated SharedTextureHandle: 0x${handle.toRadixString(16)}');
     } catch (e) {
       _logger.error('Error calling SetSharedTextureHandle: $e');
+    }
+  }
+
+  /// Khởi tạo kết cấu GPU Direct3D 11 dùng chung trên máy Host (Flutter)
+  bool createOverlaySharedTexture(int width, int height) {
+    if (!_isAvailable || _createOverlaySharedTexture == null) return false;
+    try {
+      final res = _createOverlaySharedTexture!(width, height) != 0;
+      _logger.info('CreateOverlaySharedTexture ($width x $height): $res');
+      return res;
+    } catch (e) {
+      _logger.error('Error calling CreateOverlaySharedTexture: $e');
+      return false;
+    }
+  }
+
+  /// Giải phóng kết cấu GPU Direct3D 11 dùng chung trên máy Host
+  void releaseOverlaySharedTexture() {
+    if (!_isAvailable || _releaseOverlaySharedTexture == null) return;
+    try {
+      _releaseOverlaySharedTexture!();
+      _logger.info('Released Host Overlay Shared Texture');
+    } catch (e) {
+      _logger.error('Error calling ReleaseOverlaySharedTexture: $e');
+    }
+  }
+
+  /// Chụp trực tiếp khung hình từ cửa sổ Flutter và nạp vào GPU VRAM Shared Texture
+  bool updateSharedTextureFromHwnd(int hWnd) {
+    if (!_isAvailable || _updateOverlaySharedTextureFromHwnd == null || hWnd == 0) return false;
+    try {
+      return _updateOverlaySharedTextureFromHwnd!(hWnd) != 0;
+    } catch (e) {
+      _logger.error('Error calling UpdateOverlaySharedTextureFromHwnd: $e');
+      return false;
+    }
+  }
+
+  /// Lấy con trỏ GPU Shared Texture Handle hiện tại từ nhân đồ họa
+  int getSharedTextureHandle() {
+    if (!_isAvailable || _getSharedTextureHandle == null) return 0;
+    try {
+      return _getSharedTextureHandle!();
+    } catch (_) {
+      return 0;
     }
   }
 
@@ -210,6 +274,18 @@ class DxgiHookService extends ChangeNotifier {
         _setSharedTextureHandle = _lib!.lookupFunction<_SetSharedTextureHandleC, _SetSharedTextureHandleDart>(
           'SetSharedTextureHandle',
         );
+        _getSharedTextureHandle = _lib!.lookupFunction<_GetSharedTextureHandleC, _GetSharedTextureHandleDart>(
+          'GetSharedTextureHandle',
+        );
+        _createOverlaySharedTexture = _lib!.lookupFunction<_CreateOverlaySharedTextureC, _CreateOverlaySharedTextureDart>(
+          'CreateOverlaySharedTexture',
+        );
+        _releaseOverlaySharedTexture = _lib!.lookupFunction<_ReleaseOverlaySharedTextureC, _ReleaseOverlaySharedTextureDart>(
+          'ReleaseOverlaySharedTexture',
+        );
+        _updateOverlaySharedTextureFromHwnd = _lib!.lookupFunction<_UpdateOverlaySharedTextureFromHwndC, _UpdateOverlaySharedTextureFromHwndDart>(
+          'UpdateOverlaySharedTextureFromHwnd',
+        );
       } catch (e) {
         _logger.warning('DLL does not export Shared Texture APIs yet: $e');
       }
@@ -227,6 +303,12 @@ class DxgiHookService extends ChangeNotifier {
     if (!_isAvailable || _setOverlayActive == null) return;
     try {
       _setOverlayActive!(active ? 1 : 0);
+      if (active && hookMode == OverlayHookMode.sharedTexture) {
+        final hwnd = NativeWindowService.getWindowHandle();
+        if (hwnd != 0) {
+          updateSharedTextureFromHwnd(hwnd);
+        }
+      }
     } catch (e) {
       _logger.error('Error updating SetOverlayActive: $e');
     }
