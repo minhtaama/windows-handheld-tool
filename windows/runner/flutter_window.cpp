@@ -27,8 +27,10 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  // Tránh chớp nháy trắng (White Flash) khi engine vừa nạp.
+  // Cửa sổ sẽ được điều khiển hiển thị hoàn toàn bởi Flutter Dart (window_manager).
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+    // No-op: Cửa sổ giữ trạng thái ẩn/trong suốt cho đến khi Dart sẵn sàng
   });
 
   // Flutter can complete the first frame before the "show window" callback is
@@ -64,6 +66,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   switch (message) {
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
+      break;
+    case WM_DISPLAYCHANGE:
+    case WM_DPICHANGED:
+      if (flutter_controller_) {
+        flutter_controller_->ForceRedraw();
+      }
       break;
   }
 

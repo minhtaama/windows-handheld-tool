@@ -21,13 +21,13 @@ class RtssInstallerService {
     void Function(String message)? onStatusUpdate,
   }) async {
     if (isInstalled()) {
-      _logger.info('RTSS đã tồn tại trên máy.');
+      _logger.info('RTSS is already installed on the system.');
       onStatusUpdate?.call('RTSS đã được cài đặt.');
       return await RtssService.instance.ensureRunning();
     }
 
     onStatusUpdate?.call('Đang chuẩn bị gói cài đặt RTSS...');
-    _logger.info('Bắt đầu quy trình tự động cài đặt RTSS...');
+    _logger.info('Starting automatic RTSS installation process...');
 
     try {
       // 1. Kiểm tra xem file cài đặt đã được tải sẵn trong thư mục Temp hay chưa
@@ -38,7 +38,7 @@ class RtssInstallerService {
 
       if (cachedSetup.existsSync()) {
         onStatusUpdate?.call('Đang cài đặt RTSS từ bộ nhớ đệm...');
-        _logger.info('Tìm thấy bộ cài sẵn tại: ${cachedSetup.path}');
+        _logger.info('Found cached installer at: ${cachedSetup.path}');
 
         final psCommand =
             'Start-Process -FilePath "${cachedSetup.path}" -ArgumentList "/S" -Verb RunAs -Wait';
@@ -58,7 +58,7 @@ class RtssInstallerService {
       onStatusUpdate?.call(
         'Đang tải và cài đặt qua Windows Package Manager (Winget)...',
       );
-      _logger.info('Khởi chạy winget install Guru3D.RTSS...');
+      _logger.info('Running winget install Guru3D.RTSS...');
 
       // Gọi lệnh winget kèm quyền Administrator qua PowerShell Start-Process để hiển thị UAC rõ ràng trên màn hình người dùng
       final wingetScript =
@@ -69,14 +69,14 @@ class RtssInstallerService {
         wingetScript,
       ]);
 
-      _logger.info('Winget kết thúc với exitCode: ${wingetResult.exitCode}');
+      _logger.info('Winget completed with exitCode: ${wingetResult.exitCode}');
 
       // Chờ hệ thống ghi nhận file cài đặt trong ổ đĩa
       for (int i = 0; i < 10; i++) {
         await Future.delayed(const Duration(seconds: 1));
         if (isInstalled()) {
           onStatusUpdate?.call('Cài đặt thành công! Đang kết nối RTSS...');
-          _logger.info('Đã phát hiện RTSS trên ổ cứng sau khi cài đặt.');
+          _logger.info('Detected RTSS installation on disk.');
           return await RtssService.instance.ensureRunning();
         }
       }
@@ -84,13 +84,11 @@ class RtssInstallerService {
       final success = isInstalled();
       if (!success) {
         onStatusUpdate?.call('Cài đặt không thành công hoặc bị hủy.');
-        _logger.warning(
-          'Cài đặt RTSS thất bại: không tìm thấy file sau khi chạy lệnh.',
-        );
+        _logger.warning('RTSS installation failed: binary not found after execution.');
       }
       return success;
     } catch (e, stack) {
-      _logger.error('Lỗi ngoại lệ trong quá trình cài đặt RTSS', e, stack);
+      _logger.error('Exception during RTSS installation', e, stack);
       onStatusUpdate?.call('Lỗi: $e');
       return false;
     }

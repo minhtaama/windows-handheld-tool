@@ -29,7 +29,7 @@ class SystemOptimizer {
       );
       _initialized = true;
     } catch (e) {
-      _logger.warning('Không thể khởi tạo hàm giải phóng RAM EmptyWorkingSet: $e');
+      _logger.warning('Failed to initialize EmptyWorkingSet memory function: $e');
     }
   }
 
@@ -42,10 +42,10 @@ class SystemOptimizer {
         final hProcess = _getCurrentProcess!();
         final result = _emptyWorkingSet!(hProcess);
         if (result != 0) {
-          _logger.info('Đã giải phóng bộ nhớ RAM tiến trình thành công (Trim Working Set).');
+          _logger.info('Trimmed process working set RAM successfully.');
         }
       } catch (e) {
-        _logger.warning('Lỗi khi giải phóng RAM: $e');
+        _logger.warning('Error trimming RAM working set: $e');
       }
     }
   }

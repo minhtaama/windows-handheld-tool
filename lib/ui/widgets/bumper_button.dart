@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
@@ -91,13 +93,10 @@ class BumperButton extends StatelessWidget {
                 padding: _getTextOffset(effectiveType),
                 child: Text(
                   displayLabel,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
+                  style: AppTheme.hint.copyWith(
                     color: isEnabled
-                        ? AppTheme.textSecondary
+                        ? AppTheme.textPrimary
                         : AppTheme.textDisabled,
-                    letterSpacing: 0.5,
                   ),
                 ),
               ),
@@ -111,9 +110,9 @@ class BumperButton extends StatelessWidget {
   EdgeInsets _getTextOffset(BumperType type) {
     switch (type) {
       case BumperType.lb:
-        return const EdgeInsets.only(left: 4);
+        return const EdgeInsets.only(left: 2);
       case BumperType.rb:
-        return const EdgeInsets.only(right: 4);
+        return const EdgeInsets.only(right: 2);
       case BumperType.lt:
         return const EdgeInsets.only(left: 2, top: 1);
       case BumperType.rt:
@@ -134,11 +133,11 @@ class _BumperPainter extends CustomPainter {
     final h = size.height;
 
     final fillPaint = Paint()
-      ..color = AppTheme.cardBackground
+      ..color = AppTheme.secondary
       ..style = PaintingStyle.fill;
 
     final borderPaint = Paint()
-      ..color = AppTheme.cardBorder
+      ..color = AppTheme.textSecondary
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0;
 
@@ -156,28 +155,36 @@ class _BumperPainter extends CustomPainter {
 
     switch (type) {
       case BumperType.lb:
-        // LB: Vai trái bo cong sâu và lượn dài, thuôn dẹt về phía trong
-        path.moveTo(w, h - 3);
-        path.quadraticBezierTo(w, h, w - 3, h);
-        path.lineTo(6, h);
-        path.quadraticBezierTo(1, h, 0, h - 4);
-        path.lineTo(0, 12);
-        path.cubicTo(0, 4, 5, 0, 18, 0); // Vai ngoài trái uốn lượn sâu và mượt
-        path.lineTo(w - 3, 0);
-        path.quadraticBezierTo(w, 0, w, 3);
+        // LB: Vai trái bo cong vát khí động học, thuôn dẹt về phía trong, giảm width để bớt bè
+        final bw = min(w, 28.0);
+        final startX = (w - bw) / 2;
+        final endX = startX + bw;
+
+        path.moveTo(endX, h - 3.5);
+        path.quadraticBezierTo(endX, h - 1.5, endX - 3, h - 1.5);
+        path.lineTo(startX + 4, h);
+        path.quadraticBezierTo(startX + 1, h, startX, h - 3);
+        path.lineTo(startX, 8);
+        path.cubicTo(startX, 2.5, startX + 3, 0, startX + 9, 0);
+        path.lineTo(endX - 3, 2.0);
+        path.quadraticBezierTo(endX, 2.0, endX, 5.0);
         path.close();
         break;
 
       case BumperType.rb:
-        // RB: Đối xứng của LB, vai phải bo cong sâu và lượn dài
-        path.moveTo(0, 3);
-        path.quadraticBezierTo(0, 0, 3, 0);
-        path.lineTo(w - 18, 0);
-        path.cubicTo(w - 5, 0, w, 4, w, 12); // Vai ngoài phải uốn lượn sâu và mượt
-        path.lineTo(w, h - 4);
-        path.quadraticBezierTo(w - 1, h, w - 6, h);
-        path.lineTo(3, h);
-        path.quadraticBezierTo(0, h, 0, h - 3);
+        // RB: Đối xứng của LB, vai phải bo cong vát khí động học, thuôn dẹt về phía trong
+        final bw = min(w, 28.0);
+        final startX = (w - bw) / 2;
+        final endX = startX + bw;
+
+        path.moveTo(startX, 5.0);
+        path.quadraticBezierTo(startX, 2.0, startX + 3, 2.0);
+        path.lineTo(endX - 9, 0);
+        path.cubicTo(endX - 3, 0, endX, 2.5, endX, 8);
+        path.lineTo(endX, h - 3);
+        path.quadraticBezierTo(endX, h, endX - 4, h);
+        path.lineTo(startX + 3, h - 1.5);
+        path.quadraticBezierTo(startX, h - 1.5, startX, h - 3.5);
         path.close();
         break;
 

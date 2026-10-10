@@ -5,7 +5,9 @@ import '../core/config.dart';
 import '../services/overlay_controller.dart';
 import 'quick_panel.dart';
 
-/// Màn hình Side Dock Panel chuẩn Fullscreen Transparent Overlay (chống phá vỡ DirectX SwapChain).
+/// Màn hình Side Dock Panel chuẩn True Fullscreen Transparent Overlay.
+/// Toàn bộ không gian trong suốt bao phủ toàn màn hình, hỗ trợ co dãn bề rộng panel linh hoạt
+/// với AnimatedContainer, đóng mở mượt mà bằng SlideTransition và tùy chỉnh tỷ lệ phóng đại UI Scale.
 class OverlayScreen extends StatefulWidget {
   final ConfigManager config;
 
@@ -19,7 +21,6 @@ class _OverlayScreenState extends State<OverlayScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _animController;
   late final Animation<Offset> _slideAnimation;
-  late final Animation<double> _backdropFadeAnimation;
   late final Animation<double> _panelFadeAnimation;
 
   @override
@@ -32,7 +33,7 @@ class _OverlayScreenState extends State<OverlayScreen>
       vsync: this,
       duration: Duration(milliseconds: durationMs),
       reverseDuration: Duration(milliseconds: durationMs),
-      value: 1.0, // Ban đầu ở trạng thái sẵn sàng
+      value: 0.0, // Ban đầu ở trạng thái đóng (ẩn ngoài màn hình)
     );
 
     // Hoạt cảnh trượt: từ ngoài mép phải vào sát mép phải
@@ -44,15 +45,6 @@ class _OverlayScreenState extends State<OverlayScreen>
             reverseCurve: Curves.easeInCubic,
           ),
         );
-
-    // Hoạt cảnh làm mờ nền tối Backdrop phía sau
-    _backdropFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _animController,
-        curve: Curves.easeOut,
-        reverseCurve: Curves.easeIn,
-      ),
-    );
 
     // Hoạt cảnh mờ dần (Fade In / Fade Out) đồng bộ cho Side Panel
     _panelFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
@@ -90,35 +82,29 @@ class _OverlayScreenState extends State<OverlayScreen>
     return ListenableBuilder(
       listenable: OverlayController.instance,
       builder: (context, _) {
-        final widthPercent = OverlayController.instance.widthPercent;
+        final isVisible = OverlayController.instance.isVisible;
+        final screenWidth = MediaQuery.of(context).size.width;
+        final panelWidth = (screenWidth * (OverlayController.instance.widthPercent / 100.0))
+            .clamp(320.0, 850.0);
 
-        return Scaffold(
-          backgroundColor: AppTheme.transparent,
-          body: LayoutBuilder(
-            builder: (context, constraints) {
-              final screenWidth = constraints.maxWidth;
-              final panelWidth = (screenWidth * (widthPercent / 100.0)).clamp(
-                280.0,
-                screenWidth * 0.6,
-              );
-
-              return Stack(
+        return ExcludeSemantics(
+          excluding: true,
+          child: IgnorePointer(
+            ignoring: !isVisible,
+            child: Scaffold(
+              backgroundColor: AppTheme.transparent,
+              body: Stack(
                 children: [
-                  // 1. Nền trong suốt (Backdrop): Chạm/click ra ngoài để đóng Side Panel
-                  Positioned.fill(
-                    child: FadeTransition(
-                      opacity: _backdropFadeAnimation,
+                  // Vùng nền trong suốt bên trái: Chạm vào để đóng panel
+                  if (isVisible)
+                    Positioned.fill(
                       child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
+                        behavior: HitTestBehavior.translucent,
                         onTap: () => OverlayController.instance.hideOverlay(),
-                        child: Container(
-                          color: Colors.black.withValues(alpha: 0.7),
-                        ),
                       ),
                     ),
-                  ),
 
-                  // 2. Floating Panel dạng thẻ nổi (vừa trượt vừa làm mờ)
+                  // Side Dock Panel neo sát mép phải với hoạt cảnh co dãn AnimatedContainer
                   Align(
                     alignment: Alignment.centerRight,
                     child: SlideTransition(
@@ -126,14 +112,14 @@ class _OverlayScreenState extends State<OverlayScreen>
                       child: FadeTransition(
                         opacity: _panelFadeAnimation,
                         child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 180),
+                          duration: const Duration(milliseconds: 200),
                           curve: Curves.easeOutCubic,
                           width: panelWidth,
-                          height: double.infinity,
                           padding: const EdgeInsets.only(
-                            top: 24,
-                            bottom: 24,
-                            right: 20,
+                            top: 20,
+                            bottom: 20,
+                            right: 16,
+                            left: 8,
                           ),
                           child: QuickSettingsPanel(config: widget.config),
                         ),
@@ -141,8 +127,8 @@ class _OverlayScreenState extends State<OverlayScreen>
                     ),
                   ),
                 ],
-              );
-            },
+              ),
+            ),
           ),
         );
       },

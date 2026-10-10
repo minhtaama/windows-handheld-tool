@@ -1,0 +1,573 @@
+import 'package:flutter/material.dart';
+
+import '../../core/app_theme.dart';
+import '../../hardware/tdp_service.dart';
+import '../../hardware/fan_service.dart';
+import '../../hardware/rtss_service.dart';
+import '../../hardware/rtss_osd_formatter.dart';
+import '../../services/rtss_installer_service.dart';
+import '../widgets/setting_slider.dart';
+import '../widgets/section_label.dart';
+import '../widgets/toggle_card.dart';
+import '../widgets/help_box.dart';
+import '../widgets/preset_selector.dart';
+
+/// Tab điều khiển Hiệu năng & Năng lượng: Quản lý TDP, Tốc độ quạt và Khóa khung hình RTSS.
+class PerformanceTab extends StatelessWidget {
+  final ScrollController scrollController;
+  final int focusedIndex;
+
+  // Cấu hình & Dữ liệu đo TDP
+  final int tdp;
+  final int liveTdp;
+  final bool tdpAuto;
+  final TdpController tdpCtrl;
+  final ValueChanged<int> onTdpChanged;
+  final VoidCallback onToggleTdpAuto;
+
+  // Cấu hình & Dữ liệu đo Quạt
+  final int fan;
+  final int liveFan;
+  final bool fanAuto;
+  final FanController fanCtrl;
+  final ValueChanged<int> onFanChanged;
+  final VoidCallback onToggleFanAuto;
+
+  // Cấu hình & Dữ liệu đo RTSS
+  final int fpsLimit;
+  final int? liveFps;
+  final String? activeGame;
+  final RtssFpsController rtssCtrl;
+  final ValueChanged<int> onFpsLimitChanged;
+  final bool isInstallingRtss;
+  final String? rtssInstallMsg;
+  final VoidCallback onInstallRtss;
+
+  // Cấu hình hiển thị Overlay OSD của RTSS
+  final bool osdEnabled;
+  final ValueChanged<bool> onToggleOsd;
+  final int osdZoom;
+  final ValueChanged<int> onOsdZoomChanged;
+  final RtssOsdPosition osdPosition;
+  final ValueChanged<RtssOsdPosition> onOsdPositionChanged;
+  final RtssOsdMetricsConfig osdMetrics;
+  final ValueChanged<RtssOsdLayout> onOsdLayoutChanged;
+  final VoidCallback onToggleMetricFps;
+  final VoidCallback onToggleMetricTdp;
+  final VoidCallback onToggleMetricCpuTemp;
+  final VoidCallback onToggleMetricCpuUsage;
+  final VoidCallback onToggleMetricRam;
+  final VoidCallback onToggleMetricBattery;
+  final VoidCallback onToggleMetricFan;
+  final GlobalKey Function(int index) getItemKey;
+
+  const PerformanceTab({
+    super.key,
+    required this.scrollController,
+    required this.focusedIndex,
+    required this.tdp,
+    required this.liveTdp,
+    required this.tdpAuto,
+    required this.tdpCtrl,
+    required this.onTdpChanged,
+    required this.onToggleTdpAuto,
+    required this.fan,
+    required this.liveFan,
+    required this.fanAuto,
+    required this.fanCtrl,
+    required this.onFanChanged,
+    required this.onToggleFanAuto,
+    required this.fpsLimit,
+    required this.liveFps,
+    required this.activeGame,
+    required this.rtssCtrl,
+    required this.onFpsLimitChanged,
+    required this.isInstallingRtss,
+    required this.rtssInstallMsg,
+    required this.onInstallRtss,
+    required this.osdEnabled,
+    required this.onToggleOsd,
+    required this.osdZoom,
+    required this.onOsdZoomChanged,
+    required this.osdPosition,
+    required this.onOsdPositionChanged,
+    required this.osdMetrics,
+    required this.onOsdLayoutChanged,
+    required this.onToggleMetricFps,
+    required this.onToggleMetricTdp,
+    required this.onToggleMetricCpuTemp,
+    required this.onToggleMetricCpuUsage,
+    required this.onToggleMetricRam,
+    required this.onToggleMetricBattery,
+    required this.onToggleMetricFan,
+    required this.getItemKey,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      key: const ValueKey('tab_performance'),
+      controller: scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      children: [
+        const SectionLabel(label: "NĂNG LƯỢNG (TDP)", isFirst: true),
+        ToggleCard(
+          key: getItemKey(0),
+          icon: Icons.bolt_rounded,
+          title: "Chế độ TDP tự động",
+          subtitle: "Tự điều chỉnh công suất theo tải hệ thống",
+          value: tdpAuto,
+          onChanged: (_) => onToggleTdpAuto(),
+          isFocused: focusedIndex == 0,
+          helpText: "Tự động điều chỉnh mức tiêu thụ điện năng (Watt) của CPU theo thời gian thực để tối ưu thời lượng pin và hiệu năng khi chơi game.",
+        ),
+        const SizedBox(height: 8),
+        SettingSlider(
+          key: getItemKey(1),
+          icon: Icons.electric_meter_rounded,
+          title: "Công suất TDP",
+          value: tdp,
+          min: tdpCtrl.minVal,
+          max: tdpCtrl.maxVal,
+          step: tdpCtrl.step,
+          unit: tdpCtrl.unit,
+          currentValue: liveTdp,
+          currentColor: AppTheme.tdp,
+          accentColor: AppTheme.tdp,
+          quickPresets: tdpAuto ? null : const [10, 15, 20, 25, 30],
+          onChanged: onTdpChanged,
+          shouldShowSlider: !tdpAuto,
+          isFocused: focusedIndex == 1,
+          helpText: "Khóa công suất điện tối đa của bộ xử lý (TDP tính bằng Watt). Tăng TDP để có FPS cao hơn, giảm TDP để máy mát hơn và tiết kiệm pin.",
+        ),
+
+        const SectionLabel(label: "TẢN NHIỆT (QUẠT)"),
+        ToggleCard(
+          key: getItemKey(2),
+          icon: Icons.toys_rounded,
+          title: "Chế độ quạt tự động",
+          subtitle: "Hệ thống tự điều tốc theo nhiệt độ chip",
+          value: fanAuto,
+          onChanged: (_) => onToggleFanAuto(),
+          isFocused: focusedIndex == 2,
+          helpText: "Tự động điều chỉnh vòng quay quạt tản nhiệt dựa theo nhiệt độ linh kiện. Chuyển sang MANUAL nếu muốn tự khóa % quạt cố định.",
+        ),
+        const SizedBox(height: 8),
+        SettingSlider(
+          key: getItemKey(3),
+          icon: Icons.mode_fan_off_rounded,
+          title: "Tốc độ quạt",
+          value: fan,
+          min: fanCtrl.minVal,
+          max: fanCtrl.maxVal,
+          step: fanCtrl.step,
+          unit: fanCtrl.unit,
+          currentValue: liveFan,
+          currentColor: AppTheme.fan,
+          accentColor: AppTheme.fan,
+          quickPresets: fanAuto ? null : const [30, 50, 75, 100],
+          onChanged: onFanChanged,
+          shouldShowSlider: !fanAuto,
+          isFocused: focusedIndex == 3,
+          helpText: "Điều chỉnh phần trăm tốc độ quạt làm mát của máy Handheld từ 0% đến 100%.",
+        ),
+
+        const SectionLabel(label: "KHUNG HÌNH (RTSS)"),
+        if (!RtssInstallerService.isInstalled())
+          AnimatedContainer(
+            key: getItemKey(4),
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppTheme.cardBackground,
+              borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+              border: Border.all(
+                color: focusedIndex == 4
+                    ? AppTheme.accent
+                    : AppTheme.cardBorder,
+                width: focusedIndex == 4 ? 1.8 : 1.0,
+              ),
+              boxShadow: focusedIndex == 4
+                  ? [
+                      BoxShadow(
+                        color: AppTheme.primary.withValues(alpha: 0.4),
+                        blurRadius: 14,
+                        spreadRadius: 1,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.speed_rounded,
+                      color: AppTheme.accent,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              "Chưa cài đặt RTSS",
+                              style: AppTheme.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          HelpBox(
+                            helpText: "RTSS (RivaTuner Statistics Server) là dịch vụ giám sát và khóa tốc độ khung hình (FPS). Bấm nút A trên tay cầm để tự động tải và cài đặt nhanh qua Winget.",
+                            isFocused: focusedIndex == 4,
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (isInstallingRtss)
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppTheme.accent,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  rtssInstallMsg ?? "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
+                  style: AppTheme.caption.copyWith(fontSize: 11),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 34,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accent.withValues(alpha: 0.15),
+                      foregroundColor: AppTheme.accent,
+                      side: BorderSide(
+                        color: AppTheme.accent.withValues(alpha: 0.4),
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(
+                          AppTheme.buttonRadius,
+                        ),
+                      ),
+                    ),
+                    icon: Icon(
+                      isInstallingRtss
+                          ? Icons.hourglass_top_rounded
+                          : Icons.download_rounded,
+                      size: 16,
+                    ),
+                    label: Text(
+                      isInstallingRtss
+                          ? "Đang cài đặt..."
+                          : "Tự động cài đặt RTSS qua Winget",
+                      style: AppTheme.body.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    onPressed: isInstallingRtss ? null : onInstallRtss,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else ...[
+          SettingSlider(
+            key: getItemKey(4),
+            icon: Icons.timelapse_rounded,
+            title: activeGame != null
+                ? "Giới hạn FPS ($activeGame)"
+                : "Giới hạn FPS",
+            value: fpsLimit,
+            min: rtssCtrl.minVal,
+            max: rtssCtrl.maxVal,
+            step: rtssCtrl.step,
+            unit: rtssCtrl.unit,
+            currentValue: liveFps,
+            currentColor: AppTheme.accent,
+            quickPresets: const [0, 30, 40, 60],
+            onChanged: onFpsLimitChanged,
+            isFocused: focusedIndex == 4,
+            helpText: "Khóa tốc độ khung hình tối đa trong game. Đặt mức 30, 40 hoặc 60 FPS giúp ổn định độ mượt (Frame Time) và giảm tải nhiệt độ.",
+          ),
+          const SizedBox(height: 8),
+          ToggleCard(
+            key: getItemKey(5),
+            icon: Icons.subtitles_rounded,
+            title: "Lớp phủ Overlay (OSD)",
+            subtitle: osdEnabled
+                ? "Đang hiển thị trên màn hình"
+                : "Đã tắt hiển thị OSD",
+            value: osdEnabled,
+            onChanged: onToggleOsd,
+            isFocused: focusedIndex == 5,
+            helpText: "Hiển thị lớp phủ theo dõi số khung hình FPS và thông số phần cứng trực tiếp trên màn hình trò chơi qua RivaTuner.",
+          ),
+          if (osdEnabled) ...[
+            const SizedBox(height: 8),
+            PresetSelector<int>(
+              key: getItemKey(6),
+              title: "Kích thước chữ OSD",
+              icon: Icons.format_size_rounded,
+              currentValueText: "${osdZoom}x",
+              presets: const [1, 2, 3, 4],
+              selectedValue: osdZoom,
+              labelBuilder: (preset) => "${preset}x",
+              onSelected: onOsdZoomChanged,
+              isFocused: focusedIndex == 6,
+              helpText: "Phóng to hoặc thu nhỏ kích thước chữ của lớp phủ OSD trên màn hình. Mức 2x hoặc 3x phù hợp nhất cho màn hình Handheld 7-8 inch.",
+            ),
+            const SizedBox(height: 8),
+            PresetSelector<RtssOsdPosition>(
+              key: getItemKey(7),
+              title: "Vị trí góc hiển thị OSD",
+              icon: Icons.fullscreen_rounded,
+              currentValueText: osdPosition.label,
+              presets: RtssOsdPosition.values,
+              selectedValue: osdPosition,
+              labelBuilder: (preset) => preset.label,
+              onSelected: onOsdPositionChanged,
+              isFocused: focusedIndex == 7,
+              helpText: "Chọn 1 trong 4 góc màn hình để neo lớp phủ OSD, tránh che khuất các thành phần HUD hoặc bản đồ nhỏ (Minimap) của game.",
+            ),
+            const SizedBox(height: 8),
+            PresetSelector<RtssOsdLayout>(
+              key: getItemKey(8),
+              title: "Bố cục hiển thị OSD",
+              icon: Icons.view_agenda_rounded,
+              currentValueText: osdMetrics.layout.label,
+              presets: RtssOsdLayout.values,
+              selectedValue: osdMetrics.layout,
+              labelBuilder: (preset) => preset.label,
+              onSelected: onOsdLayoutChanged,
+              isFocused: focusedIndex == 8,
+              helpText: "Thu gọn (1 dòng) giúp tiết kiệm diện tích trên màn hình Handheld. Chi tiết (Nhiều dòng) hiển thị từng linh kiện trên một dòng riêng.",
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 6),
+              child: Text(
+                "THÔNG SỐ HIỂN THỊ TRÊN OSD",
+                style: AppTheme.caption.copyWith(
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                  fontSize: 11,
+                  color: AppTheme.textSecondary.withValues(alpha: 0.8),
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: _MetricToggleCard(
+                    key: getItemKey(9),
+                    icon: Icons.speed_rounded,
+                    title: "FPS",
+                    value: osdMetrics.showFps,
+                    onTap: onToggleMetricFps,
+                    isFocused: focusedIndex == 9,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _MetricToggleCard(
+                    key: getItemKey(10),
+                    icon: Icons.bolt_rounded,
+                    title: "TDP (W)",
+                    value: osdMetrics.showTdp,
+                    onTap: onToggleMetricTdp,
+                    isFocused: focusedIndex == 10,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _MetricToggleCard(
+                    key: getItemKey(11),
+                    icon: Icons.device_thermostat_rounded,
+                    title: "Nhiệt độ CPU",
+                    value: osdMetrics.showCpuTemp,
+                    onTap: onToggleMetricCpuTemp,
+                    isFocused: focusedIndex == 11,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _MetricToggleCard(
+                    key: getItemKey(12),
+                    icon: Icons.memory_rounded,
+                    title: "Tải CPU (%)",
+                    value: osdMetrics.showCpuUsage,
+                    onTap: onToggleMetricCpuUsage,
+                    isFocused: focusedIndex == 12,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _MetricToggleCard(
+                    key: getItemKey(13),
+                    icon: Icons.storage_rounded,
+                    title: "RAM (GB)",
+                    value: osdMetrics.showRam,
+                    onTap: onToggleMetricRam,
+                    isFocused: focusedIndex == 13,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _MetricToggleCard(
+                    key: getItemKey(14),
+                    icon: Icons.battery_charging_full_rounded,
+                    title: "Pin (%)",
+                    value: osdMetrics.showBattery,
+                    onTap: onToggleMetricBattery,
+                    isFocused: focusedIndex == 14,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _MetricToggleCard(
+                    key: getItemKey(15),
+                    icon: Icons.toys_rounded,
+                    title: "Tốc độ quạt",
+                    value: osdMetrics.showFan,
+                    onTap: onToggleMetricFan,
+                    isFocused: focusedIndex == 15,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Spacer(),
+              ],
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+}
+
+/// Thẻ bật/tắt mục thông số OSD nhỏ gọn dạng lưới 2 cột
+class _MetricToggleCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final bool value;
+  final VoidCallback onTap;
+  final bool isFocused;
+
+  const _MetricToggleCard({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.onTap,
+    this.isFocused = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      decoration: BoxDecoration(
+        color: AppTheme.cardBackground,
+        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+        border: Border.all(
+          color: isFocused
+              ? AppTheme.accent
+              : (value
+                    ? AppTheme.accent.withValues(alpha: 0.4)
+                    : AppTheme.cardBorder),
+          width: isFocused ? 1.8 : 1.0,
+        ),
+        boxShadow: isFocused
+            ? [
+                BoxShadow(
+                  color: AppTheme.primary.withValues(alpha: 0.4),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+            : null,
+      ),
+      child: Material(
+        color: AppTheme.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            child: Row(
+              children: [
+                Icon(
+                  icon,
+                  size: 16,
+                  color: value ? AppTheme.accent : AppTheme.textSecondary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: AppTheme.body.copyWith(
+                      fontSize: 12,
+                      fontWeight: value ? FontWeight.w700 : FontWeight.w500,
+                      color: value
+                          ? AppTheme.textPrimary
+                          : AppTheme.textSecondary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Container(
+                  width: 16,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: value ? AppTheme.accent : AppTheme.transparent,
+                    border: Border.all(
+                      color: value
+                          ? AppTheme.accent
+                          : AppTheme.textSecondary.withValues(alpha: 0.5),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: value
+                      ? Center(
+                          child: const Icon(
+                            Icons.check_rounded,
+                            size: 10,
+                            color: Colors.black,
+                          ),
+                        )
+                      : null,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
