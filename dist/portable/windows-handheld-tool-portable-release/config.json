@@ -1,0 +1,72 @@
+{
+    "overlay": {
+        "width": 360,
+        "width_percent": 30,
+        "animation_duration_ms": 400,
+        "side": "right",
+        "scale_percent": 100,
+        "scale": 1.0
+    },
+    "hotkey": {
+        "toggle_overlay": "Ctrl+Shift+Q",
+        "toggle_keyboard": "Ctrl+Shift+K"
+    },
+    "gamepad": {
+        "enabled": true,
+        "poll_interval_ms": 50,
+        "overlay_combo": "",
+        "keyboard_combo": ""
+    },
+    "system": {
+        "autostart": true
+    },
+    "dxgi_hook": {
+        "enabled": true,
+        "mode": "dxgiBorderless",
+        "auto_borderless": true
+    },
+    "hardware": {
+        "tdp": {
+            "min": 5,
+            "max": 35,
+            "step": 1,
+            "current": 20,
+            "auto": true
+        },
+        "fan": {
+            "min": 0,
+            "max": 100,
+            "step": 5,
+            "current": 50,
+            "auto": true
+        },
+        "brightness": {
+            "min": 0,
+            "max": 100,
+            "step": 5,
+            "current": 50
+        },
+        "volume": {
+            "min": 0,
+            "max": 100,
+            "step": 2,
+            "current": 50
+        },
+        "audio": {
+            "current": 50
+        },
+        "rtss": {
+            "fps_limit": 0,
+            "osd_enabled": true,
+            "osd_zoom": 1,
+            "osd_show_fps": true,
+            "osd_show_tdp": true,
+            "osd_show_cpu_temp": true,
+            "osd_show_cpu_usage": false,
+            "osd_show_ram": true,
+            "osd_show_battery": true,
+            "osd_show_fan": false,
+            "osd_layout": "compact"
+        }
+    }
+}
