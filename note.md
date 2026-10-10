@@ -851,5 +851,28 @@ flowchart TD
      - **Bố cục Chi tiết nhiều dòng (Detailed Vertical)**: Hiển thị dạng bảng cột truyền thống phân chia rõ từng thành phần.
   3. Ánh xạ các thuộc tính cấu hình này vào tệp lưu trữ [[ConfigService]] và cập nhật định kỳ mỗi giây qua bộ nhớ chia sẻ.
 
+---
+
+### Phân Tích Bản Chất Vật Lý Khi RTSS OSD Chỉ Hiển Thị FPS Mặc Định (Root Cause Analysis: Single-Metric FPS Anomaly)
+
+#### 1. Hiện tượng và bế tắc kỹ thuật
+Khi kích hoạt hiển thị lớp phủ, người chơi chỉ nhìn thấy duy nhất một con số đo FPS màu cam mặc định do RTSS tự vẽ. Toàn bộ các trường dữ liệu tùy biến (TDP, Nhiệt độ CPU, Mức tải CPU, RAM, Pin, Tốc độ quạt) hoàn toàn không xuất hiện trên màn hình trò chơi.
+
+#### 2. Bóc trần các nguyên nhân vật lý cốt lõi
+- **Nguyên nhân 1: Xung đột và bị từ chối ở Slot Ô nhớ số 0 (`OSD Slot 0 Collision`)**:
+  - Trong tài liệu kỹ thuật của RivaTuner Statistics Server SDK, mảng ô nhớ `arrOSD` có kích thước 8 phần tử. Slot số 0 (`index = 0`) được quy định dành riêng cho "Khách hàng OSD sơ cấp" (Primary OSD Clients như MSI Afterburner, EVGA Precision).
+  - Khi ứng dụng bên thứ ba (Third-party clients) ghi đè vào slot 0 thay vì quét từ `index = 1` trở đi, bộ kết xuất OSD của RTSS sẽ xung đột với bộ đếm FPS nội bộ hoặc bỏ qua hoàn toàn nội dung tại slot 0.
+- **Nguyên nhân 2: Lỗi máy trạng thái bộ phân giải thẻ định dạng (`Markup Tag Parser Syntax Failure`)**:
+  - Trình phân giải thẻ hiển thị ký tự (Tag Parser) của RTSS hoạt động như một máy trạng thái hữu hạn (Finite State Machine). Thẻ màu được kích hoạt bằng `<C=RRGGBB>` và đóng/khôi phục màu gốc bằng `<C>` (tương tự kích thước font `<S=Percentage>` đóng bằng `<S>`).
+  - Việc đưa vào cú pháp đóng kiểu XML/HTML là `</C>` hoặc `</S>` khiến ký tự gạch chéo `/` làm hỏng máy trạng thái, dẫn tới việc RTSS hủy bỏ dựng hình toàn bộ chuỗi văn bản bị lỗi.
+- **Nguyên nhân 3: Ký tự ngoài bảng mã ASCII phần cứng (`Glyph Missing & Unicode Truncation`)**:
+  - Bộ tạo font Direct3D của RTSS (Unispace bitmap texture font) chỉ lưu trữ ma trận điểm ảnh cho 128 ký tự ASCII chuẩn.
+  - Ký tự độ C (`°C`, Unicode `\u00B0` có mã byte `0xC2 0xB0`) không tồn tại trong texture glyph, khiến con trỏ vẽ ký tự bị ngắt quãng hoặc chuỗi byte bị cắt ngắn trước khi kịp hiển thị các chữ số tiếp theo.
+- **Nguyên nhân 4: Bỏ trống vùng đệm tương thích `szOSD`**:
+  - Trong cấu trúc `RTSS_SHARED_MEMORY_OSD_ENTRY`, trường `szOSD` (256 byte) nằm ở offset 0, còn `szOSDEx` (4096 byte) nằm ở offset 512.
+  - Khi chỉ ghi vào `szOSDEx` mà để byte đầu tiên `szOSD[0] == 0`, một số Direct3D Hook của RTSS sẽ nhận diện ô nhớ là rỗng và bỏ qua việc dựng hình mở rộng. Việc ghi đồng thời vào cả hai trường đảm bảo tương thích 100%.
+- **Nguyên nhân 5: Vòng đời luồng gửi dữ liệu bị cô lập trong giao diện (`UI-Coupled Telemetry Starvation`)**:
+  - Hàm cập nhật chuỗi OSD ban đầu chỉ nằm trong bộ đếm của widget giao diện [[QuickPanel]]. Khi người chơi đóng bảng điều khiển để quay lại không gian trò chơi, widget bị ẩn, và nếu không có một vòng lặp nền độc lập (`Background Loop`), dữ liệu OSD sẽ ngừng được đẩy vào bộ nhớ chia sẻ theo chu kỳ thời gian thực.
+
 
 

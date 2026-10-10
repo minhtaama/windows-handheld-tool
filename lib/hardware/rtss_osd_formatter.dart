@@ -100,41 +100,41 @@ class RtssOsdFormatter {
 
     // 1. Tốc độ khung hình (FPS)
     if (config.showFps && fps != null && fps > 0) {
-      items.add('<C=FFFF00>FPS: $fps</C>');
+      items.add('<C=FFFF00>FPS: $fps<C>');
     }
 
-    // 2. Nhiệt độ CPU (°C)
+    // 2. Nhiệt độ CPU (C - thuần ASCII tránh lỗi texture font RTSS)
     if (config.showCpuTemp && cpuTemp != null && cpuTemp > 0) {
       final tempColor = cpuTemp >= 85
           ? 'FF4500' // Đỏ cảnh báo nguy hiểm
           : (cpuTemp >= 75 ? 'FFA500' : '00FF7F'); // Cam hoặc Xanh lá mát
-      items.add('<C=$tempColor>${cpuTemp.toStringAsFixed(0)}°C</C>');
+      items.add('<C=$tempColor>${cpuTemp.toStringAsFixed(0)}C<C>');
     }
 
     // 3. Công suất CPU (TDP Watt)
     if (config.showTdp && liveTdp != null && liveTdp > 0) {
-      items.add('<C=00FFFF>TDP: ${liveTdp}W</C>');
+      items.add('<C=00FFFF>TDP: ${liveTdp}W<C>');
     }
 
     // 4. Mức tải CPU (%)
-    if (config.showCpuUsage && cpuUsage != null && cpuUsage > 0) {
-      items.add('<C=E0E0E0>CPU: ${cpuUsage.toStringAsFixed(0)}%</C>');
+    if (config.showCpuUsage && cpuUsage != null && cpuUsage >= 0) {
+      items.add('<C=E0E0E0>CPU: ${cpuUsage.toStringAsFixed(0)}%<C>');
     }
 
     // 5. Dung lượng bộ nhớ RAM (GB)
     if (config.showRam && ramUsedGb != null && ramUsedGb > 0) {
-      items.add('<C=DDA0DD>RAM: ${ramUsedGb.toStringAsFixed(1)}G</C>');
+      items.add('<C=DDA0DD>RAM: ${ramUsedGb.toStringAsFixed(1)}G<C>');
     }
 
     // 6. Dung lượng pin (%)
-    if (config.showBattery && batteryPercent != null && batteryPercent > 0) {
+    if (config.showBattery && batteryPercent != null && batteryPercent >= 0) {
       final batColor = batteryPercent <= 20 ? 'FF4500' : '00FF7F';
-      items.add('<C=$batColor>BAT: $batteryPercent%</C>');
+      items.add('<C=$batColor>BAT: $batteryPercent%<C>');
     }
 
     // 7. Tốc độ quạt (%)
-    if (config.showFan && liveFan != null && liveFan > 0) {
-      items.add('<C=87CEEB>FAN: $liveFan%</C>');
+    if (config.showFan && liveFan != null && liveFan >= 0) {
+      items.add('<C=87CEEB>FAN: $liveFan%<C>');
     }
 
     if (items.isEmpty) {
@@ -143,7 +143,7 @@ class RtssOsdFormatter {
 
     // Bố cục hiển thị
     if (config.layout == RtssOsdLayout.compact) {
-      return items.join(' <C=808080>|</C> ');
+      return items.join(' <C=808080>|<C> ');
     } else {
       return items.join('\r\n');
     }

@@ -319,7 +319,7 @@ class SettingsTab extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      "v1.1.0 (Beta)",
+                      "v1.2.0 (Beta)",
                       style: AppTheme.caption.copyWith(
                         color: AppTheme.background,
                       ),

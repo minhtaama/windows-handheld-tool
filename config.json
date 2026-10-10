@@ -18,7 +18,7 @@
         "keyboard_combo": ""
     },
     "system": {
-        "autostart": false
+        "autostart": true
     },
     "dxgi_hook": {
         "enabled": true,
@@ -58,7 +58,15 @@
         "rtss": {
             "fps_limit": 0,
             "osd_enabled": true,
-            "osd_zoom": 1
+            "osd_zoom": 1,
+            "osd_show_fps": true,
+            "osd_show_tdp": true,
+            "osd_show_cpu_temp": true,
+            "osd_show_cpu_usage": false,
+            "osd_show_ram": true,
+            "osd_show_battery": true,
+            "osd_show_fan": false,
+            "osd_layout": "compact"
         }
     }
 }

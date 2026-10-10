@@ -398,7 +398,7 @@ class PerformanceTab extends StatelessWidget {
                 Expanded(
                   child: _MetricToggleCard(
                     key: getItemKey(11),
-                    icon: Icons.thermostat_rounded,
+                    icon: Icons.device_thermostat_rounded,
                     title: "Nhiệt độ CPU",
                     value: osdMetrics.showCpuTemp,
                     onTap: onToggleMetricCpuTemp,
@@ -495,7 +495,9 @@ class _MetricToggleCard extends StatelessWidget {
         border: Border.all(
           color: isFocused
               ? AppTheme.accent
-              : (value ? AppTheme.accent.withValues(alpha: 0.4) : AppTheme.cardBorder),
+              : (value
+                    ? AppTheme.accent.withValues(alpha: 0.4)
+                    : AppTheme.cardBorder),
           width: isFocused ? 1.8 : 1.0,
         ),
         boxShadow: isFocused
@@ -530,7 +532,9 @@ class _MetricToggleCard extends StatelessWidget {
                     style: AppTheme.body.copyWith(
                       fontSize: 12,
                       fontWeight: value ? FontWeight.w700 : FontWeight.w500,
-                      color: value ? AppTheme.textPrimary : AppTheme.textSecondary,
+                      color: value
+                          ? AppTheme.textPrimary
+                          : AppTheme.textSecondary,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -550,10 +554,12 @@ class _MetricToggleCard extends StatelessWidget {
                     ),
                   ),
                   child: value
-                      ? const Icon(
-                          Icons.check,
-                          size: 11,
-                          color: Colors.black,
+                      ? Center(
+                          child: const Icon(
+                            Icons.check_rounded,
+                            size: 10,
+                            color: Colors.black,
+                          ),
                         )
                       : null,
                 ),

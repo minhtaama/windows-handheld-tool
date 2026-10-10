@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
@@ -558,16 +559,17 @@ class RtssService {
     return val == '1';
   }
 
-  /// Bật hoặc tắt lớp phủ OSD và thông số FPS trên màn hình game.
-  /// Bật đồng thời EnableOSD (subsystem OSD) và EnableStat (vẽ FPS tích hợp của RTSS).
+  /// Bật hoặc tắt lớp phủ OSD trên màn hình game.
+  /// Bật EnableOSD (subsystem OSD). Đặt EnableStat = 0 để nhường toàn quyền
+  /// hiển thị cho chuỗi thông số tùy biến từ Shared Memory (tránh số FPS màu cam mặc định đè lên).
   bool setOsdEnabled(bool enabled) {
     final val = enabled ? 1 : 0;
     _setHookProfilePropertyDword('EnableOSD', val);
-    _setHookProfilePropertyDword('EnableStat', val);
+    _setHookProfilePropertyDword('EnableStat', 0);
     _setProfileValues('OSD', {
       'EnableOSD': '$val',
-      'EnableStat': '$val',
-      'ShowForegroundStat': '$val',
+      'EnableStat': '0',
+      'ShowForegroundStat': '0',
     });
     return true;
   }
@@ -649,9 +651,11 @@ class RtssService {
 
       if (osdEntrySize == 0 || osdArrSize == 0) return false;
 
-      // Duyệt tìm slot của _osdAppOwner hoặc slot trống đầu tiên
       int targetSlotIndex = -1;
-      for (int i = 0; i < osdArrSize; i++) {
+
+      // 1st pass: Tìm slot đã thuộc về _osdAppOwner
+      // Chú ý: Bắt đầu từ i = 1 để nhường slot 0 cho Primary OSD Clients (MSI Afterburner) theo chuẩn SDK
+      for (int i = 1; i < osdArrSize; i++) {
         final entryOffset = osdArrOffset + (i * osdEntrySize);
         final entryPtr = data + entryOffset;
 
@@ -661,13 +665,23 @@ class RtssService {
           if (c == 0) break;
           ownerBytes.add(c);
         }
-        final owner = String.fromCharCodes(ownerBytes);
-
-        if (owner == _osdAppOwner) {
+        if (utf8.decode(ownerBytes, allowMalformed: true) == _osdAppOwner) {
           targetSlotIndex = i;
           break;
-        } else if (owner.isEmpty && targetSlotIndex == -1) {
-          targetSlotIndex = i;
+        }
+      }
+
+      // 2nd pass: Nếu chưa có slot, tìm slot trống đầu tiên từ i = 1
+      if (targetSlotIndex == -1) {
+        for (int i = 1; i < osdArrSize; i++) {
+          final entryOffset = osdArrOffset + (i * osdEntrySize);
+          final entryPtr = data + entryOffset;
+
+          final firstOwnerChar = (entryPtr + 256).cast<Uint8>().value;
+          if (firstOwnerChar == 0) {
+            targetSlotIndex = i;
+            break;
+          }
         }
       }
 
@@ -677,29 +691,31 @@ class RtssService {
       final entryPtr = data + entryOffset;
 
       // 1. Ghi tên chủ sở hữu slot szOSDOwner (offset 256, dung lượng 256 byte)
-      final ownerUnits = _osdAppOwner.codeUnits;
-      for (int i = 0; i < ownerUnits.length && i < 255; i++) {
-        (entryPtr + 256 + i).cast<Uint8>().value = ownerUnits[i];
+      final ownerEncoded = utf8.encode(_osdAppOwner);
+      for (int i = 0; i < ownerEncoded.length && i < 255; i++) {
+        (entryPtr + 256 + i).cast<Uint8>().value = ownerEncoded[i];
       }
-      (entryPtr + 256 + ownerUnits.length.clamp(0, 255)).cast<Uint8>().value = 0;
+      (entryPtr + 256 + ownerEncoded.length.clamp(0, 255)).cast<Uint8>().value = 0;
 
-      // 2. Ghi chuỗi văn bản OSD
-      // Nếu ver >= 0x00020007 dùng szOSDEx (offset 512, 4096 bytes)
-      final textUnits = text.codeUnits;
+      // 2. Ghi chuỗi văn bản OSD vào CẢ HAI vùng nhớ:
+      final textBytes = utf8.encode(text);
+
+      // 2a. Ghi vào szOSD cơ bản (offset 0, 256 byte) để tương thích 100% với các hook DirectX
+      const maxLenBasic = 255;
+      for (int i = 0; i < textBytes.length && i < maxLenBasic; i++) {
+        (entryPtr + i).cast<Uint8>().value = textBytes[i];
+      }
+      final endBasic = textBytes.length.clamp(0, maxLenBasic);
+      (entryPtr + endBasic).cast<Uint8>().value = 0;
+
+      // 2b. Nếu ver >= 0x00020007, ghi thêm vào szOSDEx (offset 512, 4096 byte)
       if (ver >= 0x00020007) {
-        const maxLen = 4095;
-        for (int i = 0; i < textUnits.length && i < maxLen; i++) {
-          (entryPtr + 512 + i).cast<Uint8>().value = textUnits[i];
+        const maxLenEx = 4095;
+        for (int i = 0; i < textBytes.length && i < maxLenEx; i++) {
+          (entryPtr + 512 + i).cast<Uint8>().value = textBytes[i];
         }
-        final endIdx = textUnits.length.clamp(0, maxLen);
-        (entryPtr + 512 + endIdx).cast<Uint8>().value = 0;
-      } else {
-        const maxLen = 255;
-        for (int i = 0; i < textUnits.length && i < maxLen; i++) {
-          (entryPtr + i).cast<Uint8>().value = textUnits[i];
-        }
-        final endIdx = textUnits.length.clamp(0, maxLen);
-        (entryPtr + endIdx).cast<Uint8>().value = 0;
+        final endEx = textBytes.length.clamp(0, maxLenEx);
+        (entryPtr + 512 + endEx).cast<Uint8>().value = 0;
       }
 
       // 3. Tăng trường dwOSDFrame (offset 32 trong RTSS_SHARED_MEMORY) để kích hoạt RTSS refresh ngay lập tức
@@ -740,7 +756,7 @@ class RtssService {
       final osdArrOffset = data.cast<Uint32>()[6];
       final osdArrSize = data.cast<Uint32>()[7];
 
-      for (int i = 0; i < osdArrSize; i++) {
+      for (int i = 1; i < osdArrSize; i++) {
         final entryOffset = osdArrOffset + (i * osdEntrySize);
         final entryPtr = data + entryOffset;
 
@@ -750,7 +766,7 @@ class RtssService {
           if (c == 0) break;
           ownerBytes.add(c);
         }
-        final owner = String.fromCharCodes(ownerBytes);
+        final owner = utf8.decode(ownerBytes, allowMalformed: true);
 
         if (owner == _osdAppOwner) {
           // Xóa trắng toàn bộ entry
