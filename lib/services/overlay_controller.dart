@@ -18,7 +18,6 @@ class OverlayController extends ChangeNotifier {
   bool get isVisible => _isVisible;
 
   DateTime _lastToggleTime = DateTime.fromMillisecondsSinceEpoch(0);
-  Timer? _topmostWatchdogTimer;
   Timer? _sharedTextureTimer;
 
   ConfigManager? config;
@@ -78,20 +77,7 @@ class OverlayController extends ChangeNotifier {
       // 2. Hiển thị cửa sổ Fullscreen Transparent Overlay ở trạng thái SWP_NOACTIVATE & Always-on-Top
       NativeWindowService.showOverlayNoActivate();
 
-      // 3. Kích hoạt bộ canh gác Z-Order tần số cao (High-Frequency Topmost Watchdog - 200ms):
-      // Định kỳ tái khẳng định vị thế đỉnh của Overlay và cưỡng bức đẩy lùi Tablet Taskbar ra sau
-      // để chống lại việc Windows Tablet Taskbar thức giấc và cướp ngôi vị Topmost khi có cử chỉ chạm ở cạnh đáy.
-      _topmostWatchdogTimer?.cancel();
-      _topmostWatchdogTimer = Timer.periodic(
-        const Duration(milliseconds: 200),
-        (_) {
-          if (_isVisible) {
-            NativeWindowService.reassertTopmost();
-          }
-        },
-      );
-
-      // 4. Kích hoạt hoạt cảnh trượt từ mép phải vào
+      // 3. Kích hoạt hoạt cảnh trượt từ mép phải vào
       onAnimateShow?.call();
 
       logger.info('Đã mở Side Dock Panel (Fullscreen Transparent Overlay, Gamepad Muted in Game).');
@@ -107,8 +93,6 @@ class OverlayController extends ChangeNotifier {
       notifyListeners();
 
       // 1. Hủy ngay lập tức các timer để giải phóng 100% CPU
-      _topmostWatchdogTimer?.cancel();
-      _topmostWatchdogTimer = null;
       _sharedTextureTimer?.cancel();
       _sharedTextureTimer = null;
 

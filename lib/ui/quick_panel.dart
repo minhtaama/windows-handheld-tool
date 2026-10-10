@@ -144,23 +144,23 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     final savedFps = widget.config.get("hardware.rtss.fps_limit", 60);
     _fpsLimit = _rtssCtrl.isAvailable() ? _rtssCtrl.getValue() : savedFps;
     _rtssOsdEnabled = widget.config.get("hardware.rtss.osd_enabled", true);
-    if (_rtssCtrl.isAvailable()) {
-      _rtssOsdEnabled = _rtssCtrl.isOsdEnabled();
-    }
     _rtssOsdZoom = widget.config.get("hardware.rtss.osd_zoom", 2);
-    if (_rtssCtrl.isAvailable()) {
-      _rtssOsdZoom = _rtssCtrl.getOsdZoom();
-    }
     final savedOsdPos = widget.config.get(
       "hardware.rtss.osd_position",
       "topLeft",
     );
     _rtssOsdPosition = RtssOsdPosition.values.firstWhere(
       (p) => p.name == savedOsdPos,
-      orElse: () => _rtssCtrl.isAvailable()
-          ? _rtssCtrl.getOsdPosition()
-          : RtssOsdPosition.topLeft,
+      orElse: () => RtssOsdPosition.topLeft,
     );
+    if (_rtssCtrl.isAvailable()) {
+      _rtssCtrl.setOsdEnabled(_rtssOsdEnabled);
+      _rtssCtrl.setOsdZoom(_rtssOsdZoom);
+      _rtssCtrl.setOsdPosition(_rtssOsdPosition);
+      if (_rtssOsdEnabled) {
+        _refreshOsdText();
+      }
+    }
     _rtssOsdMetrics = RtssOsdMetricsConfig.fromConfig(widget.config);
     _touchEnabled = TouchscreenService.isEnabled;
     _autoStartEnabled = AutostartService.instance.isEnabled;
@@ -1027,6 +1027,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         _rtssCtrl.setValue(_fpsLimit);
         _rtssCtrl.setOsdZoom(_rtssOsdZoom);
         _rtssCtrl.setOsdPosition(_rtssOsdPosition);
+        _refreshOsdText();
       }
     }
   }

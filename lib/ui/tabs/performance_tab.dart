@@ -306,10 +306,14 @@ class PerformanceTab extends StatelessWidget {
             key: getItemKey(5),
             icon: Icons.subtitles_rounded,
             title: "Lớp phủ Overlay (OSD)",
-            subtitle: osdEnabled
-                ? "Đang hiển thị trên màn hình"
-                : "Đã tắt hiển thị OSD",
-            value: osdEnabled,
+            subtitle: rtssCtrl.isAvailable()
+                ? (osdEnabled
+                    ? "Đang hiển thị trên màn hình"
+                    : "Đã tắt hiển thị OSD")
+                : (isInstallingRtss
+                    ? "Đang cài đặt RTSS..."
+                    : "Chưa kết nối RTSS (Gạt để khởi chạy)"),
+            value: osdEnabled && rtssCtrl.isAvailable(),
             onChanged: onToggleOsd,
             isFocused: focusedIndex == 5,
             helpText: "Hiển thị lớp phủ theo dõi số khung hình FPS và thông số phần cứng trực tiếp trên màn hình trò chơi qua RivaTuner.",

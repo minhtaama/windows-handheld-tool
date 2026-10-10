@@ -1098,3 +1098,324 @@ flowchart TD
 1. **Dừng và xóa Service trong SCM**: Phát lệnh `net stop "WinRing0_1_2_0"` và `sc.exe delete "WinRing0_1_2_0"` để giải phóng hoàn toàn `WinRing0x64.sys`.
 2. **Gỡ móc chặn và làm mới Shell**: Gọi trực tiếp hàm export `UninstallGlobalDxgiHook` qua tiện ích `rundll32.exe`, kết hợp khởi động lại nhẹ `explorer.exe` nếu DLL vẫn bị khóa.
 3. **Đăng ký xóa khi khởi động lại (`MoveFileExW`)**: Sử dụng cờ `MOVEFILE_DELAY_UNTIL_REBOOT (0x4)` ghi nhận vào danh sách `PendingFileRenameOperations` của Session Manager. Bất kỳ tệp nào bị tiến trình lạ giữ lại sẽ được nhân Windows xóa sạch hoàn toàn ngay tại chu kỳ nạp Kernel tiếp theo.
+
+---
+
+## Phân Tầng Cửa Sổ Nhân Hệ Thống (DWM Z-Bands) & Xử Lý Xung Đột Che Phủ Thanh Tác Vụ Cảm Ứng Windows 11 (Tablet-Optimized Taskbar Inset)
+
+### 1. Hiện trạng xử lý và bế tắc kỹ thuật
+- **Cách thức xử lý trước đây**:
+  * Đặt cờ cửa sổ mở rộng `WS_EX_TOPMOST` và định kỳ gọi hàm Win32 API `SetWindowPos(hwnd, HWND_TOPMOST, ...)` kết hợp kỹ thuật hạ bậc Taskbar `SetWindowPos(hTaskbar, overlayHwnd, ...)` với cờ `SWP_NOACTIVATE`.
+- **Thảm họa kỹ thuật thực tế**:
+  * Khi người dùng chơi game toàn màn hình (Exclusive/Borderless), thanh Taskbar được trình quản lý vỏ (`explorer.exe`) tự động thu lại.
+  * Tuy nhiên, khi người dùng đang ở ngoài màn hình máy tính thông thường (Desktop Shell) trên các thiết bị cầm tay chạy Windows 11 (như GPD Win 4) với chế độ cảm ứng máy tính bảng được bật ("Optimize taskbar for touch interactions"), thanh Taskbar của Windows 11 luôn nằm đè lên trên vùng đáy của bảng điều khiển nhanh (Quick Settings Panel).
+  * Toàn bộ thanh chân trang điều hướng tay cầm (`_buildGamepadFooter`) bị thanh Taskbar che khuất 100%, đồng thời các tương tác chạm cảm ứng ở mép dưới bị hệ thống bắt cướp điểm chạm (Focus Stealing).
+
+### 2. Bóc trần bản chất vật lý (The "Why")
+Bên trong nhân hệ điều hành Windows NT (`win32kbase.sys`) và tiến trình quản lý kết hợp giao diện đồ họa (Desktop Window Manager - `dwmcore.dll`), cây thứ tự lớp sâu (Z-Order Tree) không phải là một danh sách phẳng đơn lẻ. Hệ thống phân chia cửa sổ thành các **Băng tầng Z-Order (Window Bands / Z-Bands)** vật lý cố định:
+
+```mermaid
+flowchart TD
+    subgraph DWM_Tree["Cây Phân Tầng DWM Z-Bands (Từ Cao Xuống Thấp)"]
+        Band16["ZBID_IMMERSIVE_MOMENT (Band 16): Cửa sổ tương tác khẩn cấp"]
+        Band15["ZBID_IMMERSIVE_APPCHROME (Band 15): Windows 11 Tablet-Optimized Taskbar"]
+        Band2["ZBID_SYSTEM_TOOLS (Band 2): Thanh tác vụ Taskbar cổ điển (Shell_TrayWnd)"]
+        Band5["ZBID_ALWAYSONTOP (Band 5): Toàn bộ cửa sổ ứng dụng người dùng WS_EX_TOPMOST"]
+        Band0["ZBID_DEFAULT (Band 0): Cửa sổ ứng dụng thông thường (Desktop Apps)"]
+        Band1["ZBID_DESKTOP (Band 1): Nền màn hình nền và biểu tượng Desktop"]
+    end
+
+    Band16 --> Band15
+    Band15 --> Band2
+    Band2 --> Band5
+    Band5 --> Band0
+    Band0 --> Band1
+```
+
+1. **Rào cản bảo mật Băng tầng (Security Band Isolation)**:
+   - Một ứng dụng chạy ở cấp độ người dùng thông thường hoặc quyền Quản trị viên (Administrator) khi gọi `CreateWindowEx` với `WS_EX_TOPMOST` hoặc gọi `SetWindowPos(HWND_TOPMOST)` **chỉ được nhân Windows xếp tối đa vào Băng tầng 5 (`ZBID_ALWAYSONTOP`)**.
+   - Thanh Taskbar cảm ứng của Windows 11 được tiến trình `explorer.exe` (với đặc quyền Shell tích hợp) đăng ký trực tiếp vào **Băng tầng 15 (`ZBID_IMMERSIVE_APPCHROME`)** hoặc **Băng tầng 2 (`ZBID_SYSTEM_TOOLS`)**.
+   - Trong kiến trúc DWM:
+     $$\text{ZBID\_IMMERSIVE\_APPCHROME (15)} > \text{ZBID\_SYSTEM\_TOOLS (2)} > \text{ZBID\_ALWAYSONTOP (5)}$$
+   - Mọi nỗ lực gọi `SetWindowPos(hTaskbar, overlayHwnd, ...)` đều bị nhân `win32kbase.sys` âm thầm bỏ qua do Windows cấm triệt để việc hoán đổi thứ tự tương đối giữa các cửa sổ thuộc hai Băng tầng khác nhau (Cross-Band Z-Order Reordering).
+2. **Bế tắc của hàm tạo cửa sổ trong băng tầng (`CreateWindowInBand`)**:
+   - Hàm nội bộ `CreateWindowInBand` đòi hỏi tiến trình phải có quyền `uiAccess="true"` trong tệp khai báo thông tin ứng dụng (Application Manifest), phải có chứng chỉ số gốc tin cậy (Root CA Digital Signature) và phải nằm trong thư mục hệ thống bảo vệ (`%ProgramFiles%`). Các ứng dụng di động độc lập (Portable) không thể vượt qua hàng rào kiểm tra bảo mật này tại nhân hệ điều hành.
+
+### 3. Phương thức giải quyết triệt để
+
+```mermaid
+flowchart LR
+    subgraph Solution1["Giải Pháp 1: Triệt Tiêu Thanh Tác Vụ (Taskbar Suppression)"]
+        OpenOverlay1["Mở Quick Settings Panel"] --> HideTray["ShowWindow(hTaskbar, SW_HIDE)"]
+        HideTray --> FreeZOrder["Taskbar biến mất 100%, Panel lộ diện hoàn toàn"]
+        CloseOverlay1["Đóng Quick Settings Panel"] --> ShowTray["ShowWindow(hTaskbar, SW_SHOW)"]
+    end
+
+    subgraph Solution2["Giải Pháp 2: Vùng An Toàn Động Đáy (Adaptive Dock Inset)"]
+        DetectTaskbar["Đo chiều cao Taskbar: GetWindowRect(hTaskbar)"] --> CalcPadding["Tính khoảng đệm đáy: bottomPadding = taskbarHeight + 16"]
+        CalcPadding --> LiftPanel["Tự động co ngắn Panel, nâng toàn bộ Gamepad Footer nổi trên đỉnh Taskbar"]
+    end
+```
+
+1. **Phương án 1 - Triệt tiêu hiển thị thanh tác vụ tạm thời (`Taskbar Suppression`)**:
+   - Khi bảng điều khiển mở (`showOverlayNoActivate`), gọi hàm Win32 API `ShowWindow(hTaskbar, SW_HIDE)` trên cả thanh tác vụ chính (`Shell_TrayWnd`) và phụ (`Shell_SecondaryTrayWnd`).
+   - Khi bảng điều khiển đóng (`hideOverlayWindow`), gọi `ShowWindow(hTaskbar, SW_SHOW)` để trả lại nguyên vẹn thanh tác vụ cho màn hình Desktop.
+2. **Phương án 2 - Vùng an toàn động đáy màn hình (`Adaptive Dock Safe Area Margin`)**:
+   - Thay vì cố định khoảng đệm dưới chân (`bottom: 20`), ứng dụng thực hiện đo đạc chiều cao thực tế của thanh Taskbar bằng `GetWindowRect(FindWindow("Shell_TrayWnd"))` hoặc `SHAppBarMessage(ABM_GETTASKBARPOS)`.
+   - Co ngắn chiều cao tổng thể của khung bảng điều khiển bên phải và nâng khoảng đệm chân trang lên một đoạn tương ứng với chiều cao Taskbar (khoảng 68px đến 88px tùy tỉ lệ DPI).
+   - Kết quả: Toàn bộ khối bảng điều khiển cùng thanh chân trang Gamepad Footer (`_buildGamepadFooter`) hiển thị trọn vẹn 100% ngay trên đỉnh thanh Taskbar mà không xảy ra hiện tượng đè lấp hay mất chỉ dẫn bấm nút.
+
+---
+
+## Kiến Trúc Đo Đạc Đồ Họa Của GPDTool & Bóc Trần Bản Chất Lỗi Văng Game Khi Dùng Shared Texture Ở 720p
+
+### 1. Hiện trạng xử lý và bế tắc kỹ thuật
+- **Hiện tượng**:
+  * Khi kích hoạt chế độ Direct3D Shared Texture Injection, người dùng vào game ở độ phân giải 720p (1280x720) trên thiết bị màn hình gốc 1080p (như GPD Win 4).
+  * Khi bấm mở Quick Settings Panel: Game lập tức bị văng (Crash), màn hình chuyển sang màu đen (Black Screen) ở độ phân giải 1080p, trong khi Panel chỉ hiển thị co rúm lại ở tỉ lệ 720p.
+  * Đồng thời, lớp phủ thông số RTSS OSD hoàn toàn không xuất hiện trên góc màn hình game dù công tắc giao diện đã bật.
+
+### 2. Bóc trần bản chất vật lý (The "Why")
+
+```mermaid
+flowchart TD
+    subgraph SharedTexture_Disaster["Thảm Họa Kỹ Thuật: Shared Texture Tại 720p Exclusive Fullscreen"]
+        Game720p["Game chạy 720p (1280x720) Exclusive Fullscreen"] --> DisplaySwitch["Card đồ họa chuyển Mode quét màn hình sang 720p"]
+        HotkeyPressed["Người dùng nhấn Hotkey mở Quick Panel"] --> FlutterShow["Cửa sổ Flutter (vốn ở 1080p Desktop) trồi lên"]
+        FlutterShow --> ExclusiveDrop["Mất quyền Exclusive: DirectX SwapChain bị phá vỡ"]
+        ExclusiveDrop --> BlackScreen["Màn hình đen: Windows chuyển Mode về 1080p Native"]
+        FlutterShow --> BlitMismatch["DirectX CopyTexture: Sai lệch kích thước 1920x1080 vào BackBuffer 1280x720"]
+        BlitMismatch --> D3DDeviceRemoved["Mã lỗi DXGI_ERROR_DEVICE_REMOVED: Game sập ngay lập tức"]
+    end
+```
+
+1. **Xung đột chuyển chế độ hiển thị vật lý (Hardware Display Mode Switch Mismatch)**:
+   - Khi game chạy độc quyền toàn màn hình (Exclusive Fullscreen) ở độ phân giải 720p, bộ điều khiển xuất hình phần cứng của GPU (Display Controller / CRTC) buộc màn hình vật lý chuyển sang tần số và ma trận quét 720p.
+   - Khi cửa sổ ứng dụng người dùng (Flutter Window trên Desktop 1080p) trồi lên, nhân Windows buộc phải thu hồi quyền độc quyền (Exclusive Drop).
+   - Quá trình chuyển đổi ngược từ 720p về 1080p khiến màn hình bị ngắt tín hiệu hiển thị (Màn hình đen). Cửa sổ Flutter khi được vẽ lại trong lúc độ phân giải màn hình đang chuyển dịch bị kẹt kích thước bộ đệm ở 720p trong một màn hình nền đen 1080p.
+2. **Sai lệch kích thước kết cấu khi tiêm vào chuỗi hoán đổi khung hình (Texture Blit Dimensions Mismatch)**:
+   - Trong kiến trúc Shared Texture, bề mặt đồ họa của Flutter (kết cấu kích thước $1920 \times 1080$) được chia sẻ trực tiếp qua tay cầm kết cấu (Shared Handle) để vẽ vào bộ đệm sau (BackBuffer) của game tại hàm `Present()`.
+   - Nếu game chạy 720p, bộ đệm BackBuffer của game chỉ có kích thước $1280 \times 720$. Lệnh sao chép kết cấu Direct3D (`CopySubresourceRegion` hoặc `DrawIndexed`) khi hai tài nguyên có kích thước và định dạng pixel không đồng nhất sẽ bị tầng DirectX Debug Runtime phát hiện lỗi nghiêm trọng, phát mã lỗi hủy bỏ thiết bị (`DXGI_ERROR_DEVICE_REMOVED`) khiến game văng ra màn hình ngoài ngay lập tức.
+3. **Tại sao RTSS Overlay không hiện trong game?**:
+   - Tiến trình `RTSS.exe` đòi hỏi quyền Quản trị viên (UAC Elevation). Nếu lệnh khởi chạy `ShellExecuteW(runas, ...)` bị Windows chặn hoặc người dùng chưa cấp quyền chạy ngầm, RTSS hoàn toàn không tồn tại trong bộ nhớ RAM (`Get-Process RTSS` = rỗng).
+   - RTSS có nguyên lý bất di bất dịch: **Phải khởi chạy RTSS TRƯỚC KHI game mở lên**. Nếu game đã chạy trước khi RTSS khởi động, móc chặn đồ họa (`RTSSHooks64.dll`) không thể tiêm vào tiến trình game.
+   - Giao diện `performance_tab.dart` hiển thị chuỗi "Đang hiển thị trên màn hình" chỉ dựa trên giá trị biến cục bộ `osdEnabled` chứ không kiểm tra kết nối tiến trình thực tế `_isRtssRunning`.
+
+### 3. Nghiên cứu giải pháp chuẩn mực của GPDTool / MotionAssistant
+
+```mermaid
+flowchart LR
+    subgraph GPDTool_Architecture["Kiến Trúc Chuẩn Của GPDTool & MotionAssistant"]
+        RTSS_Daemon["RTSS chạy nền từ Task Scheduler với Highest Privileges"] --> InjectEarly["Hook sẵn mọi game Direct3D/Vulkan ngay từ frame đầu"]
+        HandheldApp["Ứng dụng điều khiển"] -->|Ghi chuỗi OSD| SharedMem["RTSSSharedMemoryV2: szOSDEx & tăng dwOSDFrame"]
+        SharedMem --> RTSS_Render["RTSS tự lấy Viewport game (720p/1080p) & tự render font vector OSD an toàn"]
+        HookBorderless["Chế độ DXGI Borderless Hook (iFlip)"] --> NoExclusive["Ép game chạy Borderless 1080p Native (Game tự scale 720p bằng FSR/RSR)"]
+        NoExclusive --> PanelSmooth["Quick Panel mở tức thì 60fps, không bao giờ đen màn hình hay sập game"]
+    end
+```
+
+1. **GPDTool tuyệt đối KHÔNG dùng Direct3D Shared Texture Injection**:
+   - GPDTool và MotionAssistant nhận thức rõ sự phức tạp và mong manh của việc tiêm kết cấu đồ họa vào từng tựa game DirectX 11/12/Vulkan.
+   - GPDTool giao phó 100% nhiệm vụ vẽ chữ thông số trong game cho **RivaTuner Statistics Server (RTSS)**:
+     * RTSS là thư viện móc chặn chuẩn ngành được tinh chỉnh suốt hơn 20 năm, tự động nội suy tọa độ theo đúng kích thước khung nhìn thực tế của game (Viewport Scaling) dù game đang chạy 720p, 800p hay 1080p.
+     * GPDTool chỉ làm một việc duy nhất: Ghi chuỗi văn bản thông số vào ô nhớ `RTSSSharedMemoryV2` và tăng biến đếm `dwOSDFrame`.
+2. **GPDTool bảo đảm RTSS luôn chạy ngầm với quyền ưu tiên cao nhất**:
+   - Đăng ký RTSS khởi động cùng Windows thông qua Task Scheduler hoặc khóa Registry `Run` với cờ `StartWithWindows = 1` và `StartMinimized = 1`. Đảm bảo RTSS luôn chạy trước mọi tựa game.
+3. **Cơ chế hiển thị Quick Panel qua DXGI Borderless Windowed (iFlip)**:
+   - GPDTool loại bỏ triệt để chế độ Exclusive Fullscreen của game bằng cách chặn `SetFullscreenState(FALSE)` và biến cửa sổ game thành `WS_POPUP` phủ kín màn hình (Borderless Fullscreen).
+   - Màn hình Windows luôn duy trì cố định ở độ phân giải gốc 1080p. Game chạy 720p sẽ được nội suy bằng bộ co dãn phần cứng của GPU (AMD RSR / Radeon Super Resolution hoặc FSR).
+   - Khi người dùng gọi Quick Panel, cửa sổ điều khiển trồi lên mượt mà ngay trên đỉnh game mà không bao giờ kích hoạt chu kỳ đổi độ phân giải màn hình của Windows, triệt tiêu 100% hiện tượng màn hình đen và sập game.
+
+---
+
+## Bản Chất Vật Lý Của Đo Đạc Cửa Sổ Taskbar & Chuẩn Mực Bơm Dữ Liệu RTSS OSD
+
+### 1. Phân Tích Hình Học Cửa Sổ Taskbar Khi Tự Ẩn (Shell_TrayWnd Coordinate Geometry)
+
+```mermaid
+flowchart TD
+    subgraph Buggy_Measurement["Cách tính cũ (Lỗi hình học cố hữu)"]
+        OldFormula["Lấy height = bottom - top<br/>Kích thước cửa sổ Windows luôn cố định ~48px"] --> OldResult["height luôn bằng 48px (>15px)<br/>Panel luôn bị co ngắn ngay cả khi Taskbar chìm"]
+    end
+
+    subgraph Correct_Measurement["Cách tính First Principles (Tọa độ thực trên màn hình)"]
+        NewFormula["Lấy visibleHeight = screenHeight - top<br/>So sánh trực tiếp với đáy màn hình"]
+        NewFormula --> CheckState{"Kiểm tra vị trí"}
+        CheckState -->|top >= screenHeight| Submerged["Taskbar đã chìm ra khỏi màn hình (0px)"]
+        CheckState -->|screenHeight - top <= 4| AutoHideGutter["Chỉ còn gờ mép ẩn 2-4px (Coi như 0px)"]
+        CheckState -->|visibleHeight > 4| VisibleTaskbar["Taskbar thực sự đang hiển thị trên Desktop"]
+    end
+```
+
+- **Hiện tượng bế tắc**: Khi Windows bật chế độ tự ẩn Taskbar (Auto-hide Taskbar) hoặc chế độ máy tính bảng (Windows 11 Tablet Mode Auto-collapse), cửa sổ Taskbar `Shell_TrayWnd` **không bao giờ bị co ngắn chiều cao**. Hệ điều hành chỉ đơn thuần tịnh tiến tọa độ Y đẩy toàn bộ cửa sổ tụt xuống dưới mép màn hình (ví dụ trên màn hình 1080p: tọa độ `top = 1078, bottom = 1126`).
+- **Thảm họa kỹ thuật**: Lệnh lấy kích thước cửa sổ `GetWindowRect` trả về `bottom - top` luôn bằng $48\text{px}$. Nếu mã nguồn kiểm tra `height = bottom - top > 15`, điều kiện này **luôn luôn đúng 100% thời gian**, khiến ứng dụng luôn hiểu nhầm rằng Taskbar đang nổi và cưỡng bức chèn khoảng đệm đáy (`bottomPadding = 60px`), làm Panel bị ngắn tũn và để lại khoảng hở xấu xí ở đáy.
+- **Giải pháp First Principles**:
+  * Đo đạc chiều cao hiển thị thực: $\text{visibleHeight} = \text{screenHeight} - \text{top}$.
+  * Nếu $\text{top} \ge \text{screenHeight}$ hoặc $\text{visibleHeight} \le 4\text{px}$ (gờ mép của auto-hide), chiều cao Taskbar phải trả về chính xác là $0.0$.
+  * Bổ sung cơ chế ghi đè ngữ cảnh Game (Active Game Context Override): Khi có trò chơi đang chạy (`activeGame != null` hoặc cửa sổ Foreground ở chế độ Fullscreen), Taskbar mặc định bị che khuất hoàn toàn $\rightarrow$ Panel bắt buộc phải hiển thị toàn dải (`bottomPadding = 20.0`), triệt tiêu hoàn toàn khoảng hở đáy.
+
+---
+
+### 2. Chuẩn Mực Bơm Dữ Liệu RTSS OSD Trong Bộ Nhớ Chia Sẻ (Dual-Buffer Synchronization)
+
+```mermaid
+flowchart LR
+    subgraph DataWriter["Ứng Dụng Bơm Dữ Liệu (Dart FFI)"]
+        FormatOSD["Định dạng chuỗi OSD"] --> LockBusy["Ghi khóa dwBusy = 1 (v2.14+)"]
+        LockBusy --> WriteBasic["1. Ghi chuỗi cơ bản vào szOSD (Offset 0, 256 bytes)"]
+        WriteBasic --> WriteExtended["2. Ghi chuỗi mở rộng vào szOSDEx (Offset 512, 4096 bytes)"]
+        WriteExtended --> UnlockBusy["Giải phóng khóa dwBusy = 0"]
+        UnlockBusy --> IncFrame["Tăng biến đếm dwOSDFrame++"]
+    end
+
+    subgraph RTSS_Renderer["Bộ Render Hook Của RTSS (Direct3D / Vulkan)"]
+        IncFrame --> CheckFrame["Phát hiện dwOSDFrame thay đổi"]
+        CheckFrame --> ReadSlots["Quét các slot OSD có szOSD hoặc szOSDEx hợp lệ"]
+        ReadSlots --> DrawFrame["Vẽ lớp phủ OSD lên Viewport của Game"]
+    end
+```
+
+- **Bản chất cấu trúc ô nhớ `RTSS_SHARED_MEMORY_OSD_ENTRY`**:
+  * Offset 0: `char szOSD[256]` (Chuỗi văn bản cơ bản tương thích ngược).
+  * Offset 256: `char szOSDOwner[256]` (Tên định danh ứng dụng chủ sở hữu slot).
+  * Offset 512: `char szOSDEx[4096]` (Chuỗi văn bản mở rộng hỗ trợ định dạng markup).
+- **Lỗi kỹ thuật nghiêm trọng khi chỉ ghi `szOSDEx`**:
+  * Các module hook vẽ hình của RTSS (đặc biệt là DirectX 9, DirectX 11 và Vulkan trên nhiều bản RTSS) kiểm tra tính hợp lệ của slot bằng điều kiện `szOSD[0] != '\0'`.
+  * Nếu ứng dụng chỉ ghi chuỗi vào `szOSDEx` (offset 512) mà bỏ qua `szOSD` (offset 0), byte đầu tiên tại offset 0 là byte `0` (null terminator). Trình vẽ hook của RTSS sẽ kết luận slot này là rỗng và **bỏ qua hoàn toàn việc vẽ chuỗi lên khung hình của game**!
+- **Chuẩn mực theo RTSS SDK**:
+  * Bắt buộc phải sao chép chuỗi văn bản vào đồng thời cả `szOSD` (cắt tối đa 255 ký tự) và `szOSDEx` (tối đa 4095 ký tự).
+  * Đồng bộ khóa nguyên tử `dwBusy` (offset 36) trước khi ghi và giải phóng ngay sau khi ghi.
+  * Tăng biến đếm khung hình toàn cục `dwOSDFrame` (offset 32) để đánh thức bộ dựng hình của RTSS vẽ ngay trên khung hình kế tiếp.
+
+---
+
+### 3. Bóc Trần Lỗi Đảo Byte dwSignature & Xung Đột Trùng Lặp 2 Số FPS (Duplicate Framerate Counter)
+
+```mermaid
+flowchart TD
+    subgraph Bug1_Signature["Lỗi 1: Sai lệch hằng số dwSignature"]
+        MSVC["Trình biên dịch MSVC C++: 'RTSS' = 0x52545353"] --> RTSS_Mem["RTSS Header dwSignature lưu giá trị 0x52545353"]
+        DartApp["Dart App khai báo nhầm Little-Endian đảo: 0x53535452"] --> CompareSig{"sig != _rtssSignature"}
+        CompareSig -->|Luôn True| DropAll["Bị chặn đứng 100%: updateOsdText, getLiveFps, getActiveGameName đều trả về null/false"]
+    end
+
+    subgraph Bug2_EnableStat["Lỗi 2: Xung đột hiển thị 2 số FPS"]
+        EnableStat1["Cờ EnableStat = 1 trong RTSS Profile"] --> RTSS_Internal["RTSS tự vẽ số FPS nội bộ (Màu cam BaseColor)"]
+        App_Metric["Ứng dụng điều khiển bật showFps: true"] --> App_OSD["Ứng dụng gửi chuỗi FPS vào ô nhớ OSD"]
+        RTSS_Internal & App_OSD --> Conflict["Hai số FPS vẽ đè lên nhau ở cùng tọa độ góc màn hình!"]
+    end
+```
+
+1. **Bản chất vật lý của hằng số định danh `dwSignature` trong bộ nhớ chia sẻ**:
+   - Trong mã nguồn gốc RTSS SDK C++, biến định danh được viết dưới dạng ký tự đa byte: `dwSignature = 'RTSS'`.
+   - Trình biên dịch Microsoft Visual C++ (MSVC) đóng gói hằng số đa ký tự theo thứ tự từ trái sang phải vào thanh ghi 32-bit: `'R' (0x52) << 24 | 'T' (0x54) << 16 | 'S' (0x53) << 8 | 'S' (0x53) = 0x52545353`.
+   - Nếu tầng ứng dụng bên ngoài khai báo theo giá trị byte đảo ngược `0x53535452`, phép kiểm tra `sig != _rtssSignature` sẽ **luôn luôn trả về true (không khớp)**!
+   - Hệ quả là toàn bộ các lời gọi FFI: `updateOsdText()`, `getInstantaneousFps()`, `getActiveGameName()`, `clearOsdText()` đều bị văng ra ngay từ dòng lệnh đầu tiên, khiến ứng dụng không thể bơm bất kỳ chuỗi văn bản nào vào bộ nhớ chia sẻ của RTSS.
+
+2. **Bản chất của hiện tượng "2 số FPS đè lên nhau"**:
+   - Khi cờ `EnableStat = 1` được bật trong cấu hình RTSS, bộ dựng hình của RTSS sẽ tự động kích hoạt tính năng hiển thị thống kê khung hình nội bộ của riêng nó (được vẽ bằng màu cam mặc định `BaseColor = 00FF8000` tại tọa độ thiết lập).
+   - Nếu ứng dụng điều khiển cũng bật tính năng hiển thị FPS trong chuỗi định dạng OSD (`showFps = true`), cả hai luồng hiển thị độc lập này cùng vẽ một con số tốc độ khung hình tại cùng một vị trí góc màn hình, tạo ra hiện tượng **hai chữ số bị lem/chồng chéo lên nhau**.
+   - **Giải pháp triệt để**: Thiết lập `EnableStat = 0` (và `ShowForegroundStat = 0`). RTSS vẫn duy trì việc đo đạc thời gian khung hình trong bộ nhớ, nhưng ngừng việc tự vẽ số màu cam nội bộ, nhường 100% quyền hiển thị chuỗi thông số hoàn chỉnh (FPS, TDP, Nhiệt độ, RAM, Pin, Tải CPU, Quạt) theo đúng bố cục người dùng tùy chọn (1 dòng hoặc nhiều dòng).
+
+
+---
+
+### 4. Cơ Chế Phủ Đè Toàn Dải Khắc Phục Bế Tắc Tablet Taskbar (Z-Order Overlapping Overlay)
+
+- **Bản chất của Taskbar trên Windows 11 Tablet Mode**:
+  - Khi bật tính năng tối ưu cho cảm ứng (Optimize taskbar for touch interactions), Taskbar tự động co lại thành một gờ mỏng (Collapsed) khi người dùng không chạm vào, và phình to (Expanded) khi người dùng vuốt từ mép đáy lên.
+  - Quá trình chuyển đổi trạng thái này diễn ra hoàn toàn nội bộ trong Desktop Window Manager (DWM) của Windows mà **không phát ra bất kỳ thông điệp hệ thống công khai nào (No Shell Broadcast Event)**.
+  - Mọi giải pháp đo đạc chiều cao Taskbar để co ngắn chân Panel đều rơi vào bế tắc: hoặc bị hở chân khi Taskbar thu nhỏ, hoặc bị đè lấp khi Taskbar phình to.
+- **Giải pháp First Principles chuẩn ngành Handheld (Overlapping Overlay)**:
+  - Loại bỏ hoàn toàn cơ chế co ngắn chân Panel. Cửa sổ Quick Panel luôn luôn trải dài 100% chiều cao màn hình (`bottomPadding = 20.0`).
+  - Khẳng định vị thế Z-Order tối cao: Cửa sổ Overlay luôn được thiết lập `HWND_TOPMOST` (-1) và gọi Win32 API `SetWindowPos(hTaskbar, overlayHwnd, ...)` để cưỡng bức đẩy thanh Taskbar `Shell_TrayWnd` nằm ra phía sau cửa sổ Panel.
+  - Kết quả: Khi mở Quick Panel, giao diện phủ đè mượt mà lên trên toàn bộ màn hình (kể cả Taskbar), tạo ra trải nghiệm đồng nhất, liền mạch như các máy console chuyên dụng (Steam Deck, Nintendo Switch) mà không phụ thuộc vào trạng thái ẩn/hiện thất thường của Windows Taskbar.
+
+---
+
+### 5. Hiện Tượng Tụt FPS Trầm Trọng Khi Mở Overlay (Background Process Throttling & DWM Occlusion Lock)
+
+```mermaid
+flowchart TD
+    subgraph RootCause["Bản chất vật lý gây tụt FPS từ 60 xuống 15 khi mở Panel"]
+        LossFocus["1. Xóa cờ wsExNoActivate: Cửa sổ Flutter nhận Focus Win32 (Foreground Window)"] --> GameInactive["Game bị chuyển sang trạng thái cửa sổ nền (Background/Inactive Window)"]
+        GameInactive --> EngineThrottling["Game Engine (Unity/UE/HoYoverse) kích hoạt bộ giới hạn tiết kiệm pin: Background FPS Limit = 15 FPS!"]
+        GameInactive --> WinPowerThrottling["Windows 11 kích hoạt EcoQoS / GPU Power Throttling cho ứng dụng chạy nền"]
+
+        RemoveToolWin["2. Xóa cờ wsExToolWindow: Cửa sổ trở thành Top-Level App bao phủ toàn màn hình"] --> Occlusion["DWM đánh giá Game SwapChain bị che khuất hoàn toàn (DXGI_STATUS_OCCLUDED)"]
+        Occlusion --> EngineSleep["Game tự động kích hoạt vòng lặp ngủ luồng đồ họa Sleep(66ms) = 15 FPS!"]
+
+        WatchdogTimer["3. Bộ canh gác Watchdog gọi SetWindowPos 5 lần/giây (chu kỳ 200ms)"] --> DwmBreak["DWM liên tục hủy bỏ chế độ hiển thị trực tiếp DirectFlip của Game SwapChain"]
+    end
+```
+
+#### A. Xuất phát từ bế tắc thực tế (The "Why")
+- **Trước đây**: Khi cửa sổ ứng dụng Quick Panel được tạo ra với phong cách cửa sổ công cụ nổi kèm thuộc tính cấm nhận kích hoạt (`WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`), cửa sổ game vẫn giữ trọn quyền chiếm dụng điều khiển chính của Windows (`Foreground Window`). Game liên tục chạy ở tốc độ 60 FPS mượt mà.
+- **Bị nghẽn/thảm họa kỹ thuật**: Khi thực hiện yêu cầu cho Panel phủ đè toàn dải lên trên thanh Taskbar của chế độ máy tính bảng (Tablet Mode), việc loại bỏ hai thuộc tính mở rộng `WS_EX_TOOLWINDOW` và `WS_EX_NOACTIVATE` đã biến cửa sổ Overlay trong suốt thành một cửa sổ ứng dụng thông thường có kích thước bao phủ 100% diện tích màn hình. Đồng thời, việc thiết lập bộ lặp thời gian chu kỳ ngắn (200ms) liên tục gọi hàm sắp xếp thứ tự hiển thị (`SetWindowPos`) lên thanh Taskbar đã dẫn tới hiện tượng tốc độ khung hình của game sụt giảm thê thảm từ 60 FPS xuống đúng 15 FPS!
+
+#### B. Bóc trần bản chất vật lý (First Principles)
+1. **Cơ chế tự động bóp nghẹt xung nhịp khi mất quyền ưu tiên (Background Application Throttling & Inactive Focus)**:
+   - Khi thiếu thuộc tính cấm kích hoạt (`WS_EX_NOACTIVATE`), ngay khi cửa sổ Overlay được hiển thị hoặc người dùng chạm tay vào màn hình cảm ứng, nhân hệ điều hành Windows Win32 phát thông điệp kích hoạt (`WM_ACTIVATE / WM_KILLFOCUS`) chuyển quyền sở hữu tiêu điểm bàn phím và chuột sang cửa sổ Quick Panel.
+   - Hầu hết các bộ dựng hình trò chơi hiện đại (Unreal Engine, Unity, HoYoverse Engine...) đều tích hợp sẵn thuật toán tiết kiệm điện năng cho thiết bị di động: Khi cửa sổ game bị mất quyền ưu tiên (`Inactive/Background Window`), bộ điều phối khung hình sẽ tự động giới hạn tốc độ dựng hình tối đa xuống mức thấp nhất, phổ biến nhất là **15 FPS** (tương đương chu kỳ chờ 66.6 mili-giây giữa mỗi khung hình)!
+   - Đồng thời, trình quản lý năng lượng của Windows 11 sẽ tự động gán nhãn trạng thái hiệu năng thấp (`EcoQoS / Efficiency Mode`) cho tiến trình game, hạ xung nhịp CPU và GPU xuống tầng tiêu thụ tối thiểu.
+
+2. **Cơ chế phát hiện che khuất bề mặt hiển thị của DirectX (DXGI Surface Occlusion)**:
+   - Khi thiếu thuộc tính cửa sổ công cụ (`WS_EX_TOOLWINDOW`), hệ thống quản lý giao diện DWM (Desktop Window Manager) coi cửa sổ Overlay là một ứng dụng chính thức che phủ toàn bộ diện tích màn hình từ tọa độ `(0, 0)` đến `(width, height)`.
+   - Khi trò chơi thực hiện lệnh xuất hình (`IDXGISwapChain::Present`), bộ điều phối DXGI kiểm tra mức độ che phủ và trả về mã trạng thái bị che khuất (`DXGI_STATUS_OCCLUDED`). Khi nhận mã này, luồng kết xuất của game chuyển sang chế độ tiết kiệm năng lượng hoặc bị DWM cắt giảm tần số đồng bộ khung hình quét dọc.
+
+3. **Hiện tượng gián đoạn chu kỳ quét màn hình trực tiếp do bộ lặp Watchdog quá dày (DirectFlip Invalidation)**:
+   - Khi trò chơi chạy ở chế độ toàn màn hình không viền, DWM cho phép chuỗi bộ nhớ đệm khung hình của game được quét trực tiếp ra màn hình (`DirectFlip / Independent Flip`), giảm độ trễ về gần như bằng 0.
+   - Khi bộ lặp Watchdog gọi hàm tái sắp xếp thứ tự hiển thị (`SetWindowPos`) lên `Shell_TrayWnd` với tần suất 5 lần mỗi giây (200ms), DWM liên tục bị ép phải hủy bỏ trạng thái DirectFlip và thực hiện lại quá trình trộn ảnh trên bộ nhớ GPU, làm nghẽn luồng xử lý đồ họa của game.
+
+#### C. Giải pháp kỹ thuật triệt để
+1. **Khôi phục hoàn toàn cờ `WS_EX_NOACTIVATE` và `WS_EX_TOOLWINDOW`**:
+   - Khi hiển thị Overlay, bắt buộc phải duy trì: `(currentExStyle & ~wsExTransparent) | wsExLayered | wsExNoActivate | wsExTopMost | wsExToolWindow`.
+   - Thuộc tính `WS_EX_NOACTIVATE` đảm bảo 100% cửa sổ game **không bao giờ bị mất tiêu điểm (Foreground Window)** khi mở Quick Panel, ngăn chặn triệt để thuật toán bóp FPS xuống 15 của game engine!
+   - Thuộc tính `WS_EX_TOOLWINDOW` đảm bảo DWM không coi Overlay là một ứng dụng che khuất toàn màn hình (chống lỗi `DXGI_STATUS_OCCLUDED`).
+2. **Loại bỏ bộ lặp Watchdog 200ms gọi `SetWindowPos` liên tục**:
+   - Thao tác hạ bậc thanh Taskbar (`_demoteTaskbars`) chỉ cần thực hiện **một lần duy nhất** tại thời điểm mở Panel (`showOverlayNoActivate` và `onAnimateShow`).
+   - Tuyệt đối không dùng Timer lặp vô hạn gọi `SetWindowPos` trên luồng hệ thống của `Shell_TrayWnd` khi đang chơi game, bảo toàn 100% chu kỳ quét màn hình trực tiếp (`DirectFlip`).
+
+---
+
+### 6. Khắc Phục Hiện Tượng RTSS OSD Hiển Thị Trùng Lặp 2 Lần & Tự Vẽ Đè Lên Panel Ứng Dụng
+
+```mermaid
+flowchart TD
+    subgraph Bug1_DoubleText["Lỗi 1: Chuỗi thông số bị vẽ lặp lại 2 lần"]
+        WriteBoth["App ghi đồng thời cùng một chuỗi vào cả szOSD (256 byte) và szOSDEx (4096 byte)"] --> RTSS_Renderer["Bộ kết xuất OSD của RTSS đọc cả hai vùng đệm"]
+        RTSS_Renderer --> Concatenate["RTSS ghép nối liên tiếp hai chuỗi: Render szOSD + Render szOSDEx"]
+        Concatenate --> VisualDuplicate["Hiện tượng: Chuỗi OSD bị nhân đôi trên cùng một dòng!"]
+    end
+
+    subgraph Bug2_HookPanel["Lỗi 2: OSD tự vẽ lên chính cửa sổ Quick Panel"]
+        GlobalHook["RTSS Profile Global bật HookDirect3D11 = 1"] --> FlutterDirectX["Flutter Windows Engine kết xuất UI bằng Direct3D 11"]
+        FlutterDirectX --> RTSS_Inject["RTSS tiêm DLL và chèn OSD vào SwapChain của windows_handheld_tool.exe"]
+        RTSS_Inject --> VisualPanelOverlay["Hiện tượng: OSD hiển thị cả khi ở ngoài Desktop và trên Panel"]
+    end
+```
+
+#### A. Xuất phát từ bế tắc thực tế (The "Why")
+- **Trước đây**: Khi khắc phục thành công lỗi chữ ký bộ nhớ và tắt bộ đếm khung hình cam nội bộ, toàn bộ chuỗi thông số (FPS, Nhiệt độ, TDP, CPU, RAM, Quạt) đã được đưa thành công lên màn hình. Tuy nhiên, chuỗi thông số này lại **bị lặp lại y hệt 2 lần nối tiếp nhau trên cùng một dòng**, đồng thời OSD lại xuất hiện ngay trên cả cửa sổ Quick Panel của ứng dụng thay vì chỉ nằm trong game.
+- **Bị nghẽn kỹ thuật**: Người dùng quan sát thấy hai chuỗi đo đạc bị nối đuôi nhau, đồng thời bộ giám sát tiến trình của RTSS nhận diện nhầm cửa sổ ứng dụng cầm tay (`windows_handheld_tool.exe`) hoặc các ứng dụng nền khác (`Cloudflare WARP.exe`) là trò chơi cần hiển thị lớp phủ.
+
+#### B. Bóc trần bản chất vật lý (First Principles)
+1. **Cơ chế đệm chuỗi kép trong cấu trúc `RTSS_SHARED_MEMORY_OSD_ENTRY`**:
+   - Trong giao thức bộ nhớ chia sẻ của RTSS SDK, mỗi vị trí ô nhớ OSD (`OSD Entry`) được thiết kế gồm 2 vùng đệm văn bản riêng biệt:
+     - `szOSD` (nằm ở độ dời 0 byte, kích thước 256 byte): Là vùng đệm văn bản thuần cổ điển (`Plain ASCII Text`).
+     - `szOSDEx` (nằm ở độ dời 512 byte, kích thước 4096 byte): Là vùng đệm văn bản mở rộng hỗ trợ định dạng nâng cao (`Markup Tags` như `<COLOR=...>`, `<GRAPH>`, `<TABLE>`).
+   - Theo nguyên lý của bộ phân tích cú pháp RTSS, nếu một vị trí ô nhớ có **cả `szOSD` và `szOSDEx` đều chứa dữ liệu khác rỗng**, bộ dựng hình của RTSS sẽ kết xuất nội dung của `szOSD` trước, rồi kết xuất tiếp nối ngay sau đó nội dung của `szOSDEx`.
+   - Vì mã nguồn ứng dụng trước đó ghi chuỗi định dạng vào cả 2 vùng đệm này, kết quả hiển thị trên màn hình là **hai chuỗi giống hệt nhau được ghép nối liền kề**.
+   - **Quy tắc chuẩn ngành RTSS SDK**: Khi phiên bản RTSS hỗ trợ vùng đệm mở rộng (`ver >= 0x00020007`), ứng dụng **chỉ được phép ghi dữ liệu vào `szOSDEx`** và bắt buộc phải đặt ký tự đầu tiên của `szOSD` bằng 0 (`szOSD[0] = 0` - chuỗi rỗng). Ngược lại, nếu chạy trên RTSS đời cũ, chỉ ghi vào `szOSD`.
+
+2. **Cơ chế bắt bớ toàn cục của bộ tiêm mã Direct3D (Global Hook Injection)**:
+   - Trên hệ điều hành Windows, giao diện người dùng của Flutter được kết xuất tăng tốc phần cứng thông qua thư viện ANGLE/Direct3D 11.
+   - Khi cấu hình toàn cục của RTSS (`Profiles\Global`) bật chế độ theo dõi Direct3D (`HookDirect3D11 = 1`), cơ chế tiêm DLL toàn cục của RTSS sẽ tự động gắn kết vào mọi tiến trình Win32 có khởi tạo thiết bị đồ họa Direct3D SwapChain, bao gồm cả chính tiến trình `windows_handheld_tool.exe`.
+   - Kết quả là RTSS coi cửa sổ Quick Panel là một mục tiêu đồ họa và tự động vẽ chữ số OSD lên chính bề mặt của Panel!
+   - **Giải pháp First Principles**: Tạo một tập tin cấu hình riêng biệt cho tiến trình ứng dụng tại đường dẫn `Profiles\windows_handheld_tool.exe` với cờ vô hiệu hóa theo dõi đồ họa (`EnableHooking = 0` và `EnableOSD = 0`). Khi khởi chạy, bộ tiêm mã của RTSS sẽ bỏ qua hoàn toàn tiến trình ứng dụng, ngăn chặn triệt để việc vẽ OSD lên Panel.
+
+
+
+
+
+
