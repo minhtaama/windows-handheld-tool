@@ -34,6 +34,7 @@ class TdpController extends HardwareController {
 
   _TableOpDart? _initTable;
   _TableOpDart? _refreshTable;
+  _GetFloatValueDart? _getSocketPowerValue;
   _GetFloatValueDart? _getStapmValue;
   _GetFloatValueDart? _getFastValue;
   _GetFloatValueDart? _getSlowValue;
@@ -147,6 +148,12 @@ class TdpController extends HardwareController {
               .lookupFunction<_TableOpC, _TableOpDart>('init_table');
           _refreshTable = _ryzenDll!
               .lookupFunction<_TableOpC, _TableOpDart>('refresh_table');
+          try {
+            _getSocketPowerValue = _ryzenDll!
+                .lookupFunction<_GetFloatValueC, _GetFloatValueDart>(
+                  'get_socket_power',
+                );
+          } catch (_) {}
           _getStapmValue = _ryzenDll!
               .lookupFunction<_GetFloatValueC, _GetFloatValueDart>(
                 'get_stapm_value',
@@ -202,6 +209,7 @@ class TdpController extends HardwareController {
   int getValue() => _currentTdp;
 
   /// Đọc công suất tiêu thụ thực tế tức thời (Watt) trực tiếp từ bảng cảm biến PM Table của AMD SMU.
+  /// Ưu tiên Package Power thực tế tức thời (Socket Power / Fast PPT) trước thuật toán trễ STAPM.
   double? getLiveTdp() {
     if (!_isHardwareActive || _ryzenHandle == null || _ryzenHandle == nullptr) {
       return null;
@@ -209,9 +217,12 @@ class TdpController extends HardwareController {
     try {
       final res = _refreshTable?.call(_ryzenHandle!);
       if (res == 0) {
-        final stapm = _getStapmValue?.call(_ryzenHandle!);
-        if (stapm != null && !stapm.isNaN && stapm > 0 && stapm < 150) {
-          return stapm;
+        final socketPower = _getSocketPowerValue?.call(_ryzenHandle!);
+        if (socketPower != null &&
+            !socketPower.isNaN &&
+            socketPower > 0 &&
+            socketPower < 150) {
+          return socketPower;
         }
         final fast = _getFastValue?.call(_ryzenHandle!);
         if (fast != null && !fast.isNaN && fast > 0 && fast < 150) {
@@ -220,6 +231,10 @@ class TdpController extends HardwareController {
         final slow = _getSlowValue?.call(_ryzenHandle!);
         if (slow != null && !slow.isNaN && slow > 0 && slow < 150) {
           return slow;
+        }
+        final stapm = _getStapmValue?.call(_ryzenHandle!);
+        if (stapm != null && !stapm.isNaN && stapm > 0 && stapm < 150) {
+          return stapm;
         }
       }
     } catch (_) {}

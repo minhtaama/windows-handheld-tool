@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../core/config.dart';
 import '../core/logger.dart';
@@ -17,6 +18,7 @@ class OverlayController extends ChangeNotifier {
   bool get isVisible => _isVisible;
 
   DateTime _lastToggleTime = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _topmostWatchdogTimer;
 
   ConfigManager? config;
 
@@ -58,7 +60,20 @@ class OverlayController extends ChangeNotifier {
       // 2. Hiển thị cửa sổ Fullscreen Transparent Overlay ở trạng thái SWP_NOACTIVATE & Always-on-Top
       NativeWindowService.showOverlayNoActivate();
 
-      // 3. Kích hoạt hoạt cảnh trượt từ mép phải vào
+      // 3. Kích hoạt bộ canh gác Z-Order (Topmost Watchdog):
+      // Định kỳ tái khẳng định vị thế đỉnh của Overlay để chống lại việc Windows Tablet Taskbar
+      // thức giấc và cướp ngôi vị Topmost khi có cử chỉ chạm ở cạnh đáy.
+      _topmostWatchdogTimer?.cancel();
+      _topmostWatchdogTimer = Timer.periodic(
+        const Duration(milliseconds: 500),
+        (_) {
+          if (_isVisible) {
+            NativeWindowService.reassertTopmost();
+          }
+        },
+      );
+
+      // 4. Kích hoạt hoạt cảnh trượt từ mép phải vào
       onAnimateShow?.call();
 
       logger.info('Đã mở Side Dock Panel (Fullscreen Transparent Overlay, Gamepad Muted in Game).');
@@ -73,15 +88,19 @@ class OverlayController extends ChangeNotifier {
       _isVisible = false;
       notifyListeners();
 
-      // 1. Khôi phục tín hiệu Gamepad cho game ngay lập tức
+      // 1. Hủy ngay lập tức bộ canh gác Z-Order để giải phóng 100% CPU/Timer
+      _topmostWatchdogTimer?.cancel();
+      _topmostWatchdogTimer = null;
+
+      // 2. Khôi phục tín hiệu Gamepad cho game ngay lập tức
       DxgiHookService.instance.setOverlayActive(false);
 
-      // 2. Chạy hoạt cảnh trượt ra mép phải
+      // 3. Chạy hoạt cảnh trượt ra mép phải
       if (onAnimateHide != null) {
         await onAnimateHide!();
       }
 
-      // 3. Chuyển cửa sổ sang chế độ xuyên thấu (WS_EX_TRANSPARENT)
+      // 4. Chuyển cửa sổ sang chế độ xuyên thấu (WS_EX_TRANSPARENT)
       NativeWindowService.hideOverlayWindow();
 
       logger.info('Đã đóng Side Dock Panel (Gamepad restored in Game).');

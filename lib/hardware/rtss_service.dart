@@ -60,6 +60,7 @@ class RtssService {
   }
 
   static const int _fileMapRead = 0x0004;
+  static const int _fileMapReadWrite = 0x0006; // FILE_MAP_READ | FILE_MAP_WRITE (Tương thích mọi mức đặc quyền UAC)
   static const int _fileMapAllAccess = 0x001F;
   static const int _rtssSignature = 0x53535452; // 'RTSS' trong mã ASCII Hex (Little Endian)
   static const String _osdAppOwner = 'WindowsHandheldTool';
@@ -290,22 +291,32 @@ class RtssService {
         final entryOffset = appArrOffset + (i * appEntrySize);
         final entryPtr = data + entryOffset;
 
-        // dwProcessID nằm ở offset 260 sau chuỗi szProcessPath (260 byte)
-        final pid = (entryPtr + 260).cast<Uint32>()[0];
+        // dwProcessID nằm ở offset 0 (4 byte đầu tiên của RTSS_SHARED_MEMORY_APP_ENTRY)
+        final pid = entryPtr.cast<Uint32>()[0];
         if (pid != 0) {
-          // dwStatFramerate nằm ở offset 300 của AppEntry (đơn vị là fps * 10)
-          final statFramerate = (entryPtr + 300).cast<Uint32>()[0];
-          if (statFramerate > 0) {
-            return (statFramerate / 10).round();
+          // dwFrameTime nằm ở offset 280 (thời gian frame tính bằng micro giây - µs)
+          final frameTimeUs = (entryPtr + 280).cast<Uint32>()[0];
+          if (frameTimeUs > 0) {
+            final fps = (1000000.0 / frameTimeUs).round();
+            if (fps > 0 && fps < 1000) return fps;
           }
 
-          // Fallback: Tính từ dwStatFrames (offset 284) và delta time (offset 292 - 288)
-          final statFrames = (entryPtr + 284).cast<Uint32>()[0];
-          final time0 = (entryPtr + 288).cast<Uint32>()[0];
-          final time1 = (entryPtr + 292).cast<Uint32>()[0];
+          // Fallback 1: Tính từ dwFrames (offset 276) và chu kỳ đo delta ms (offset 272 - 268)
+          final frames = (entryPtr + 276).cast<Uint32>()[0];
+          final time0 = (entryPtr + 268).cast<Uint32>()[0];
+          final time1 = (entryPtr + 272).cast<Uint32>()[0];
           final delta = time1 - time0;
-          if (delta > 0 && statFrames > 0) {
-            return ((statFrames * 1000) / delta).round();
+          if (delta > 0 && frames > 0) {
+            final fps = ((frames * 1000) / delta).round();
+            if (fps > 0 && fps < 1000) return fps;
+          }
+
+          // Fallback 2: Đọc từ thống kê trung bình dwStatFramerateAvg (offset 308, fps * 10)
+          if (appEntrySize >= 312) {
+            final statAvg = (entryPtr + 308).cast<Uint32>()[0];
+            if (statAvg > 0) {
+              return (statAvg / 10).round();
+            }
           }
         }
       }
@@ -346,18 +357,19 @@ class RtssService {
       for (int i = 0; i < appArrSize; i++) {
         final entryOffset = appArrOffset + (i * appEntrySize);
         final entryPtr = data + entryOffset;
-        final pid = (entryPtr + 260).cast<Uint32>()[0];
+        final pid = entryPtr.cast<Uint32>()[0];
 
         if (pid != 0) {
-          // szProcessPath là chuỗi ANSI 260 byte ở đầu struct
+          // szName là chuỗi ANSI MAX_PATH (260 byte) nằm ở offset 4
           final bytes = <int>[];
           for (int b = 0; b < 260; b++) {
-            final charCode = (entryPtr + b).cast<Uint8>().value;
+            final charCode = (entryPtr + 4 + b).cast<Uint8>().value;
             if (charCode == 0) break;
             bytes.add(charCode);
           }
-          final fullPath = String.fromCharCodes(bytes);
-          return fullPath.split(Platform.pathSeparator).last;
+          final fullPath = utf8.decode(bytes, allowMalformed: true);
+          final exeName = fullPath.split(r'\').last;
+          if (exeName.isNotEmpty) return exeName;
         }
       }
 
@@ -560,8 +572,8 @@ class RtssService {
   }
 
   /// Bật hoặc tắt lớp phủ OSD trên màn hình game.
-  /// Bật EnableOSD (subsystem OSD). Đặt EnableStat = 0 để nhường toàn quyền
-  /// hiển thị cho chuỗi thông số tùy biến từ Shared Memory (tránh số FPS màu cam mặc định đè lên).
+  /// Bật EnableOSD (subsystem OSD), đặt EnableStat = 0 để nhường toàn quyền
+  /// hiển thị cho chuỗi thông số tùy biến từ Shared Memory (tránh số FPS mặc định của RTSS đè lên).
   bool setOsdEnabled(bool enabled) {
     final val = enabled ? 1 : 0;
     _setHookProfilePropertyDword('EnableOSD', val);
@@ -634,10 +646,16 @@ class RtssService {
     Pointer<Void> map = nullptr;
 
     try {
-      handle = _openFileMapping(_fileMapAllAccess, 0, namePtr);
+      handle = _openFileMapping(_fileMapReadWrite, 0, namePtr);
+      if (handle.address == 0) {
+        handle = _openFileMapping(_fileMapAllAccess, 0, namePtr);
+      }
       if (handle.address == 0) return false;
 
-      map = _mapViewOfFile(handle, _fileMapAllAccess, 0, 0, 0);
+      map = _mapViewOfFile(handle, _fileMapReadWrite, 0, 0, 0);
+      if (map.address == 0) {
+        map = _mapViewOfFile(handle, _fileMapAllAccess, 0, 0, 0);
+      }
       if (map.address == 0) return false;
 
       final data = map.cast<Uint8>();
@@ -653,8 +671,7 @@ class RtssService {
 
       int targetSlotIndex = -1;
 
-      // 1st pass: Tìm slot đã thuộc về _osdAppOwner
-      // Chú ý: Bắt đầu từ i = 1 để nhường slot 0 cho Primary OSD Clients (MSI Afterburner) theo chuẩn SDK
+      // 1st pass: Tìm slot đã thuộc về _osdAppOwner (ưu tiên các slot từ i = 1)
       for (int i = 1; i < osdArrSize; i++) {
         final entryOffset = osdArrOffset + (i * osdEntrySize);
         final entryPtr = data + entryOffset;
@@ -671,7 +688,7 @@ class RtssService {
         }
       }
 
-      // 2nd pass: Nếu chưa có slot, tìm slot trống đầu tiên từ i = 1
+      // 2nd pass: Nếu chưa có slot, tìm slot trống đầu tiên từ i = 1 (nhường slot 0 cho MSI Afterburner)
       if (targetSlotIndex == -1) {
         for (int i = 1; i < osdArrSize; i++) {
           final entryOffset = osdArrOffset + (i * osdEntrySize);
@@ -681,6 +698,26 @@ class RtssService {
           if (firstOwnerChar == 0) {
             targetSlotIndex = i;
             break;
+          }
+        }
+      }
+
+      // 3rd pass: Nếu các slot từ 1 trở đi đã kín, kiểm tra xem slot 0 có rỗng hoặc là _osdAppOwner không
+      if (targetSlotIndex == -1 && osdArrSize > 0) {
+        final entryOffset = osdArrOffset;
+        final entryPtr = data + entryOffset;
+        final firstOwnerChar = (entryPtr + 256).cast<Uint8>().value;
+        if (firstOwnerChar == 0) {
+          targetSlotIndex = 0;
+        } else {
+          final ownerBytes = <int>[];
+          for (int b = 0; b < 256; b++) {
+            final c = (entryPtr + 256 + b).cast<Uint8>().value;
+            if (c == 0) break;
+            ownerBytes.add(c);
+          }
+          if (utf8.decode(ownerBytes, allowMalformed: true) == _osdAppOwner) {
+            targetSlotIndex = 0;
           }
         }
       }
@@ -697,25 +734,28 @@ class RtssService {
       }
       (entryPtr + 256 + ownerEncoded.length.clamp(0, 255)).cast<Uint8>().value = 0;
 
-      // 2. Ghi chuỗi văn bản OSD vào CẢ HAI vùng nhớ:
+      // 2. Ghi chuỗi văn bản OSD theo chuẩn RTSS SDK:
       final textBytes = utf8.encode(text);
 
-      // 2a. Ghi vào szOSD cơ bản (offset 0, 256 byte) để tương thích 100% với các hook DirectX
-      const maxLenBasic = 255;
-      for (int i = 0; i < textBytes.length && i < maxLenBasic; i++) {
-        (entryPtr + i).cast<Uint8>().value = textBytes[i];
-      }
-      final endBasic = textBytes.length.clamp(0, maxLenBasic);
-      (entryPtr + endBasic).cast<Uint8>().value = 0;
-
-      // 2b. Nếu ver >= 0x00020007, ghi thêm vào szOSDEx (offset 512, 4096 byte)
       if (ver >= 0x00020007) {
+        // Với shared memory v2.7 trở lên: Sử dụng szOSDEx (offset 512, 4096 byte) hỗ trợ đầy đủ markup tag
         const maxLenEx = 4095;
         for (int i = 0; i < textBytes.length && i < maxLenEx; i++) {
           (entryPtr + 512 + i).cast<Uint8>().value = textBytes[i];
         }
         final endEx = textBytes.length.clamp(0, maxLenEx);
         (entryPtr + 512 + endEx).cast<Uint8>().value = 0;
+
+        // Xóa sạch szOSD cơ bản (offset 0) để RTSS chỉ đọc szOSDEx mở rộng
+        (entryPtr + 0).cast<Uint8>().value = 0;
+      } else {
+        // Phiên bản cũ hơn v2.7: Ghi vào szOSD cơ bản (offset 0, 256 byte)
+        const maxLenBasic = 255;
+        for (int i = 0; i < textBytes.length && i < maxLenBasic; i++) {
+          (entryPtr + i).cast<Uint8>().value = textBytes[i];
+        }
+        final endBasic = textBytes.length.clamp(0, maxLenBasic);
+        (entryPtr + endBasic).cast<Uint8>().value = 0;
       }
 
       // 3. Tăng trường dwOSDFrame (offset 32 trong RTSS_SHARED_MEMORY) để kích hoạt RTSS refresh ngay lập tức
@@ -742,10 +782,16 @@ class RtssService {
     Pointer<Void> map = nullptr;
 
     try {
-      handle = _openFileMapping(_fileMapAllAccess, 0, namePtr);
+      handle = _openFileMapping(_fileMapReadWrite, 0, namePtr);
+      if (handle.address == 0) {
+        handle = _openFileMapping(_fileMapAllAccess, 0, namePtr);
+      }
       if (handle.address == 0) return false;
 
-      map = _mapViewOfFile(handle, _fileMapAllAccess, 0, 0, 0);
+      map = _mapViewOfFile(handle, _fileMapReadWrite, 0, 0, 0);
+      if (map.address == 0) {
+        map = _mapViewOfFile(handle, _fileMapAllAccess, 0, 0, 0);
+      }
       if (map.address == 0) return false;
 
       final data = map.cast<Uint8>();
@@ -756,7 +802,7 @@ class RtssService {
       final osdArrOffset = data.cast<Uint32>()[6];
       final osdArrSize = data.cast<Uint32>()[7];
 
-      for (int i = 1; i < osdArrSize; i++) {
+      for (int i = 0; i < osdArrSize; i++) {
         final entryOffset = osdArrOffset + (i * osdEntrySize);
         final entryPtr = data + entryOffset;
 

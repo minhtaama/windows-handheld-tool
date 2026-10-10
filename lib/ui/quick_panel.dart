@@ -19,6 +19,7 @@ import '../services/system_optimizer.dart';
 import '../services/virtual_keyboard_service.dart';
 import '../services/autostart_service.dart';
 import '../services/dxgi_hook_service.dart';
+import '../services/native_window_service.dart';
 import '../services/overlay_controller.dart';
 import '../services/rtss_installer_service.dart';
 import '../services/system_telemetry_service.dart';
@@ -196,8 +197,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       _virtualKeyboardHotkey = '';
     }
 
-    _liveTdp = (_tdp * 0.85).round().clamp(_tdpCtrl.minVal, _tdp);
-    _liveFan = (_fan * 0.9).round().clamp(_fanCtrl.minVal, _fanCtrl.maxVal);
+    _liveTdp = _tdp;
+    _liveFan = _fan;
     _isRtssRunning = _rtssCtrl.isAvailable();
     if (RtssInstallerService.isInstalled() && !_isRtssRunning) {
       _startRtss();
@@ -218,24 +219,12 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         // Cập nhật công suất thực tế tức thời từ bảng cảm biến PM Table phần cứng (AMD SMU)
         final hwTdp = _tdpCtrl.getLiveTdp();
         if (hwTdp != null) {
-          _liveTdp = hwTdp.round().clamp(_tdpCtrl.minVal, _tdpCtrl.maxVal);
+          _liveTdp = hwTdp.round();
         } else {
-          // Fallback giả lập nếu chưa có cảm biến phần cứng
-          final tdpJitter = (DateTime.now().second % 3) - 1;
-          _liveTdp = (_tdp * 0.88 + tdpJitter).round().clamp(
-            _tdpCtrl.minVal,
-            _tdpCtrl.maxVal,
-          );
+          _liveTdp = _tdp;
         }
 
-        if (_fanAuto) {
-          _liveFan = (_liveTdp * 2.6).round().clamp(30, 95);
-        } else {
-          _liveFan = (_fan + (DateTime.now().second % 2)).clamp(
-            _fanCtrl.minVal,
-            _fanCtrl.maxVal,
-          );
-        }
+        _liveFan = _fan;
 
         _isRtssRunning = _rtssCtrl.isAvailable();
         if (_isRtssRunning) {
@@ -440,6 +429,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   void _onGamepadButton(GamepadButton button) {
     if (!mounted || !OverlayController.instance.isVisible) return;
+    NativeWindowService.reassertTopmost();
 
     switch (button) {
       case GamepadButton.lb:
@@ -1079,63 +1069,67 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // 1. Thanh Tab Bar nổi phía trên (Compact Mode với 4 Tab)
-        AppTabBar(
-          selectedIndex: _selectedTabIndex,
-          items: const [
-            AppTabItem(icon: Icons.home_rounded, label: 'Trang chủ'),
-            AppTabItem(icon: Icons.bolt_rounded, label: 'Hiệu năng'),
-            AppTabItem(icon: Icons.tune_rounded, label: 'Thiết bị'),
-            AppTabItem(icon: Icons.settings_rounded, label: 'Cài đặt'),
-          ],
-          onTabSelected: _switchTab,
-        ),
-        const SizedBox(height: 12),
+    return Listener(
+      onPointerDown: (_) => NativeWindowService.reassertTopmost(),
+      behavior: HitTestBehavior.translucent,
+      child: Column(
+        children: [
+          // 1. Thanh Tab Bar nổi phía trên (Compact Mode với 4 Tab)
+          AppTabBar(
+            selectedIndex: _selectedTabIndex,
+            items: const [
+              AppTabItem(icon: Icons.home_rounded, label: 'Trang chủ'),
+              AppTabItem(icon: Icons.bolt_rounded, label: 'Hiệu năng'),
+              AppTabItem(icon: Icons.tune_rounded, label: 'Thiết bị'),
+              AppTabItem(icon: Icons.settings_rounded, label: 'Cài đặt'),
+            ],
+            onTabSelected: _switchTab,
+          ),
+          const SizedBox(height: 12),
 
-        // 2. Khung nội dung chi tiết nổi bên dưới (Fixed bounds cho ListView)
-        Expanded(
-          child: Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: AppTheme.background,
-              borderRadius: BorderRadius.circular(AppTheme.panelRadius),
-              border: Border.all(color: AppTheme.cardBorder, width: 1.0),
-              boxShadow: [
-                BoxShadow(
-                  color: AppTheme.shadow.withValues(alpha: 0.65),
-                  blurRadius: 28,
-                  offset: const Offset(-4, 10),
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Column(
-              children: [
-                Expanded(
-                  child: MediaQuery(
-                    data: MediaQuery.of(context)
-                        .copyWith(textScaler: TextScaler.linear(_scale)),
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 180),
-                      layoutBuilder: (currentChild, previousChildren) {
-                        return Stack(
-                          fit: StackFit.expand,
-                          children: [...previousChildren, ?currentChild],
-                        );
-                      },
-                      child: _buildSelectedTabContent(),
+          // 2. Khung nội dung chi tiết nổi bên dưới (Fixed bounds cho ListView)
+          Expanded(
+            child: Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: AppTheme.background,
+                borderRadius: BorderRadius.circular(AppTheme.panelRadius),
+                border: Border.all(color: AppTheme.cardBorder, width: 1.0),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.shadow.withValues(alpha: 0.65),
+                    blurRadius: 28,
+                    offset: const Offset(-4, 10),
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                children: [
+                  Expanded(
+                    child: MediaQuery(
+                      data: MediaQuery.of(context)
+                          .copyWith(textScaler: TextScaler.linear(_scale)),
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        layoutBuilder: (currentChild, previousChildren) {
+                          return Stack(
+                            fit: StackFit.expand,
+                            children: [...previousChildren, ?currentChild],
+                          );
+                        },
+                        child: _buildSelectedTabContent(),
+                      ),
                     ),
                   ),
-                ),
-                _buildGamepadFooter(),
-              ],
+                  _buildGamepadFooter(),
+                ],
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

@@ -295,7 +295,15 @@ Win32Window::MessageHandler(HWND hwnd,
     }
 
     case WM_MOUSEACTIVATE:
+      SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
       return MA_NOACTIVATE;
+
+    case WM_POINTERDOWN:
+    case WM_LBUTTONDOWN:
+      SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+      break;
 
     case WM_ACTIVATE:
       return 0;

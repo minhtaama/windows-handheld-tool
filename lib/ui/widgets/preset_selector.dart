@@ -92,8 +92,6 @@ class PresetSelector<T> extends StatelessWidget {
       return button;
     }).toList();
 
-
-
     final rowContent = fillWidth
         ? Row(
             children: [
@@ -161,11 +159,6 @@ class PresetSelector<T> extends StatelessWidget {
                   ],
                 ),
               ),
-              if (currentValueText != null)
-                Text(
-                  currentValueText!,
-                  style: AppTheme.title.copyWith(fontWeight: FontWeight.w700),
-                ),
             ],
           ),
           const SizedBox(height: 16),

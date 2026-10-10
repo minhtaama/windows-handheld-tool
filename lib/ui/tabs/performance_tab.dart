@@ -318,7 +318,7 @@ class PerformanceTab extends StatelessWidget {
             const SizedBox(height: 8),
             PresetSelector<int>(
               key: getItemKey(6),
-              title: "Kích thước chữ OSD",
+              title: "Kích thước OSD",
               icon: Icons.format_size_rounded,
               currentValueText: "${osdZoom}x",
               presets: const [1, 2, 3, 4],
@@ -331,7 +331,7 @@ class PerformanceTab extends StatelessWidget {
             const SizedBox(height: 8),
             PresetSelector<RtssOsdPosition>(
               key: getItemKey(7),
-              title: "Vị trí góc hiển thị OSD",
+              title: "Vị trí hiển thị OSD",
               icon: Icons.fullscreen_rounded,
               currentValueText: osdPosition.label,
               presets: RtssOsdPosition.values,
@@ -344,8 +344,8 @@ class PerformanceTab extends StatelessWidget {
             const SizedBox(height: 8),
             PresetSelector<RtssOsdLayout>(
               key: getItemKey(8),
-              title: "Bố cục hiển thị OSD",
-              icon: Icons.view_agenda_rounded,
+              title: "Bố cục OSD",
+              icon: Icons.view_comfortable_rounded,
               currentValueText: osdMetrics.layout.label,
               presets: RtssOsdLayout.values,
               selectedValue: osdMetrics.layout,
@@ -358,7 +358,7 @@ class PerformanceTab extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(left: 4, bottom: 6),
               child: Text(
-                "THÔNG SỐ HIỂN THỊ TRÊN OSD",
+                "THÔNG SỐ OSD",
                 style: AppTheme.caption.copyWith(
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.8,
@@ -398,7 +398,7 @@ class PerformanceTab extends StatelessWidget {
                 Expanded(
                   child: _MetricToggleCard(
                     key: getItemKey(11),
-                    icon: Icons.device_thermostat_rounded,
+                    icon: Icons.local_fire_department_rounded,
                     title: "Nhiệt độ CPU",
                     value: osdMetrics.showCpuTemp,
                     onTap: onToggleMetricCpuTemp,
@@ -540,28 +540,14 @@ class _MetricToggleCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: value ? AppTheme.accent : AppTheme.transparent,
-                    border: Border.all(
-                      color: value
-                          ? AppTheme.accent
-                          : AppTheme.textSecondary.withValues(alpha: 0.5),
-                      width: 1.5,
-                    ),
-                  ),
-                  child: value
-                      ? Center(
-                          child: const Icon(
-                            Icons.check_rounded,
-                            size: 10,
-                            color: Colors.black,
-                          ),
-                        )
-                      : null,
+                Icon(
+                  value
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  size: 18,
+                  color: value
+                      ? AppTheme.accent
+                      : AppTheme.textSecondary.withValues(alpha: 0.4),
                 ),
               ],
             ),

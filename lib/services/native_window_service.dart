@@ -267,4 +267,22 @@ class NativeWindowService {
     if (hwnd == 0) return false;
     return (_isWindowVisible?.call(hwnd) ?? 0) != 0;
   }
+
+  /// Tái khẳng định vị thế Topmost của cửa sổ Overlay (chống bị Tablet Taskbar đè lên).
+  /// Hàm cực nhẹ, chỉ cập nhật con trỏ danh sách liên kết DWM mà không thay đổi kích thước hay vẽ lại.
+  static bool reassertTopmost() {
+    _ensureInitialized();
+    final hwnd = getWindowHandle();
+    if (hwnd == 0) return false;
+    final res = _setWindowPos?.call(
+      hwnd,
+      hwndTopMost,
+      0,
+      0,
+      0,
+      0,
+      swpNoActivate | swpNoMove | swpNoSize,
+    );
+    return res != 0;
+  }
 }

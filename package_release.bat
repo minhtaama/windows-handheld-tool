@@ -30,8 +30,8 @@ if exist "build_dxgi_hook.bat" (
 echo.
 
 :: 3. Compile Flutter Windows Release
-echo [*] Step 2/4: Compile Flutter Windows Release...
-call flutter build windows --release
+echo [*] Step 2/4: Compile Flutter Windows Release (preserving all Material Icons)...
+call flutter build windows --release --no-tree-shake-icons
 if !ERRORLEVEL! NEQ 0 (
     echo [ERROR] Flutter build release failed!
     pause
@@ -43,11 +43,10 @@ echo.
 echo [*] Step 3/4: Copy clean binary drivers (bin\) and config.json...
 set "RELEASE_DIR=%~dp0build\windows\x64\runner\Release"
 
+:: Clean legacy Release\bin folder if exists to avoid duplicated files
 if exist "%RELEASE_DIR%\bin" rmdir /S /Q "%RELEASE_DIR%\bin"
-mkdir "%RELEASE_DIR%\bin"
 
-:: Only copy essential runtime binaries to BOTH Release\bin\ and Release\ root
-:: WinRing0 requires WinRing0x64.sys in the same folder as the caller process (GetModuleFileName)
+:: Copy essential runtime binaries directly to Release root (WinRing0 requires WinRing0x64.sys alongside caller process)
 for %%F in (
     "ryzenadj.dll"
     "libryzenadj.dll"
@@ -57,13 +56,13 @@ for %%F in (
     "dxgi_hook.dll"
 ) do (
     if exist "bin\%%~F" (
-        copy /Y "bin\%%~F" "%RELEASE_DIR%\bin\" >nul
         copy /Y "bin\%%~F" "%RELEASE_DIR%\" >nul
     )
 )
 copy /Y "config.json" "%RELEASE_DIR%\config.json" >nul
+if exist "uninstall.bat" copy /Y "uninstall.bat" "%RELEASE_DIR%\uninstall.bat" >nul
 
-echo [OK] Copied clean runtime binaries to bin\ and root, config.json to Release.
+echo [OK] Copied clean runtime binaries, config.json, uninstall.bat to Release root.
 echo.
 
 :: 5. Package Portable ZIP to dist\portable\

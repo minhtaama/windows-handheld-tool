@@ -214,6 +214,7 @@ class HotkeyService {
           if (_overlayBinding.matches(isCtrl, isWin, isShift, isAlt, _isKeyDown)) {
             if (_overlayCombo.update(true)) {
               _logger.info('Hardware hotkey triggered: ${_overlayBinding.label} (GetAsyncKeyState)');
+              _cooldownUntil = DateTime.now().add(const Duration(milliseconds: 700));
               _onToggleOverlay?.call();
             }
           } else {
@@ -223,6 +224,7 @@ class HotkeyService {
           if (_keyboardBinding.matches(isCtrl, isWin, isShift, isAlt, _isKeyDown)) {
             if (_keyboardCombo.update(true)) {
               _logger.info('Hardware hotkey triggered: ${_keyboardBinding.label} (GetAsyncKeyState)');
+              _cooldownUntil = DateTime.now().add(const Duration(milliseconds: 700));
               _onToggleKeyboard?.call();
             }
           } else {

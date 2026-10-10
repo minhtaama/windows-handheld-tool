@@ -81,6 +81,47 @@ flowchart TD
 
 ---
 
+### Hiện Tượng Cạnh Tranh Thứ Tự Trục Z Với Thanh Tác Vụ Chế Độ Máy Tính Bảng (Tablet-Optimized Taskbar Z-Order Race Condition)
+
+#### 1. Hiện tượng thực tế và bế tắc kỹ thuật
+Khi người dùng kích hoạt tính năng "Tối ưu hóa thanh tác vụ cho tương tác chạm khi thiết bị được dùng như máy tính bảng" (Optimize taskbar for touch interactions when this device is used as a tablet) trên Windows 11, thanh tác vụ (Taskbar) đôi khi đè lên bảng điều khiển Quick Settings Panel, nhưng đôi khi lại bị bảng điều khiển đè lên (hiện tượng lúc đè, lúc không).
+
+#### 2. Bóc trần bản chất vật lý dưới tầng nhân Windows (First Principles)
+Trong cấu trúc dữ liệu của Trình quản lý Hợp thành Cửa sổ (Desktop Window Manager - DWM), thứ tự hiển thị từ trước ra sau (trục Z) của các cửa sổ được tổ chức dưới dạng **Danh sách liên kết đôi (Doubly-linked List)**:
+
+```mermaid
+flowchart TD
+    subgraph DWM_ZOrder["Danh Sách Liên Kết Thứ Tự Trục Z (Topmost Sub-list)"]
+        TopNode["Đỉnh danh sách (Frontmost Node: Hiển thị đè lên tất cả)"]
+        MiddleNode["Nút trung gian (Topmost Window)"]
+        BottomNode["Đáy danh sách Topmost"]
+        TopNode --> MiddleNode --> BottomNode
+    end
+
+    subgraph RaceEvents["Cuộc Đua Thứ Tự Sự Kiện (Race Condition)"]
+        EventPanel["Mở Panel: Win32Window::Show gọi SetWindowPos(HWND_TOPMOST)"] -->|Đưa Panel lên đỉnh| TopNode
+        EventTaskbar["Chạm màn hình: Taskbar chuyển Collapsed sang Expanded, gọi SetWindowPos(HWND_TOPMOST)"] -->|Cướp đỉnh danh sách| TopNode
+    end
+```
+
+1. **Cơ chế hoạt động của Thanh tác vụ Máy tính bảng (Tablet-Optimized Taskbar)**:
+   - Thanh Taskbar Windows 11 (`Shell_TrayWnd`) tích hợp giao diện XAML Islands có hai trạng thái vật lý:
+     * **Trạng thái Thu gọn (Collapsed State)**: Chiều cao co lại chỉ còn 12-16px, ẩn hầu hết biểu tượng để nhường diện tích cho màn hình cảm ứng.
+     * **Trạng thái Mở rộng (Expanded State)**: Khi người dùng chạm ngón tay vào màn hình hoặc vuốt từ cạnh đáy lên, tiến trình `explorer.exe` kích hoạt hoạt họa trồi lên với chiều cao 48-52px.
+   - **Hành vi cạnh tranh**: Để đảm bảo thanh mở rộng không bị các ứng dụng khác che khuất các nút bấm cảm ứng, tiến trình `explorer.exe` lập tức phát đi lời gọi hàm Win32: `SetWindowPos(hTaskbar, HWND_TOPMOST, ..., SWP_SHOWWINDOW)`.
+2. **Quy tắc giải quyết xung đột của Windows DWM (The "Last-Caller Wins" Rule)**:
+   - Khi hai hay nhiều cửa sổ cùng mang thuộc tính nổi trên cùng (`WS_EX_TOPMOST` hoặc cờ `HWND_TOPMOST`): **Cửa sổ nào gọi hàm `SetWindowPos(HWND_TOPMOST)` sau cùng nhất theo mốc thời gian CPU sẽ được nhân hệ thống đưa lên đầu danh sách liên kết (Head of the TOPMOST list)**.
+   - Khi ứng dụng không có chứng chỉ số và thiếu thuộc tính `uiAccess="true"`, lời gọi `CreateWindowInBand(..., ZBID_SYSTEM_TOOLS)` bị nhân hệ điều hành từ chối và hạ cấp về lớp Desktop mặc định (`ZBID_DEFAULT`). Lúc này, Panel và Taskbar cùng chia sẻ chung một phân lớp `HWND_TOPMOST`:
+     * **Kịch bản Panel đè lên Taskbar (Không bị đè)**: Người dùng nhấn tổ hợp phím mở Panel **sau khi** thanh Taskbar đã mở rộng từ trước. Lời gọi `Win32Window::Show()` của Panel thực thi sau $\rightarrow$ Panel chiếm đỉnh danh sách liên kết $\rightarrow$ Panel đè lên Taskbar.
+     * **Kịch bản Taskbar đè lên Panel (Bị đè)**: Panel đang mở sẵn trên màn hình. Người dùng chạm ngón tay vào khu vực đáy màn hình làm thanh Taskbar thức giấc và chuyển từ Thu gọn sang Mở rộng. Lời gọi `SetWindowPos` của `explorer.exe` thực thi sau lời gọi của Panel $\rightarrow$ Taskbar cướp lấy đỉnh danh sách liên kết $\rightarrow$ Taskbar đè lên đáy của Panel.
+
+#### 3. Các phương án giải quyết triệt để
+- **Phương án 1: Tái khẳng định đỉnh liên kết (Re-asserting Topmost / Watchdog Tick)**: Khi Panel đang ở trạng thái mở, phát lời gọi `SetWindowPos(window_handle_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)` mỗi khi nhận sự kiện chạm hoặc theo chu kỳ ngắt để giành lại vị trí đỉnh bảng.
+- **Phương án 2: Tự động thu gọn thanh tác vụ qua Shell API (`SHAppBarMessage`)**: Gửi thông điệp hệ thống `ABM_SETSTATE` với cờ `ABS_AUTOHIDE` để yêu cầu Windows tự động thu gọn thanh tác vụ khi Panel kích hoạt, và khôi phục trạng thái ban đầu khi Panel đóng lại.
+- **Phương án 3: Chừa khoảng trống đệm an toàn (Bottom Safe Area Inset)**: Đo lường kích thước thực tế của `Shell_TrayWnd` bằng `GetWindowRect` và tự động co lề dưới của giao diện Flutter lên trên chiều cao của Taskbar, triệt tiêu hoàn toàn sự giao thoa diện tích cảm ứng.
+
+---
+
 ## Phương Án 2: Móc Hàm Khởi Tạo Chuỗi Khung Hình Cưỡng Bức Không Viền (DXGI `CreateSwapChain` Hooking)
 
 ### 1. Cơ chế kỹ thuật (Kiến trúc AYASpace / Handheld Companion)
@@ -868,11 +909,166 @@ Khi kích hoạt hiển thị lớp phủ, người chơi chỉ nhìn thấy duy
 - **Nguyên nhân 3: Ký tự ngoài bảng mã ASCII phần cứng (`Glyph Missing & Unicode Truncation`)**:
   - Bộ tạo font Direct3D của RTSS (Unispace bitmap texture font) chỉ lưu trữ ma trận điểm ảnh cho 128 ký tự ASCII chuẩn.
   - Ký tự độ C (`°C`, Unicode `\u00B0` có mã byte `0xC2 0xB0`) không tồn tại trong texture glyph, khiến con trỏ vẽ ký tự bị ngắt quãng hoặc chuỗi byte bị cắt ngắn trước khi kịp hiển thị các chữ số tiếp theo.
-- **Nguyên nhân 4: Bỏ trống vùng đệm tương thích `szOSD`**:
-  - Trong cấu trúc `RTSS_SHARED_MEMORY_OSD_ENTRY`, trường `szOSD` (256 byte) nằm ở offset 0, còn `szOSDEx` (4096 byte) nằm ở offset 512.
-  - Khi chỉ ghi vào `szOSDEx` mà để byte đầu tiên `szOSD[0] == 0`, một số Direct3D Hook của RTSS sẽ nhận diện ô nhớ là rỗng và bỏ qua việc dựng hình mở rộng. Việc ghi đồng thời vào cả hai trường đảm bảo tương thích 100%.
-- **Nguyên nhân 5: Vòng đời luồng gửi dữ liệu bị cô lập trong giao diện (`UI-Coupled Telemetry Starvation`)**:
-  - Hàm cập nhật chuỗi OSD ban đầu chỉ nằm trong bộ đếm của widget giao diện [[QuickPanel]]. Khi người chơi đóng bảng điều khiển để quay lại không gian trò chơi, widget bị ẩn, và nếu không có một vòng lặp nền độc lập (`Background Loop`), dữ liệu OSD sẽ ngừng được đẩy vào bộ nhớ chia sẻ theo chu kỳ thời gian thực.
+- **Nguyên nhân 4: Lệch Offset Bộ Đệm Ứng Dụng Trong Nhân Chia Sẻ (`RTSS_SHARED_MEMORY_APP_ENTRY Offset Misalignment`)**:
+  - Cấu trúc bộ nhớ C++ chuẩn của RTSS SDK quy định rõ thứ tự các trường nhị phân trong mỗi phần tử ứng dụng:
+    * Byte 0 đến 3 (Offset 0): Số định danh tiến trình `DWORD dwProcessID`.
+    * Byte 4 đến 263 (Offset 4): Chuỗi tên đường dẫn tệp thực thi `char szName[260]` (MAX_PATH ANSI string).
+    * Byte 268 đến 279: Các mốc thời gian khung hình `dwTime0`, `dwTime1`, `dwFrames`.
+    * Byte 280 đến 283 (Offset 280): Thời gian dựng một khung hình tức thời `DWORD dwFrameTime` (tính bằng micro giây - $\mu s$).
+  - Khi mã nguồn tầng ứng dụng trỏ nhầm `dwProcessID` sang Offset 260 và trỏ tên tệp sang Offset 0: 4 byte đầu tiên chứa mã PID nhị phân bị ép kiểu thành chuỗi ký tự (chứa byte 0 ngắt chuỗi), khiến tên tệp game luôn rỗng và trường PID luôn bằng 0. Hệ quả là hàm đọc FPS tức thời (`getLiveFps`) và hàm phát hiện game (`getActiveGameName`) luôn trả về giá trị null, cắt đứt hoàn toàn chỉ số FPS trên lớp phủ.
+  - Công thức vật lý quy đổi chính xác tốc độ khung hình từ thời gian dựng: $\text{FPS} = \frac{1\,000\,000}{\text{dwFrameTime}}$ (hoặc từ số khung chia khoảng thời gian: $\frac{\text{dwFrames} \times 1000}{\text{dwTime1} - \text{dwTime0}}$).
 
+- **Nguyên nhân 5: Rào Cản Quyền Truy Cập Bộ Nhớ Chia Sẻ UAC (`DACL Access Token Rejection`)**:
+  - Khi RTSS khởi chạy với tư cách dịch vụ hệ thống hoặc tiến trình có đặc quyền quản trị viên (Elevated Administrator Process), đối tượng ánh xạ tệp nhân Windows `RTSSSharedMemoryV2` được bảo vệ bởi danh sách kiểm soát truy cập (Discretionary Access Control List - DACL).
+  - Lời gọi mở vùng nhớ `OpenFileMapping` với cờ toàn quyền `FILE_MAP_ALL_ACCESS (0x001F)` từ tiến trình người dùng thông thường sẽ bị Windows Kernel từ chối thẳng thừng với mã lỗi `ERROR_ACCESS_DENIED (5)`.
+  - Giải pháp bắt buộc là yêu cầu mức quyền tối giản vừa đủ: `FILE_MAP_READ | FILE_MAP_WRITE = 0x0006`, cho phép ghi nhận chuỗi định dạng OSD an toàn qua mọi mức đặc quyền UAC.
 
+---
 
+### Bản Chất Vật Lý Của Đo Đạc Công Suất APU AMD Zen Cầm Tay (Package Socket Power vs STAPM)
+
+#### 1. Hiện trạng đo đạc và bế tắc kỹ thuật
+Trên các thiết bị chơi game cầm tay sử dụng chip AMD Zen 3+ (Rembrandt 6800U) và Zen 4 (Phoenix 7840U / Hawk Point 8840U) như GPD Win 4, việc hiển thị công suất TDP bằng hàm `get_stapm_value` dẫn tới hiện tượng số đo bị kẹt cứng (ví dụ cố định ở 5W hoặc 8W) hoặc phản ứng chậm trễ hàng chục giây so với cảnh game đang chạy.
+
+#### 2. Phân tích First Principles mạch đo năng lượng AMD SMU
+Bên trong bộ vi xử lý APU, Vi điều khiển Quản lý Hệ thống (System Management Unit - SMU) liên tục đo đạc dòng điện và điện áp trên các đường ray nguồn thông qua các điện trở cảm biến (Shunt Resistor) và bộ chuyển đổi ADC phần cứng:
+
+```mermaid
+flowchart LR
+    subgraph APU_Hardware["Phần Cứng AMD APU (Silicon SMU)"]
+        Sensors["Điện trở Shunt & ADC Nguồn"] --> SMU["Vi điều khiển SMU"]
+        SMU --> SocketTelemetry["get_socket_power: Công Suất Tức Thời Toàn Gói (Package Power W)"]
+        SMU --> FastPPT["get_fast_value: Giới Hạn & Công Suất Xung Nhịp Ngắn (Fast PPT)"]
+        SMU --> STAPM_Filter["get_stapm_value: Bộ Lọc Nhiệt Vỏ Máy (STAPM Algorithm)"]
+    end
+
+    subgraph TelemetryPipeline["Đường Ống Dữ Liệu Ứng Dụng (Handheld Tool)"]
+        SocketTelemetry -->|Ưu tiên 1| Selector{"Bộ Chọn Dữ Liệu Tức Thời"}
+        FastPPT -->|Ưu tiên 2| Selector
+        STAPM_Filter -->|Dự phòng cuối| Selector
+        Selector --> LiveTdp["Chỉ Số Công Suất TDP Hiển Thị Trên OSD & Quick Panel"]
+    end
+```
+
+1. **Package Socket Power (`get_socket_power`)**:
+   - Đại diện cho tổng năng lượng tiêu thụ thực tế tức thời của toàn bộ phiến chip APU (bao gồm các nhân CPU x86, nhân đồ họa tích hợp RDNA iGPU, bộ điều khiển bộ nhớ SoC và bus Infinity Fabric).
+   - Tần số đáp ứng tính bằng mili giây, phản ánh lập tức biến động công suất khi game tải cảnh nặng hoặc nhẹ.
+2. **Fast Package Power Tracking (`get_fast_value`)**:
+   - Mức công suất trung bình trượt ngắn (Fast PPT) được chip duy trì trong vài mili giây trước khi hạ xung, phản ánh sát với tải điện tức thời.
+3. **Skin Temperature Aware Power Management (`get_stapm_value`)**:
+   - Đây không phải là công suất đo trực tiếp, mà là một **giá trị tính toán theo mô hình nhiệt vỏ máy**. Thuật toán STAPM tích phân công suất theo thời gian dựa trên hằng số tản nhiệt vỏ ngoài của thiết bị (Thermal Time Constant kéo dài từ 3 đến 5 phút) để tránh làm bỏng tay người dùng.
+   - Do thời gian làm mịn quá dài, khi máy nhảy từ trạng thái nghỉ (Idle) vào game nặng, STAPM vẫn báo số điện rất thấp, tạo cảm giác công suất đo được bị "sai lệch hoàn toàn".
+4. **Giải pháp triệt để**:
+   - Tích hợp trực tiếp hàm FFI `get_socket_power` xuất từ `ryzenadj.dll` và thiết lập thứ tự ưu tiên trích xuất: $\text{Socket Power} \rightarrow \text{Fast PPT} \rightarrow \text{Slow PPT} \rightarrow \text{STAPM}$. Cơ chế này đảm bảo GPD Win 4 và các thiết bị Handheld AMD hiển thị chính xác 100% công suất tải điện thực tế theo thời gian thực.
+
+---
+
+### Tính Toàn Vẹn Của Dữ Liệu Đo Đạc Cảm Biến (Telemetry Data Integrity vs Mock Artifacts)
+
+#### 1. Hiện trạng và thảm họa che giấu lỗi kỹ thuật
+Trong giai đoạn đầu phát triển giao diện (Mock UI Prototype) khi chưa có kết nối trình điều khiển phần cứng tầng thấp (Ring 0 / FFI Driver), mã nguồn giao diện thường cài cắm các công thức toán học giả lập:
+- Nhân hệ số ngẫu hứng (`_tdp * 0.85` hoặc `_liveTdp * 2.6`).
+- Lấy số giây đồng hồ hệ thống (`DateTime.now().second % 2`) cộng dồn vào giá trị quạt/TDP để tạo dao động giả (Artificial Jitter), đánh lừa thị giác người xem bản thử nghiệm.
+- Cưỡng bức ép dải giá trị (`.clamp(minVal, maxVal)`) trên chính dữ liệu cảm biến đọc về.
+
+#### 2. Bóc trần bản chất vật lý (The "Why")
+- **Chiều ghi (Write Path / Control Plane)**: Người dùng điều chỉnh thanh trượt để đặt giới hạn công suất mong muốn (Target Limit). Tại đây, bắt buộc dùng `.clamp(min, max)` để bảo vệ phần cứng (chống quá dòng hoặc sập nguồn do điện áp quá thấp).
+- **Chiều đọc (Read Path / Telemetry Plane)**: Hệ thống đọc ngược tín hiệu điện áp/dòng điện từ cảm biến Shunt ADC của chip. Tại đây, **dữ liệu phải được bảo toàn nguyên vẹn 100%**:
+  * Nếu chip đang chạy không tải (Idle) ở 3W, phải hiển thị đúng 3W (dù thanh trượt min là 5W).
+  * Nếu chip đang ép xung (Turbo Boost) vượt ngưỡng lên 42W, phải hiển thị đúng 42W để người dùng biết máy đang tiêu thụ quá nhiệt. Việc cưỡng bức `.clamp(5, 35)` sẽ biến số 42W thành 35W, che giấu hoàn toàn hiện tượng quá nhiệt nguy hiểm và che giấu cả các lỗi đọc cảm biến (Sensor Reading Error).
+- **Tính độc lập của hệ thống quạt tản nhiệt**:
+  * Quạt tản nhiệt được vi điều khiển nhúng bo mạch (Embedded Controller - EC) điều tốc độc lập dựa trên đường cong nhiệt độ (Thermal Fan Curve) hoặc trạng thái BIOS. Việc lấy công suất TDP nhân hệ số cố định (`liveTdp * 2.6`) là phi vật lý và hoàn toàn sai lệch thực tế. Nếu phần cứng chưa cung cấp kênh đọc tốc độ quạt (EC RPM/PWM), hệ thống phải giữ nguyên giá trị thiết lập hoặc hiển thị trạng thái `Auto` thay vì tính toán giả mạo.
+
+---
+
+## Cơ Chế Điều Khiển Bàn Phím Ảo Hệ Thống (ITipInvocation COM Interface) & Triệt Tiêu Xung Đột Kích Hoạt Kép (Double-Trigger Mitigation)
+
+### 1. Hiện trạng xử lý cũ và bế tắc kỹ thuật
+- **Cách thức cũ**: Khởi chạy một tiến trình PowerShell (`Process.run('powershell', ...)`) từ mã nguồn để nạp mã nguồn C# nội tuyến và gọi giao diện đối tượng thành phần (Component Object Model - COM) `ITipInvocation::Toggle()`.
+- **Thảm họa kỹ thuật**:
+  * **Nghẽn độ trễ nạp tiến trình (Process Overhead Latency)**: Hệ điều hành Windows phải cấp phát không gian bộ nhớ mới, nạp toàn bộ máy ảo và thư viện liên kết của PowerShell từ ổ đĩa cứng vào bộ nhớ RAM. Quá trình này tiêu tốn từ 1.200ms đến 1.800ms. Độ trễ hơn 1 giây khiến người dùng tưởng nhầm phím chưa ăn nên vô thức nhấn giữ hoặc ấn nhấp thêm một lần nữa.
+  * **Rung chấn tiếp điểm nút bấm cơ học (Switch Bounce & Asynchronous Release)**: Tổ hợp phím gồm nhiều nút (`BACK + LB` trên Gamepad hoặc `Ctrl + Shift + K` trên bàn phím). Khi ngón tay người dùng nhả phím, hai nút tiếp xúc vật lý không bao giờ rời nhau ở cùng một phần triệu giây. Việc ngắt quãng tiếp điểm trong một chu kỳ quét (Tick 20ms - 50ms) làm cờ trạng thái phím bị reset về `false`, rồi lập tức nhận lại tín hiệu `true` ngay sau đó $\rightarrow$ Kích hoạt hai tiến trình PowerShell chạy song song.
+  * **Xung đột trạng thái giao diện**: Tiến trình thứ nhất hoàn thành lệnh đóng bàn phím ảo sau 1.400ms. Tiến trình thứ hai về đích ngay sau đó (1.500ms) gửi tiếp tín hiệu đảo trạng thái $\rightarrow$ Bàn phím ảo vừa biến mất lập tức bị mở bung ngược trở lại.
+  * **Nhánh dự phòng ép mở (Aggressive Launch Fallback)**: Việc chạy trực tiếp tệp `TabTip.exe` khi PowerShell trả về mã lỗi là một sai lầm kiến trúc, vì `TabTip.exe` chỉ có chiều mở mà không có chiều đảo trạng thái (Toggle).
+
+```mermaid
+flowchart TD
+    subgraph Legacy_Approach["Cơ chế cũ (Nghẽn tiến trình & Kích hoạt kép)"]
+        ComboPress1["Nhấn tổ hợp phím (Tick 0ms)"] --> SpawnPS1["Khởi tạo powershell.exe #1"]
+        ComboRelease["Nhả phím lệch pha (Tick 40ms)"] --> SpawnPS2["Khởi tạo powershell.exe #2"]
+        SpawnPS1 -->|1400ms| CloseKB["ITipInvocation.Toggle: Đóng bàn phím"]
+        SpawnPS2 -->|1500ms| ReopenKB["ITipInvocation.Toggle: Mở lại bàn phím (Lỗi bung ngược)"]
+    end
+
+    subgraph Direct_COM["Cơ chế mới (Win32 OLE FFI & Mutex Debounce)"]
+        ComboPress2["Nhấn tổ hợp phím"] --> CheckDebounce{"Kiểm tra Mutex & Cooldown"}
+        CheckDebounce -->|Hợp lệ| DirectCall["Gọi trực tiếp VTable ITipInvocation qua FFI (<1ms)"]
+        CheckDebounce -->|Kích hoạt kép| DropEvent["Bỏ qua lệnh thừa trong 700ms"]
+        DirectCall --> InstantToggle["Đảo trạng thái bàn phím ảo tức thì"]
+    end
+```
+
+### 2. Bản chất kỹ thuật dưới tầng nhân hệ thống (First Principles)
+- **Giao diện COM không công khai (Undocumented Shell COM Interface)**:
+  * Windows cung cấp một đối tượng COM trong dịch vụ nhập liệu cảm ứng (`TabletInputService`) với mã định danh lớp CLSID `4ce576fa-83dc-4f88-951c-9d0782b4e376` (`UIHostNoLaunch`) và mã định danh giao diện IID `37c994e7-432b-4834-a2f7-dce1f13b834b` (`ITipInvocation`).
+  * Bảng con trỏ hàm ảo (Virtual Method Table - VTable) của `ITipInvocation` kế thừa trực tiếp từ `IUnknown`:
+    - Slot 0: `QueryInterface`
+    - Slot 1: `AddRef`
+    - Slot 2: `Release`
+    - Slot 3: `Toggle(HWND hwndDesktop)`
+- **Giải pháp triệt để**:
+  1. **Nạp động thư viện OLE (`ole32.dll` & `user32.dll`) qua Dart FFI**: Khởi tạo môi trường đơn luồng (`CoInitializeEx(COINIT_APARTMENTTHREADED)`), khởi tạo thể hiện đối tượng bằng `CoCreateInstance` và truy xuất trực tiếp con trỏ hàm tại `VTable + 3`. Toàn bộ thao tác thực thi chỉ mất **0.5ms đến 1.0ms** (nhanh gấp gần 2.000 lần so với PowerShell).
+  2. **Cờ khóa loại trừ tương hỗ (Mutex Guard)**: Sử dụng cờ tĩnh `bool _isToggling` trong [virtual_keyboard_service.dart](file:///d:/dev-projects/windows-handheld-tool/lib/services/virtual_keyboard_service.dart) để ngăn chặn hoàn toàn việc thực thi lặp (Re-entrancy).
+  3. **Khóa chống dội phím phần cứng (Post-trigger Hardware Cooldown)**: Thiết lập cửa sổ thời gian khóa 700ms (`_cooldownUntil`) ngay sau khi phát hiện sự kiện kích hoạt trên cả tầng tay cầm [gamepad_service.dart](file:///d:/dev-projects/windows-handheld-tool/lib/input/gamepad_service.dart) và tầng bàn phím [hotkey_service.dart](file:///d:/dev-projects/windows-handheld-tool/lib/input/hotkey_service.dart), triệt tiêu hoàn toàn các rung chấn cơ học khi người dùng nhấc ngón tay ra khỏi phím.
+  4. **Độ trễ giải phóng phím vật lý (Hardware Key Release Delay Window)**: Do lệnh FFI thực thi tức thời (0.5ms), bàn phím ảo xuất hiện ngay khi ngón tay người dùng vẫn đang tì vào phím phần cứng. Quy tắc của Windows Touch Keyboard là tự động dập tắt (Auto-dismiss) ngay khi nhận tín hiệu từ bàn phím vật lý (`KEY_UP` / `KEY_DOWN`). Bổ sung khoảng đệm 250ms trước khi gọi `Toggle()` đảm bảo bàn phím vật lý đã hoàn toàn im lặng, triệt tiêu hiện tượng vừa trồi lên bị dập tắt ngay.
+
+---
+
+## Hiện Tượng Biến Mất Biểu Tượng Giao Diện Trong Bản Phát Hành (Material Icons Font Tree-Shaking)
+
+### 1. Hiện trạng và thảm họa mất hiển thị
+Trong chế độ Debug/Dev (`flutter run`), toàn bộ các biểu tượng Material Icons hiển thị đầy đủ và sắc nét. Tuy nhiên, khi biên dịch bản phát hành độc lập (`flutter build windows --release`), một số biểu tượng như Nhiệt độ CPU (`Icons.local_fire_department_rounded`) và dấu chọn OSD (`Icons.check_circle_rounded`) bị biến mất hoàn toàn hoặc hiển thị thành khoảng trắng.
+
+### 2. Bóc trần bản chất vật lý (The "Why")
+- **Thuật toán cắt tỉa font (Font Tree-Shaking)**: Trình biên dịch AOT của Flutter mặc định quét cây cú pháp trừu tượng (AST) để tìm các hằng số Icon compile-time nhằm trích xuất chỉ những ký tự glyph được dùng vào tệp `MaterialIcons-Regular.otf` rút gọn (từ 1.6MB xuống còn ~8KB).
+- **Điểm mù của trình phân tích tĩnh**: Khi các biểu tượng được truyền qua tham số widget động (`icon: icon` trong `_MetricToggleCard`) hoặc nằm trong các biểu thức điều kiện toán tử 3 ngôi runtime, trình phân tích tĩnh nhận định nhầm là các icon này không bao giờ được dùng tới. Toàn bộ hình vẽ vector của các ký tự glyph đó bị xóa sổ khỏi tệp font trong thư mục `Release\data\flutter_assets\fonts\`.
+---
+
+## Cơ Chế Giải Phóng Trình Điều Khiển Nhân (Kernel Driver Unload) & Móc Chặn Toàn Cục (Global Hook Release) Khi Gỡ Bỏ Ứng Dụng (Portable Uninstaller Pipeline)
+
+### 1. Hiện trạng và thảm họa khóa tệp khi gỡ bỏ ứng dụng Portable
+Khi người dùng chạy kịch bản gỡ bỏ ứng dụng (`uninstall.bat`), hầu hết các tệp trong thư mục đều bị xóa sạch (`windows_handheld_tool.exe`, `flutter_windows.dll`, các tệp dữ liệu...), nhưng hai tệp **`WinRing0x64.sys`** và **`dxgi_hook.dll`** luôn bị kẹt lại trên ổ cứng với lỗi từ chối truy cập (`Access Denied` / `Sharing Violation`).
+
+### 2. Bóc trần bản chất vật lý (The "Why")
+- **Khóa Trình điều khiển Nhân tầng Ring 0 (`WinRing0x64.sys`)**:
+  * `WinRing0.dll` đăng ký một dịch vụ nhân (`Kernel Driver Service`) có tên `WinRing0_1_2_0` trong Trình quản lý điều khiển dịch vụ của Windows (Service Control Manager - SCM) để nạp driver vào không gian địa chỉ Ring 0.
+  * Khi tiến trình ứng dụng ở tầng người dùng (Ring 3) bị tắt (`taskkill`), nhân Windows NT Kernel vẫn duy trì trạng thái hoạt động (`STATE: RUNNING`) của dịch vụ driver này và tiếp tục giữ File Handle độc quyền đối với tệp `.sys`.
+- **Khóa Thư viện Móc chặn Đồ họa Toàn cục (`dxgi_hook.dll`)**:
+  * Khi kích hoạt chế độ chặn DXGI, thư viện gọi hàm `SetWindowsHookExW(WH_CBT, ..., 0)` với Thread ID = 0.
+  * Nhân Windows tự động tiêm (inject) `dxgi_hook.dll` vào toàn bộ các tiến trình có giao diện người dùng (bao gồm tiến trình quản lý vỏ `explorer.exe`). Khi ứng dụng chính bị buộc tắt đột ngột, hàm `UnhookWindowsHookEx` chưa kịp thực thi $\rightarrow$ các tiến trình đồ họa khác vẫn nạp và giữ Handle mở tới tệp DLL này trong bộ nhớ RAM.
+
+```mermaid
+flowchart TD
+    subgraph SCM_Cleanup["Giải phóng Trình điều khiển Ring 0"]
+        StopCmd["sc.exe stop WinRing0_1_2_0"] --> DelCmd["sc.exe delete WinRing0_1_2_0"]
+        DelCmd --> UnloadSys["Kernel giải phóng Handle WinRing0x64.sys"]
+    end
+
+    subgraph Hook_Cleanup["Giải phóng Móc chặn Toàn cục"]
+        UnhookCmd["rundll32.exe dxgi_hook.dll,UninstallGlobalDxgiHook"] --> RestartShell["Khởi động lại explorer.exe (nhả DLL khỏi RAM)"]
+        RestartShell --> UnloadDll["Hệ điều hành giải phóng Handle dxgi_hook.dll"]
+    end
+
+    subgraph Fallback_Reboot["Cơ chế dự phòng NT Kernel"]
+        LockedCheck{"Tệp vẫn bị khóa?"} -->|Có| MoveFileAPI["MoveFileEx(MOVEFILE_DELAY_UNTIL_REBOOT = 0x4)"]
+        MoveFileAPI --> KernelBootDelete["NT Kernel tự động xóa khi khởi động lại máy"]
+    end
+
+    UnloadSys --> LockedCheck
+    UnloadDll --> LockedCheck
+```
+
+### 3. Giải pháp triệt để trong [uninstall.bat](file:///d:/dev-projects/windows-handheld-tool/uninstall.bat)
+1. **Dừng và xóa Service trong SCM**: Phát lệnh `net stop "WinRing0_1_2_0"` và `sc.exe delete "WinRing0_1_2_0"` để giải phóng hoàn toàn `WinRing0x64.sys`.
+2. **Gỡ móc chặn và làm mới Shell**: Gọi trực tiếp hàm export `UninstallGlobalDxgiHook` qua tiện ích `rundll32.exe`, kết hợp khởi động lại nhẹ `explorer.exe` nếu DLL vẫn bị khóa.
+3. **Đăng ký xóa khi khởi động lại (`MoveFileExW`)**: Sử dụng cờ `MOVEFILE_DELAY_UNTIL_REBOOT (0x4)` ghi nhận vào danh sách `PendingFileRenameOperations` của Session Manager. Bất kỳ tệp nào bị tiến trình lạ giữ lại sẽ được nhân Windows xóa sạch hoàn toàn ngay tại chu kỳ nạp Kernel tiếp theo.

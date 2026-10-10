@@ -404,6 +404,7 @@ class GamepadService {
         // 1. Bắt sự kiện tổ hợp phím mở/tắt Overlay
         if (_overlayTracker.update(anyOverlayComboPressed)) {
           _logger.info('Gamepad combo triggered: $_overlayCombo');
+          _cooldownUntil = DateTime.now().add(const Duration(milliseconds: 700));
           _onToggleOverlay?.call();
           return;
         }
@@ -411,6 +412,7 @@ class GamepadService {
         // 2. Bắt sự kiện tổ hợp phím mở/tắt Bàn phím ảo
         if (_keyboardTracker.update(anyKeyboardComboPressed)) {
           _logger.info('Gamepad combo triggered: $_keyboardCombo');
+          _cooldownUntil = DateTime.now().add(const Duration(milliseconds: 700));
           _onToggleKeyboard?.call();
           return;
         }
