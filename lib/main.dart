@@ -56,6 +56,8 @@ void main() async {
     await windowManager.setSize(Size(screenWidth, screenHeight));
     await windowManager.setPosition(Offset.zero);
     await windowManager.setAlwaysOnTop(true);
+    await windowManager.show();
+    NativeWindowService.hideOverlayWindow();
   });
 
   // Tự động đóng panel khi người dùng click ra ngoài (mất focus sang game/desktop)

@@ -46,7 +46,8 @@ set "RELEASE_DIR=%~dp0build\windows\x64\runner\Release"
 if exist "%RELEASE_DIR%\bin" rmdir /S /Q "%RELEASE_DIR%\bin"
 mkdir "%RELEASE_DIR%\bin"
 
-:: Only copy essential runtime binaries, remove all .ps1, .bat, .py scripts and debug files
+:: Only copy essential runtime binaries to BOTH Release\bin\ and Release\ root
+:: WinRing0 requires WinRing0x64.sys in the same folder as the caller process (GetModuleFileName)
 for %%F in (
     "ryzenadj.dll"
     "libryzenadj.dll"
@@ -57,11 +58,12 @@ for %%F in (
 ) do (
     if exist "bin\%%~F" (
         copy /Y "bin\%%~F" "%RELEASE_DIR%\bin\" >nul
+        copy /Y "bin\%%~F" "%RELEASE_DIR%\" >nul
     )
 )
 copy /Y "config.json" "%RELEASE_DIR%\config.json" >nul
 
-echo [OK] Copied clean runtime binaries and config.json to Release.
+echo [OK] Copied clean runtime binaries to bin\ and root, config.json to Release.
 echo.
 
 :: 5. Package Portable ZIP to dist\portable\
@@ -69,7 +71,7 @@ echo [*] Step 4/4: Package Portable ZIP to dist\portable\...
 set "DIST_DIR=%~dp0dist\portable"
 if not exist "%DIST_DIR%" mkdir "%DIST_DIR%"
 
-set "ZIP_FILE=%DIST_DIR%\windows-handheld-tool-v1.1.0-portable.zip"
+set "ZIP_FILE=%DIST_DIR%\windows-handheld-tool-portable-release.zip"
 if exist "%ZIP_FILE%" del /F /Q "%ZIP_FILE%"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Write-Host 'Packaging Portable ZIP...' -ForegroundColor Cyan; Compress-Archive -Path '%RELEASE_DIR%\*' -DestinationPath '%ZIP_FILE%' -Force; if (Test-Path '%ZIP_FILE%') { Unblock-File -Path '%ZIP_FILE%' }"

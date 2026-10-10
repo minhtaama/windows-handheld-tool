@@ -180,7 +180,7 @@ bool Win32Window::Create(const std::wstring& title,
     }
     if (pCreateWindowInBand) {
       window = pCreateWindowInBand(
-          WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+          WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
           window_class, title.c_str(), WS_POPUP,
           Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
           Scale(size.width, scale_factor), Scale(size.height, scale_factor),
@@ -191,7 +191,7 @@ bool Win32Window::Create(const std::wstring& title,
 
   if (!window) {
     window = CreateWindowEx(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
         window_class, title.c_str(), WS_POPUP,
         Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
         Scale(size.width, scale_factor), Scale(size.height, scale_factor),
@@ -202,7 +202,8 @@ bool Win32Window::Create(const std::wstring& title,
     return false;
   }
 
-  SetLayeredWindowAttributes(window, 0, 255, LWA_ALPHA);
+  // Khởi tạo ở mức trong suốt tuyệt đối (Alpha = 0) để loại bỏ 100% hiện tượng chớp nháy trắng
+  SetLayeredWindowAttributes(window, 0, 0, LWA_ALPHA);
 
   UpdateTheme(window);
 

@@ -27,8 +27,10 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  // Tránh chớp nháy trắng (White Flash) khi engine vừa nạp.
+  // Cửa sổ sẽ được điều khiển hiển thị hoàn toàn bởi Flutter Dart (window_manager).
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+    // No-op: Cửa sổ giữ trạng thái ẩn/trong suốt cho đến khi Dart sẵn sàng
   });
 
   // Flutter can complete the first frame before the "show window" callback is

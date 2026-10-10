@@ -259,24 +259,32 @@ HRESULT STDMETHODCALLTYPE Hooked_SetFullscreenState(
 {
     OutputDebugStringA("[DXGI-Hook] SetFullscreenState called\n");
 
-    if (Fullscreen) {
-        // Trò chơi cố gắng bật Fullscreen Exclusive -> Cưỡng bức đưa cửa sổ về Borderless Fullscreen
-        DXGI_SWAP_CHAIN_DESC desc{};
-        if (SUCCEEDED(pThis->GetDesc(&desc)) && desc.OutputWindow) {
-            MakeWindowBorderless(desc.OutputWindow);
+    if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS) {
+        if (Fullscreen) {
+            // Trò chơi cố gắng bật Fullscreen Exclusive -> Cưỡng bức đưa cửa sổ về Borderless Fullscreen
+            DXGI_SWAP_CHAIN_DESC desc{};
+            if (SUCCEEDED(pThis->GetDesc(&desc)) && desc.OutputWindow) {
+                MakeWindowBorderless(desc.OutputWindow);
+            }
+
+            // Gọi hàm gốc với Fullscreen = FALSE để DirectX không chuyển đổi phần cứng màn hình
+            if (g_origSetFullscreenState) {
+                g_origSetFullscreenState(pThis, FALSE, nullptr);
+            }
+
+            // Trả về S_OK để Game tin rằng đã chuyển sang Fullscreen thành công
+            return S_OK;
         }
 
-        // Gọi hàm gốc với Fullscreen = FALSE để DirectX không chuyển đổi phần cứng màn hình
         if (g_origSetFullscreenState) {
-            g_origSetFullscreenState(pThis, FALSE, nullptr);
+            return g_origSetFullscreenState(pThis, FALSE, pTarget);
         }
-
-        // Trả về S_OK để Game tin rằng đã chuyển sang Fullscreen thành công
         return S_OK;
     }
 
+    // Chế độ Shared Texture Injection: Cho phép Game chuyển đổi Fullscreen Exclusive thật sự
     if (g_origSetFullscreenState) {
-        return g_origSetFullscreenState(pThis, FALSE, pTarget);
+        return g_origSetFullscreenState(pThis, Fullscreen, pTarget);
     }
     return S_OK;
 }
@@ -289,42 +297,50 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeTarget(
 {
     OutputDebugStringA("[DXGI-Hook] ResizeTarget called (Handling Dynamic Resolution scaling)\n");
 
-    HWND hWnd = nullptr;
-    DXGI_SWAP_CHAIN_DESC desc{};
-    if (SUCCEEDED(pThis->GetDesc(&desc))) {
-        hWnd = desc.OutputWindow;
+    if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS) {
+        HWND hWnd = nullptr;
+        DXGI_SWAP_CHAIN_DESC desc{};
+        if (SUCCEEDED(pThis->GetDesc(&desc))) {
+            hWnd = desc.OutputWindow;
+        }
+
+        // Lấy kích thước vật lý thực tế động của màn hình hiện tại
+        HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi = { sizeof(MONITORINFO) };
+        UINT screenW = static_cast<UINT>(GetSystemMetrics(SM_CXSCREEN));
+        UINT screenH = static_cast<UINT>(GetSystemMetrics(SM_CYSCREEN));
+        if (GetMonitorInfo(hMon, &mi)) {
+            screenW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
+            screenH = static_cast<UINT>(mi.rcMonitor.bottom - mi.rcMonitor.top);
+        }
+
+        // Ghi đè tham số modeDesc sang độ phân giải thực tế của màn hình để cửa sổ không bị thu nhỏ
+        DXGI_MODE_DESC modifiedMode{};
+        const DXGI_MODE_DESC* pActualMode = pNewTargetParameters;
+        if (pNewTargetParameters) {
+            modifiedMode = *pNewTargetParameters;
+            modifiedMode.Width = screenW;
+            modifiedMode.Height = screenH;
+            pActualMode = &modifiedMode;
+        }
+
+        HRESULT hr = S_OK;
+        if (g_origResizeTarget) {
+            hr = g_origResizeTarget(pThis, pActualMode);
+        }
+
+        if (hWnd) {
+            MakeWindowBorderless(hWnd);
+        }
+
+        return hr;
     }
 
-    // Lấy kích thước vật lý thực tế động của màn hình hiện tại
-    HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO mi = { sizeof(MONITORINFO) };
-    UINT screenW = static_cast<UINT>(GetSystemMetrics(SM_CXSCREEN));
-    UINT screenH = static_cast<UINT>(GetSystemMetrics(SM_CYSCREEN));
-    if (GetMonitorInfo(hMon, &mi)) {
-        screenW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
-        screenH = static_cast<UINT>(mi.rcMonitor.bottom - mi.rcMonitor.top);
-    }
-
-    // Ghi đè tham số modeDesc sang độ phân giải thực tế của màn hình để cửa sổ không bị thu nhỏ
-    DXGI_MODE_DESC modifiedMode{};
-    const DXGI_MODE_DESC* pActualMode = pNewTargetParameters;
-    if (pNewTargetParameters) {
-        modifiedMode = *pNewTargetParameters;
-        modifiedMode.Width = screenW;
-        modifiedMode.Height = screenH;
-        pActualMode = &modifiedMode;
-    }
-
-    HRESULT hr = S_OK;
+    // Chế độ Shared Texture: Không can thiệp kích thước cửa sổ game
     if (g_origResizeTarget) {
-        hr = g_origResizeTarget(pThis, pActualMode);
+        return g_origResizeTarget(pThis, pNewTargetParameters);
     }
-
-    if (hWnd) {
-        MakeWindowBorderless(hWnd);
-    }
-
-    return hr;
+    return S_OK;
 }
 
 // Hook hàm ResizeBuffers trên SwapChain (Slot 13)
@@ -338,20 +354,28 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(
 {
     OutputDebugStringA("[DXGI-Hook] ResizeBuffers called\n");
 
-    // Loại bỏ cờ Mode Switch độc quyền khi game đổi kích thước bộ đệm
-    UINT modifiedFlags = SwapChainFlags & ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS) {
+        // Loại bỏ cờ Mode Switch độc quyền khi game đổi kích thước bộ đệm
+        UINT modifiedFlags = SwapChainFlags & ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
-    HRESULT hr = S_OK;
+        HRESULT hr = S_OK;
+        if (g_origResizeBuffers) {
+            hr = g_origResizeBuffers(pThis, BufferCount, Width, Height, NewFormat, modifiedFlags);
+        }
+
+        DXGI_SWAP_CHAIN_DESC desc{};
+        if (SUCCEEDED(pThis->GetDesc(&desc)) && desc.OutputWindow) {
+            MakeWindowBorderless(desc.OutputWindow);
+        }
+
+        return hr;
+    }
+
+    // Chế độ Shared Texture: Bảo toàn nguyên vẹn tham số hoán đổi bộ đệm
     if (g_origResizeBuffers) {
-        hr = g_origResizeBuffers(pThis, BufferCount, Width, Height, NewFormat, modifiedFlags);
+        return g_origResizeBuffers(pThis, BufferCount, Width, Height, NewFormat, SwapChainFlags);
     }
-
-    DXGI_SWAP_CHAIN_DESC desc{};
-    if (SUCCEEDED(pThis->GetDesc(&desc)) && desc.OutputWindow) {
-        MakeWindowBorderless(desc.OutputWindow);
-    }
-
-    return hr;
+    return S_OK;
 }
 
 // Hook hàm MakeWindowAssociation trên IDXGIFactory (Slot 8)
@@ -362,11 +386,18 @@ HRESULT STDMETHODCALLTYPE Hooked_MakeWindowAssociation(
 {
     OutputDebugStringA("[DXGI-Hook] MakeWindowAssociation called\n");
 
-    // Thêm cờ cấm DirectX runtime tự ý thay đổi style hoặc kích thước cửa sổ
-    UINT modifiedFlags = Flags | DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER;
+    if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS) {
+        // Thêm cờ cấm DirectX runtime tự ý thay đổi style hoặc kích thước cửa sổ
+        UINT modifiedFlags = Flags | DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER;
+
+        if (g_origMakeWindowAssociation) {
+            return g_origMakeWindowAssociation(pThis, WindowHandle, modifiedFlags);
+        }
+        return S_OK;
+    }
 
     if (g_origMakeWindowAssociation) {
-        return g_origMakeWindowAssociation(pThis, WindowHandle, modifiedFlags);
+        return g_origMakeWindowAssociation(pThis, WindowHandle, Flags);
     }
     return S_OK;
 }
@@ -416,7 +447,7 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(
 {
     OutputDebugStringA("[DXGI-Hook] CreateSwapChain intercepted\n");
 
-    if (pDesc) {
+    if (pDesc && g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS) {
         // 1. Ép Windowed = TRUE (Cưỡng bức chạy chế độ Cửa sổ DWM)
         pDesc->Windowed = TRUE;
 
@@ -457,31 +488,33 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
     DXGI_SWAP_CHAIN_DESC1 descCopy;
     const DXGI_SWAP_CHAIN_DESC1* pActualDesc = pDesc;
 
-    if (pDesc) {
-        descCopy = *pDesc;
-
-        // Cưỡng bức chế độ Scaling = DXGI_SCALING_STRETCH (0) để tự động Upscale
-        if (descCopy.Scaling == DXGI_SCALING_NONE) {
-            descCopy.Scaling = DXGI_SCALING_STRETCH;
-        }
-
-        // Loại bỏ cờ Mode Switch độc quyền
-        descCopy.Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
-        pActualDesc = &descCopy;
-    }
-
     DXGI_SWAP_CHAIN_FULLSCREEN_DESC fsDescCopy;
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pActualFsDesc = pFullscreenDesc;
 
-    if (pFullscreenDesc) {
-        fsDescCopy = *pFullscreenDesc;
-        // Ép Windowed = TRUE
-        fsDescCopy.Windowed = TRUE;
-        pActualFsDesc = &fsDescCopy;
-    }
+    if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS) {
+        if (pDesc) {
+            descCopy = *pDesc;
 
-    if (hWnd) {
-        MakeWindowBorderless(hWnd);
+            // Cưỡng bức chế độ Scaling = DXGI_SCALING_STRETCH (0) để tự động Upscale
+            if (descCopy.Scaling == DXGI_SCALING_NONE) {
+                descCopy.Scaling = DXGI_SCALING_STRETCH;
+            }
+
+            // Loại bỏ cờ Mode Switch độc quyền
+            descCopy.Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+            pActualDesc = &descCopy;
+        }
+
+        if (pFullscreenDesc) {
+            fsDescCopy = *pFullscreenDesc;
+            // Ép Windowed = TRUE
+            fsDescCopy.Windowed = TRUE;
+            pActualFsDesc = &fsDescCopy;
+        }
+
+        if (hWnd) {
+            MakeWindowBorderless(hWnd);
+        }
     }
 
     HRESULT hr = S_OK;

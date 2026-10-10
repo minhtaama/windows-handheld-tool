@@ -84,7 +84,10 @@ class SettingsTab extends StatelessWidget {
     required this.onScaleChanged,
     required this.widthPercent,
     required this.onWidthPercentChanged,
+    required this.getItemKey,
   });
+
+  final GlobalKey Function(int index) getItemKey;
 
   @override
   Widget build(BuildContext context) {
@@ -99,6 +102,7 @@ class SettingsTab extends StatelessWidget {
           children: [
             Expanded(
               child: ActionButton(
+                key: getItemKey(0),
                 icon: Icons.keyboard_alt_rounded,
                 title: "Mở bàn phím ảo",
                 isFocused: focusedIndex == 0,
@@ -109,6 +113,7 @@ class SettingsTab extends StatelessWidget {
             const SizedBox(width: 8),
             Expanded(
               child: ActionButton(
+                key: getItemKey(1),
                 icon: Icons.analytics_outlined,
                 title: "Mở Task Manager",
                 isFocused: focusedIndex == 1,
@@ -123,6 +128,7 @@ class SettingsTab extends StatelessWidget {
           children: [
             Expanded(
               child: ActionButton(
+                key: getItemKey(2),
                 icon: Icons.monitor_rounded,
                 title: "Cài đặt màn hình",
                 isFocused: focusedIndex == 2,
@@ -133,6 +139,7 @@ class SettingsTab extends StatelessWidget {
             const SizedBox(width: 8),
             Expanded(
               child: ActionButton(
+                key: getItemKey(3),
                 icon: Icons.cleaning_services_rounded,
                 title: "Dọn dẹp RAM",
                 isFocused: focusedIndex == 3,
@@ -147,6 +154,7 @@ class SettingsTab extends StatelessWidget {
         const SectionLabel(label: "CẤU HÌNH HỆ THỐNG"),
         // Khởi động cùng Windows (Auto-start via Task Scheduler)
         ToggleCard(
+          key: getItemKey(4),
           icon: Icons.power_settings_new_rounded,
           title: "Khởi động cùng Windows",
           subtitle: "Tự chạy với quyền Quản trị viên (Task Scheduler)",
@@ -159,6 +167,7 @@ class SettingsTab extends StatelessWidget {
 
         // Chế độ Overlay Hook: DXGI Borderless Hook vs Direct3D Shared Texture Injection
         PresetSelector<OverlayHookMode>(
+          key: getItemKey(5),
           title: "Chế độ tương thích Game (Hook)",
           icon: Icons.layers_rounded,
           currentValueText: hookMode == OverlayHookMode.sharedTexture
@@ -180,7 +189,7 @@ class SettingsTab extends StatelessWidget {
 
         // Phím tắt mở Quick Settings (Đơn nhất: Bàn phím PC HOẶC Gamepad)
         HotkeyTile(
-          key: overlayHotkeyTileKey,
+          key: overlayHotkeyTileKey ?? getItemKey(6),
           icon: Icons.dashboard_customize_rounded,
           title: "Phím tắt mở Quick Settings",
           device: overlayHotkeyDevice,
@@ -193,7 +202,7 @@ class SettingsTab extends StatelessWidget {
 
         // Phím tắt mở Bàn phím ảo (Đơn nhất: Bàn phím PC HOẶC Gamepad)
         HotkeyTile(
-          key: virtualKeyboardHotkeyTileKey,
+          key: virtualKeyboardHotkeyTileKey ?? getItemKey(7),
           icon: Icons.keyboard_alt_rounded,
           title: "Phím tắt mở Bàn phím ảo",
           device: virtualKeyboardHotkeyDevice,
@@ -209,6 +218,7 @@ class SettingsTab extends StatelessWidget {
 
         // Tỷ lệ phóng đại UI Scale
         PresetSelector<double>(
+          key: getItemKey(8),
           title: "Tỷ lệ hiển thị (UI Scale)",
           icon: Icons.format_size_rounded,
           currentValueText: "${(scale * 100).toInt()}%",
@@ -222,6 +232,7 @@ class SettingsTab extends StatelessWidget {
 
         // Độ rộng Side Panel
         PresetSelector<int>(
+          key: getItemKey(9),
           title: "Độ rộng Side Panel",
           icon: Icons.aspect_ratio_rounded,
           currentValueText: "$widthPercent %",
@@ -308,7 +319,7 @@ class SettingsTab extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      "v1.1.0 (Beta)",
+                      "v1.2.0 (Beta)",
                       style: AppTheme.caption.copyWith(
                         color: AppTheme.background,
                       ),

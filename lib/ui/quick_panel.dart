@@ -11,6 +11,7 @@ import '../hardware/fan_service.dart';
 import '../hardware/brightness_service.dart';
 import '../hardware/audio_service.dart';
 import '../hardware/rtss_service.dart';
+import '../hardware/rtss_osd_formatter.dart';
 import '../hardware/touchscreen_service.dart';
 import '../input/gamepad_service.dart';
 import '../input/hotkey_service.dart';
@@ -78,6 +79,12 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   // Vị trí điều khiển đang được chọn bằng Gamepad trong Tab hiện tại
   int _focusedIndex = 0;
   final ScrollController _scrollController = ScrollController();
+  final Map<int, GlobalKey> _itemKeys = {};
+
+  GlobalKey _getItemKey(int index) {
+    return _itemKeys.putIfAbsent(index, () => GlobalKey());
+  }
+
   StreamSubscription<GamepadButton>? _gamepadSub;
 
   // Dữ liệu đo cảm biến thực tế tức thời (Hardware Telemetry)
@@ -86,6 +93,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   int? _liveFps;
   String? _activeGame;
   bool _isRtssRunning = false;
+  late RtssOsdMetricsConfig _rtssOsdMetrics;
+  bool _isRevivingRtss = false;
+  int _lastRtssWatchdogAttempt = 0;
   Timer? _telemetryTimer;
   SystemTelemetryData _telemetryData = SystemTelemetryData.initial();
 
@@ -150,6 +160,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           ? _rtssCtrl.getOsdPosition()
           : RtssOsdPosition.topLeft,
     );
+    _rtssOsdMetrics = RtssOsdMetricsConfig.fromConfig(widget.config);
     _touchEnabled = TouchscreenService.isEnabled;
     _autoStartEnabled = AutostartService.instance.isEnabled;
     _hookMode = DxgiHookService.instance.hookMode;
@@ -204,12 +215,18 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       setState(() {
         _telemetryData = SystemTelemetryService.instance.getSnapshot();
 
-        // Cập nhật dao động công suất thực tế tức thời theo tải chip
-        final tdpJitter = (DateTime.now().second % 3) - 1;
-        _liveTdp = (_tdp * 0.88 + tdpJitter).round().clamp(
-          _tdpCtrl.minVal,
-          _tdpCtrl.maxVal,
-        );
+        // Cập nhật công suất thực tế tức thời từ bảng cảm biến PM Table phần cứng (AMD SMU)
+        final hwTdp = _tdpCtrl.getLiveTdp();
+        if (hwTdp != null) {
+          _liveTdp = hwTdp.round().clamp(_tdpCtrl.minVal, _tdpCtrl.maxVal);
+        } else {
+          // Fallback giả lập nếu chưa có cảm biến phần cứng
+          final tdpJitter = (DateTime.now().second % 3) - 1;
+          _liveTdp = (_tdp * 0.88 + tdpJitter).round().clamp(
+            _tdpCtrl.minVal,
+            _tdpCtrl.maxVal,
+          );
+        }
 
         if (_fanAuto) {
           _liveFan = (_liveTdp * 2.6).round().clamp(30, 95);
@@ -224,11 +241,45 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         if (_isRtssRunning) {
           _liveFps = _rtssCtrl.getLiveFps();
           _activeGame = _rtssCtrl.getActiveGame();
+          if (_rtssOsdEnabled) {
+            _refreshOsdText();
+          }
         } else {
           _liveFps = null;
           _activeGame = null;
+          _checkRtssWatchdog();
         }
       });
+    });
+  }
+
+  void _checkRtssWatchdog() {
+    if (!RtssInstallerService.isInstalled()) return;
+    if (!_rtssOsdEnabled && _fpsLimit == 0) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_isRevivingRtss || (now - _lastRtssWatchdogAttempt < 5000)) return;
+
+    _lastRtssWatchdogAttempt = now;
+    _isRevivingRtss = true;
+
+    RtssService.instance.ensureRunning().then((success) {
+      _isRevivingRtss = false;
+      if (mounted && success) {
+        setState(() {
+          _isRtssRunning = _rtssCtrl.isAvailable();
+          if (_isRtssRunning) {
+            _rtssCtrl.setOsdEnabled(_rtssOsdEnabled);
+            _rtssCtrl.setValue(_fpsLimit);
+            _rtssCtrl.setOsdZoom(_rtssOsdZoom);
+            _rtssCtrl.setOsdPosition(_rtssOsdPosition);
+            _liveFps = _rtssCtrl.getLiveFps();
+            _activeGame = _rtssCtrl.getActiveGame();
+          }
+        });
+      }
+    }).catchError((_) {
+      _isRevivingRtss = false;
     });
   }
 
@@ -261,6 +312,11 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             if (_rtssOsdEnabled) ...[
               [6],
               [7],
+              [8],
+              [9, 10],
+              [11, 12],
+              [13, 14],
+              [15],
             ],
           ],
         ];
@@ -304,6 +360,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       setState(() {
         _selectedTabIndex = newIndex;
         _focusedIndex = 0;
+        _itemKeys.clear();
       });
       if (_scrollController.hasClients) {
         _scrollController.jumpTo(0);
@@ -314,7 +371,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   void _setFocus(int nextIdx) {
     if (nextIdx != _focusedIndex) {
       setState(() => _focusedIndex = nextIdx);
-      _autoScrollToFocused();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _autoScrollToFocused();
+      });
     }
   }
 
@@ -340,17 +399,28 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   void _autoScrollToFocused() {
     if (!_scrollController.hasClients) return;
-    final layout = _getTabLayout(_selectedTabIndex);
-    final (r, _) = _findGridPosition(layout, _focusedIndex);
-    final targetOffset = (r * (120.0 * _scale)).clamp(
-      0.0,
-      _scrollController.position.maxScrollExtent,
-    );
-    _scrollController.animateTo(
-      targetOffset,
-      duration: const Duration(milliseconds: 140),
-      curve: Curves.easeOutCubic,
-    );
+
+    // Hàng đầu tiên luôn cuộn về đỉnh danh sách để hiển thị trọn vẹn cả tiêu đề SectionLabel
+    if (_focusedIndex == 0) {
+      _scrollController.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOutCubic,
+      );
+      return;
+    }
+
+    // Căn giữa tâm RenderBox chính xác 100% qua cây dựng hình Render Tree của Flutter Framework
+    final key = _itemKeys[_focusedIndex];
+    final targetContext = key?.currentContext;
+    if (targetContext != null) {
+      Scrollable.ensureVisible(
+        targetContext,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOutCubic,
+      );
+    }
   }
 
   void _cyclePreset<T>(
@@ -429,7 +499,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         } else if (_focusedIndex == 3) {
           _updateFan(max(_fanCtrl.minVal, _fan - _fanCtrl.step));
         } else if (_focusedIndex == 4 && RtssInstallerService.isInstalled()) {
-          _cyclePreset(const [0, 30, 40, 60], _fpsLimit, -1, _updateFpsLimit);
+          _updateFpsLimit(max(_rtssCtrl.minVal, _fpsLimit - _rtssCtrl.step));
         } else if (_focusedIndex == 5 && RtssInstallerService.isInstalled()) {
           _toggleRtssOsd();
         } else if (_focusedIndex == 6 && RtssInstallerService.isInstalled()) {
@@ -445,6 +515,13 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             _rtssOsdPosition,
             -1,
             _updateRtssOsdPosition,
+          );
+        } else if (_focusedIndex == 8 && RtssInstallerService.isInstalled()) {
+          _cyclePreset(
+            RtssOsdLayout.values,
+            _rtssOsdMetrics.layout,
+            -1,
+            _updateRtssOsdLayout,
           );
         }
         break;
@@ -503,7 +580,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         } else if (_focusedIndex == 3) {
           _updateFan(min(_fanCtrl.maxVal, _fan + _fanCtrl.step));
         } else if (_focusedIndex == 4 && RtssInstallerService.isInstalled()) {
-          _cyclePreset(const [0, 30, 40, 60], _fpsLimit, 1, _updateFpsLimit);
+          _updateFpsLimit(min(_rtssCtrl.maxVal, _fpsLimit + _rtssCtrl.step));
         } else if (_focusedIndex == 5 && RtssInstallerService.isInstalled()) {
           _toggleRtssOsd();
         } else if (_focusedIndex == 6 && RtssInstallerService.isInstalled()) {
@@ -514,6 +591,13 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             _rtssOsdPosition,
             1,
             _updateRtssOsdPosition,
+          );
+        } else if (_focusedIndex == 8 && RtssInstallerService.isInstalled()) {
+          _cyclePreset(
+            RtssOsdLayout.values,
+            _rtssOsdMetrics.layout,
+            1,
+            _updateRtssOsdLayout,
           );
         }
         break;
@@ -577,6 +661,27 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             1,
             _updateRtssOsdPosition,
           );
+        } else if (_focusedIndex == 8) {
+          _cyclePreset(
+            RtssOsdLayout.values,
+            _rtssOsdMetrics.layout,
+            1,
+            _updateRtssOsdLayout,
+          );
+        } else if (_focusedIndex == 9) {
+          _toggleMetricFps();
+        } else if (_focusedIndex == 10) {
+          _toggleMetricTdp();
+        } else if (_focusedIndex == 11) {
+          _toggleMetricCpuTemp();
+        } else if (_focusedIndex == 12) {
+          _toggleMetricCpuUsage();
+        } else if (_focusedIndex == 13) {
+          _toggleMetricRam();
+        } else if (_focusedIndex == 14) {
+          _toggleMetricBattery();
+        } else if (_focusedIndex == 15) {
+          _toggleMetricFan();
         }
         break;
       case 2:
@@ -681,15 +786,105 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   void _updateFpsLimit(int val) {
     setState(() => _fpsLimit = val);
-    _rtssCtrl.setValue(val);
     widget.config.set("hardware.rtss.fps_limit", val);
+    if (val > 0 && !_isRtssRunning) {
+      _startRtss().then((_) {
+        _rtssCtrl.setValue(val);
+      });
+    } else {
+      _rtssCtrl.setValue(val);
+    }
   }
 
   void _toggleRtssOsd() {
     final next = !_rtssOsdEnabled;
     setState(() => _rtssOsdEnabled = next);
-    _rtssCtrl.setOsdEnabled(next);
     widget.config.set("hardware.rtss.osd_enabled", next);
+    if (next) {
+      if (!_isRtssRunning) {
+        _startRtss().then((_) {
+          _rtssCtrl.setOsdEnabled(next);
+          _refreshOsdText();
+        });
+      } else {
+        _rtssCtrl.setOsdEnabled(next);
+        _refreshOsdText();
+      }
+    } else {
+      _rtssCtrl.setOsdEnabled(next);
+      _rtssCtrl.clearOsdText();
+    }
+  }
+
+  void _refreshOsdText() {
+    if (_isRtssRunning && _rtssOsdEnabled) {
+      final text = RtssOsdFormatter.format(
+        config: _rtssOsdMetrics,
+        fps: _liveFps,
+        liveTdp: _liveTdp,
+        liveFan: _liveFan,
+        cpuTemp: _tdpCtrl.getLiveCpuTemp(),
+        cpuUsage: _telemetryData.cpuUsagePercent.toDouble(),
+        ramUsedGb: _telemetryData.ramUsedGb,
+        batteryPercent: _telemetryData.batteryPercent,
+      );
+      _rtssCtrl.updateOsdText(text);
+    }
+  }
+
+  void _updateRtssOsdLayout(RtssOsdLayout layout) {
+    setState(() => _rtssOsdMetrics = _rtssOsdMetrics.copyWith(layout: layout));
+    _rtssOsdMetrics.saveToConfig(widget.config);
+    _refreshOsdText();
+  }
+
+  void _toggleMetricFps() {
+    setState(() => _rtssOsdMetrics =
+        _rtssOsdMetrics.copyWith(showFps: !_rtssOsdMetrics.showFps));
+    _rtssOsdMetrics.saveToConfig(widget.config);
+    _refreshOsdText();
+  }
+
+  void _toggleMetricTdp() {
+    setState(() => _rtssOsdMetrics =
+        _rtssOsdMetrics.copyWith(showTdp: !_rtssOsdMetrics.showTdp));
+    _rtssOsdMetrics.saveToConfig(widget.config);
+    _refreshOsdText();
+  }
+
+  void _toggleMetricCpuTemp() {
+    setState(() => _rtssOsdMetrics =
+        _rtssOsdMetrics.copyWith(showCpuTemp: !_rtssOsdMetrics.showCpuTemp));
+    _rtssOsdMetrics.saveToConfig(widget.config);
+    _refreshOsdText();
+  }
+
+  void _toggleMetricCpuUsage() {
+    setState(() => _rtssOsdMetrics =
+        _rtssOsdMetrics.copyWith(showCpuUsage: !_rtssOsdMetrics.showCpuUsage));
+    _rtssOsdMetrics.saveToConfig(widget.config);
+    _refreshOsdText();
+  }
+
+  void _toggleMetricRam() {
+    setState(() => _rtssOsdMetrics =
+        _rtssOsdMetrics.copyWith(showRam: !_rtssOsdMetrics.showRam));
+    _rtssOsdMetrics.saveToConfig(widget.config);
+    _refreshOsdText();
+  }
+
+  void _toggleMetricBattery() {
+    setState(() => _rtssOsdMetrics =
+        _rtssOsdMetrics.copyWith(showBattery: !_rtssOsdMetrics.showBattery));
+    _rtssOsdMetrics.saveToConfig(widget.config);
+    _refreshOsdText();
+  }
+
+  void _toggleMetricFan() {
+    setState(() => _rtssOsdMetrics =
+        _rtssOsdMetrics.copyWith(showFan: !_rtssOsdMetrics.showFan));
+    _rtssOsdMetrics.saveToConfig(widget.config);
+    _refreshOsdText();
   }
 
   void _updateRtssOsdZoom(int val) {
@@ -837,6 +1032,12 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       setState(() {
         _isRtssRunning = _rtssCtrl.isAvailable();
       });
+      if (_isRtssRunning) {
+        _rtssCtrl.setOsdEnabled(_rtssOsdEnabled);
+        _rtssCtrl.setValue(_fpsLimit);
+        _rtssCtrl.setOsdZoom(_rtssOsdZoom);
+        _rtssCtrl.setOsdPosition(_rtssOsdPosition);
+      }
     }
   }
 
@@ -947,6 +1148,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           focusedIndex: _focusedIndex,
           telemetry: _telemetryData,
           liveTdp: _liveTdp,
+          getItemKey: _getItemKey,
         );
       case 1:
         return PerformanceTab(
@@ -978,6 +1180,16 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           onOsdZoomChanged: _updateRtssOsdZoom,
           osdPosition: _rtssOsdPosition,
           onOsdPositionChanged: _updateRtssOsdPosition,
+          osdMetrics: _rtssOsdMetrics,
+          onOsdLayoutChanged: _updateRtssOsdLayout,
+          onToggleMetricFps: _toggleMetricFps,
+          onToggleMetricTdp: _toggleMetricTdp,
+          onToggleMetricCpuTemp: _toggleMetricCpuTemp,
+          onToggleMetricCpuUsage: _toggleMetricCpuUsage,
+          onToggleMetricRam: _toggleMetricRam,
+          onToggleMetricBattery: _toggleMetricBattery,
+          onToggleMetricFan: _toggleMetricFan,
+          getItemKey: _getItemKey,
         );
       case 2:
         return DeviceTab(
@@ -991,6 +1203,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           onAudioChanged: _updateAudio,
           touchEnabled: _touchEnabled,
           onToggleTouchscreen: _toggleTouchscreen,
+          getItemKey: _getItemKey,
         );
       case 3:
         return SettingsTab(
@@ -1043,6 +1256,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           onScaleChanged: _updateScale,
           widthPercent: _widthPercent,
           onWidthPercentChanged: _updateWidthPercent,
+          getItemKey: _getItemKey,
         );
       default:
         return const SizedBox.shrink();

@@ -24,6 +24,7 @@ class DeviceTab extends StatelessWidget {
   // Cấu hình Màn hình cảm ứng
   final bool touchEnabled;
   final VoidCallback onToggleTouchscreen;
+  final GlobalKey Function(int index) getItemKey;
 
   const DeviceTab({
     super.key,
@@ -37,6 +38,7 @@ class DeviceTab extends StatelessWidget {
     required this.onAudioChanged,
     required this.touchEnabled,
     required this.onToggleTouchscreen,
+    required this.getItemKey,
   });
 
   @override
@@ -48,6 +50,7 @@ class DeviceTab extends StatelessWidget {
       children: [
         const SectionLabel(label: "HIỂN THỊ", isFirst: true),
         SettingSlider(
+          key: getItemKey(0),
           icon: Icons.brightness_6_rounded,
           title: "Độ sáng màn hình",
           value: brightness,
@@ -58,11 +61,11 @@ class DeviceTab extends StatelessWidget {
           quickPresets: const [25, 50, 75, 100],
           onChanged: onBrightnessChanged,
           isFocused: focusedIndex == 0,
-          helpText: "Điều chỉnh cường độ sáng màn hình tích hợp. Giảm độ sáng giúp kéo dài đáng kể thời lượng pin.",
         ),
 
         const SectionLabel(label: "ÂM THANH"),
         SettingSlider(
+          key: getItemKey(1),
           icon: Icons.volume_up_rounded,
           title: "Âm lượng loa",
           value: audio,
@@ -73,11 +76,11 @@ class DeviceTab extends StatelessWidget {
           quickPresets: const [0, 30, 60, 100],
           onChanged: onAudioChanged,
           isFocused: focusedIndex == 1,
-          helpText: "Điều chỉnh mức âm lượng tổng của hệ thống Windows từ 0% đến 100%.",
         ),
 
         const SectionLabel(label: "CẢM ỨNG MÀN HÌNH"),
         ToggleCard(
+          key: getItemKey(2),
           icon: touchEnabled
               ? Icons.touch_app_rounded
               : Icons.do_not_touch_rounded,
@@ -88,7 +91,7 @@ class DeviceTab extends StatelessWidget {
           value: touchEnabled,
           onChanged: (_) => onToggleTouchscreen(),
           isFocused: focusedIndex == 2,
-          helpText: "Bật hoặc tắt màn hình cảm ứng để tránh chạm nhầm khi đang cầm chơi game bằng tay cầm.",
+          helpText: "Bật hoặc tắt màn hình cảm ứng để tránh chạm nhầm.",
         ),
       ],
     );

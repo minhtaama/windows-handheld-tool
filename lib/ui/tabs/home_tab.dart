@@ -11,6 +11,7 @@ class HomeTab extends StatelessWidget {
   final int focusedIndex;
   final SystemTelemetryData telemetry;
   final int liveTdp;
+  final GlobalKey Function(int index) getItemKey;
 
   const HomeTab({
     super.key,
@@ -18,6 +19,7 @@ class HomeTab extends StatelessWidget {
     required this.focusedIndex,
     required this.telemetry,
     required this.liveTdp,
+    required this.getItemKey,
   });
 
   @override
@@ -46,6 +48,7 @@ class HomeTab extends StatelessWidget {
     final device = DeviceInfoService.currentDevice;
 
     return Container(
+      key: getItemKey(0),
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       decoration: BoxDecoration(
@@ -173,6 +176,7 @@ class HomeTab extends StatelessWidget {
     }
 
     return Container(
+      key: getItemKey(1),
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
@@ -314,6 +318,7 @@ class HomeTab extends StatelessWidget {
             // Thẻ CPU
             Expanded(
               child: _buildMetricTile(
+                key: getItemKey(2),
                 icon: Icons.memory_rounded,
                 title: "CPU",
                 valueText: "${telemetry.cpuUsagePercent}%",
@@ -328,6 +333,7 @@ class HomeTab extends StatelessWidget {
             // Thẻ RAM
             Expanded(
               child: _buildMetricTile(
+                key: getItemKey(3),
                 icon: Icons.storage_rounded,
                 title: "RAM",
                 valueText: "${telemetry.ramUsagePercent}%",
@@ -345,6 +351,7 @@ class HomeTab extends StatelessWidget {
   }
 
   Widget _buildMetricTile({
+    Key? key,
     required IconData icon,
     required String title,
     required String valueText,
@@ -354,6 +361,7 @@ class HomeTab extends StatelessWidget {
     required bool isFocused,
   }) {
     return Container(
+      key: key,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       decoration: BoxDecoration(
         color: AppTheme.cardBackground,

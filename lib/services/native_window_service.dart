@@ -43,6 +43,15 @@ typedef _IsWindowDart = int Function(int hWnd);
 typedef _InvalidateRectC = Int32 Function(IntPtr hWnd, Pointer<Void> lpRect, Int32 bErase);
 typedef _InvalidateRectDart = int Function(int hWnd, Pointer<Void> lpRect, int bErase);
 
+typedef _SetLayeredWindowAttributesC = Int32 Function(IntPtr hWnd, Uint32 crKey, Uint8 bAlpha, Uint32 dwFlags);
+typedef _SetLayeredWindowAttributesDart = int Function(int hWnd, int crKey, int bAlpha, int dwFlags);
+
+typedef _GetForegroundWindowC = IntPtr Function();
+typedef _GetForegroundWindowDart = int Function();
+
+typedef _GetWindowThreadProcessIdC = Uint32 Function(IntPtr hWnd, Pointer<Uint32> lpdwProcessId);
+typedef _GetWindowThreadProcessIdDart = int Function(int hWnd, Pointer<Uint32> lpdwProcessId);
+
 /// Dịch vụ quản lý cửa sổ Native Win32 tối ưu cho Gaming Overlay chuẩn Fullscreen Transparent Overlay.
 /// Bao phủ toàn màn hình cố định và sử dụng SWP_NOACTIVATE
 /// để đảm bảo không cướp Focus của Game (chống văng/minimize game DirectX).
@@ -66,6 +75,8 @@ class NativeWindowService {
   static const int wsExNoActivate = 0x08000000;
   static const int wsExLayered = 0x00080000;
 
+  static const int lwaAlpha = 0x00000002;
+
   static const int smCxScreen = 0;
   static const int smCyScreen = 1;
 
@@ -77,6 +88,9 @@ class NativeWindowService {
   static _InvalidateRectDart? _invalidateRect;
   static _GetWindowLongPtrWDart? _getWindowLongPtrW;
   static _SetWindowLongPtrWDart? _setWindowLongPtrW;
+  static _SetLayeredWindowAttributesDart? _setLayeredWindowAttributes;
+  static _GetForegroundWindowDart? _getForegroundWindow;
+  static _GetWindowThreadProcessIdDart? _getWindowThreadProcessId;
 
   static int? _cachedHwnd;
 
@@ -90,6 +104,9 @@ class NativeWindowService {
       _isWindowVisible = user32.lookupFunction<_IsWindowVisibleC, _IsWindowVisibleDart>('IsWindowVisible');
       _isWindow = user32.lookupFunction<_IsWindowC, _IsWindowDart>('IsWindow');
       _invalidateRect = user32.lookupFunction<_InvalidateRectC, _InvalidateRectDart>('InvalidateRect');
+      _setLayeredWindowAttributes = user32.lookupFunction<_SetLayeredWindowAttributesC, _SetLayeredWindowAttributesDart>('SetLayeredWindowAttributes');
+      _getForegroundWindow = user32.lookupFunction<_GetForegroundWindowC, _GetForegroundWindowDart>('GetForegroundWindow');
+      _getWindowThreadProcessId = user32.lookupFunction<_GetWindowThreadProcessIdC, _GetWindowThreadProcessIdDart>('GetWindowThreadProcessId');
 
       try {
         _getWindowLongPtrW = user32.lookupFunction<_GetWindowLongPtrWC, _GetWindowLongPtrWDart>('GetWindowLongPtrW');
@@ -100,6 +117,26 @@ class NativeWindowService {
       }
     } catch (e) {
       _logger.error('Error loading user32.dll API', e);
+    }
+  }
+
+  /// Lấy tay nắm HWND của cửa sổ đang kích hoạt trên cùng màn hình (Foreground Window)
+  static int getForegroundWindow() {
+    _ensureInitialized();
+    return _getForegroundWindow != null ? _getForegroundWindow!() : 0;
+  }
+
+  /// Lấy Process ID (PID) của tiến trình sở hữu cửa sổ kích hoạt trên cùng
+  static int getForegroundProcessId() {
+    _ensureInitialized();
+    final hwnd = getForegroundWindow();
+    if (hwnd == 0 || _getWindowThreadProcessId == null) return 0;
+    final pidPtr = calloc<Uint32>();
+    try {
+      _getWindowThreadProcessId!(hwnd, pidPtr);
+      return pidPtr.value;
+    } finally {
+      calloc.free(pidPtr);
     }
   }
 
@@ -177,6 +214,9 @@ class NativeWindowService {
       } catch (_) {}
     }
 
+    // Đặt độ mờ alpha = 255 để hiển thị hoàn toàn nội dung giao diện
+    _setLayeredWindowAttributes?.call(hwnd, 0, 255, lwaAlpha);
+
     // 2. Đặt vị trí bao phủ toàn màn hình cố định (0, 0, width, height) ở chế độ Topmost
     _setWindowPos?.call(
       hwnd,
@@ -195,13 +235,16 @@ class NativeWindowService {
     return true;
   }
 
-  /// Ẩn tương tác Overlay: Bật cờ xuyên thấu WS_EX_TRANSPARENT để mọi click đi thẳng vào game
+  /// Ẩn tương tác Overlay: Bật cờ xuyên thấu WS_EX_TRANSPARENT và alpha 0 để mọi click đi thẳng vào game
   static bool hideOverlayWindow() {
     _ensureInitialized();
     final hwnd = getWindowHandle();
     if (hwnd == 0) return false;
 
-    // Gắn cờ WS_EX_TRANSPARENT (Click-Through) để chuột/cảm ứng không bị cản trở
+    // 1. Đặt alpha = 0 (trong suốt 100%) để tránh chớp nháy hoặc để sót bất kỳ frame nào trên màn hình
+    _setLayeredWindowAttributes?.call(hwnd, 0, 0, lwaAlpha);
+
+    // 2. Gắn cờ WS_EX_TRANSPARENT (Click-Through) để chuột/cảm ứng không bị cản trở
     if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
       try {
         final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
@@ -213,7 +256,7 @@ class NativeWindowService {
       } catch (_) {}
     }
 
-    _logger.info('Switched Overlay to click-through state (WS_EX_TRANSPARENT)');
+    _logger.info('Switched Overlay to click-through state (WS_EX_TRANSPARENT, Alpha 0)');
     return true;
   }
 

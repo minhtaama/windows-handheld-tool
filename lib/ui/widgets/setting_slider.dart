@@ -115,28 +115,39 @@ class SettingSlider extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
-              // Thông số hiển thị: nếu có giá trị thực tế thì hiển thị "Live / Target"
-              if (currentValue != null) ...[
+              // Thông số hiển thị: nếu chế độ thủ công (shouldShowSlider == true) hiển thị "Live / Target"
+              // Nếu chế độ tự động (shouldShowSlider == false), chỉ hiển thị thông số đo thực tế (không còn max limit)
+              if (shouldShowSlider) ...[
+                if (currentValue != null) ...[
+                  Text(
+                    '$currentValue',
+                    style: AppTheme.body.copyWith(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: liveColor,
+                    ),
+                  ),
+                  Text(
+                    ' / ',
+                    style: AppTheme.caption.copyWith(
+                      fontSize: 12,
+                      color: AppTheme.textSecondary.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ],
                 Text(
-                  '$currentValue',
-                  style: AppTheme.body.copyWith(
-                    fontSize: 13,
+                  _formatTargetValue(value),
+                  style: AppTheme.title.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ] else ...[
+                Text(
+                  currentValue != null ? '$currentValue$unit' : 'TỰ ĐỘNG',
+                  style: AppTheme.title.copyWith(
                     fontWeight: FontWeight.w700,
                     color: liveColor,
                   ),
                 ),
-                Text(
-                  ' / ',
-                  style: AppTheme.caption.copyWith(
-                    fontSize: 12,
-                    color: AppTheme.textSecondary.withValues(alpha: 0.6),
-                  ),
-                ),
               ],
-              Text(
-                _formatTargetValue(value),
-                style: AppTheme.title.copyWith(fontWeight: FontWeight.w700),
-              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -181,15 +192,15 @@ class SettingSlider extends StatelessWidget {
                   LayoutBuilder(
                     builder: (context, constraints) {
                       final ratio = max == min
-                          ? 0.01
+                          ? 0.0
                           : ((currentValue! - min) / (max - min)).clamp(
-                              0.01,
+                              0.0,
                               1.0,
                             );
                       return AnimatedContainer(
                         duration: Durations.short4,
                         height: 9,
-                        width: constraints.maxWidth * (ratio - 0.02),
+                        width: constraints.maxWidth * ratio,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(3),
                           color: liveColor,
