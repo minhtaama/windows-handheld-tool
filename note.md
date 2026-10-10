@@ -1414,6 +1414,48 @@ flowchart TD
    - Kết quả là RTSS coi cửa sổ Quick Panel là một mục tiêu đồ họa và tự động vẽ chữ số OSD lên chính bề mặt của Panel!
    - **Giải pháp First Principles**: Tạo một tập tin cấu hình riêng biệt cho tiến trình ứng dụng tại đường dẫn `Profiles\windows_handheld_tool.exe` với cờ vô hiệu hóa theo dõi đồ họa (`EnableHooking = 0` và `EnableOSD = 0`). Khi khởi chạy, bộ tiêm mã của RTSS sẽ bỏ qua hoàn toàn tiến trình ứng dụng, ngăn chặn triệt để việc vẽ OSD lên Panel.
 
+---
+
+### 7. Khắc Phục Lỗi Bắt Sai 1 FPS (Self-Process Capture) & Bế Tắc Đánh Thức Phím Tắt Khi Khởi Động Ngầm (Win32 Message Loop Sleep)
+
+```mermaid
+flowchart TD
+    subgraph Bug1_FPS1["Lỗi 1: Game 60fps nhưng OSD chỉ hiện 1 FPS"]
+        RTSS_Array["Mảng RTSS AppEntry chứa danh sách các ứng dụng DirectX đang chạy"] --> ScanLoop["Vòng lặp lấy entry đầu tiên có FrameTimeUs > 0"]
+        ScanLoop --> PickSelf["Nhặt nhầm windows_handheld_tool.exe (đang chạy nền 1 frame/giây = 998078 µs)"]
+        PickSelf --> Return1["Kết quả: 1000000 / 998078 = 1 FPS!"]
+    end
+
+    subgraph Bug2_Wakeup["Lỗi 2: Khởi động app phải click Tray Icon mới nhận Hotkey"]
+        HiddenWindow["Cửa sổ Overlay khởi động ẩn (Alpha 0, Click-Through)"] --> Win32Sleep["Flutter Engine không có frame vẽ: Message Pump rơi vào MsgWaitForMultipleObjectsEx(INFINITE)"]
+        Win32Sleep --> TimerBlocked["Dart Timer.periodic(20ms) bị trì hoãn, không kích hoạt GetAsyncKeyState"]
+        TrayClick["Người dùng click System Tray: Windows gửi thông điệp WM_COMMAND"] --> Wakeup["Message Loop thức giấc, Timer bắt đầu chạy bình thường"]
+    end
+```
+
+#### A. Xuất phát từ bế tắc thực tế (The "Why")
+- **Trước đây**: Khi hệ thống OSD đã hoạt động ổn định và bố cục gọn gàng, hai khiếm khuyết trải nghiệm người dùng xuất hiện:
+  1. Khi vừa mở ứng dụng lên, người dùng bấm phím tắt (`Ctrl+Shift+Q`) hoặc tổ hợp tay cầm thì không thấy phản hồi nào, bắt buộc phải nhấp chuột vào biểu tượng khay hệ thống (`System Tray Icon`) một lần thì các lần sau bấm phím tắt mới hoạt động.
+  2. Dù trò chơi đang chạy ở tốc độ 60 FPS rất mượt mà, con số hiển thị trên OSD lại cố định ở mức **FPS: 1**.
+- **Bị nghẽn kỹ thuật**: Cơ chế quét mảng tiến trình RTSS nhặt nhầm tiến trình giao diện cầm tay đang chạy ngầm, đồng thời luồng nhận thông điệp Win32 của Flutter rơi vào trạng thái ngủ sâu khi cửa sổ hoàn toàn trong suốt.
+
+#### B. Bóc trần bản chất vật lý (First Principles)
+1. **Bản chất của hiện tượng đo nhầm 1 FPS (`Self-Process FPS Capture`)**:
+   - Khi RTSS hook vào hệ thống, mảng tiến trình `AppEntry` trong bộ nhớ chia sẻ `RTSSSharedMemoryV2` lưu trữ trạng thái của tất cả các tiến trình có bề mặt kết xuất Direct3D/DXGI.
+   - Tiến trình giao diện `windows_handheld_tool.exe` khi đang ẩn sẽ chỉ vẽ lại một khung hình mỗi giây khi bộ hẹn giờ cảm biến nhảy số (`dwFrameTime = 998078 µs` $\approx$ 1.0 giây).
+   - Hàm `getInstantaneousFps()` duyệt mảng từ chỉ số `i = 0` và dừng lại ngay ở phần tử đầu tiên có `dwFrameTime > 0`. Do `windows_handheld_tool.exe` nằm ở `Entry 1` ngay trước tiến trình game, hàm tính toán `1000000 / 998078 = 1` và trả về ngay con số **1 FPS** của chính ứng dụng thay vì của Game!
+   - **Giải pháp kỹ thuật**:
+     - Loại bỏ hoàn toàn chính tiến trình ứng dụng (`pid == pidOfSelf` hoặc tên chứa `windows_handheld_tool`) và các tiến trình nền hệ thống.
+     - Ưu tiên đọc tiến trình sở hữu cửa sổ kích hoạt trên cùng (`Foreground Window PID`) thông qua `NativeWindowService.getForegroundProcessId()`, hoặc chọn tiến trình có số lượng khung hình `dwFrames` tăng trưởng nhanh nhất trong chu kỳ đo.
+
+2. **Bản chất của hiện tượng kẹt phím tắt khi khởi động ngầm (`Win32 Message Loop Sleep`)**:
+   - Khi cửa sổ ứng dụng khởi động ở chế độ ẩn hoàn toàn (`Alpha = 0`, `WS_EX_TRANSPARENT`), Flutter Engine trên Windows nhận thấy không có vùng nào cần vẽ lại (`Dirty Region = 0`) và không có thông điệp chuột/bàn phím nào gửi vào `HWND`.
+   - Luồng giao diện Win32 chuyển sang trạng thái ngủ chờ sự kiện (`MsgWaitForMultipleObjectsEx`). Bộ hẹn giờ `Timer.periodic(20ms)` của Dart dựa trên việc phân phối thông điệp trong Message Loop nội bộ nên bị trì hoãn việc quét hàm `GetAsyncKeyState`.
+   - Ngay khi người dùng nhấp vào biểu tượng khay hệ thống, hệ điều hành phát sinh thông điệp `WM_TRAY_NOTIFY` gửi tới luồng, đánh thức vòng lặp Message Loop và kích hoạt chuỗi xử lý.
+   - **Giải pháp kỹ thuật**:
+     - Song song với việc quét trạng thái phần cứng, ứng dụng bắt buộc phải đăng ký phím tắt hệ thống chính thức qua hàm Win32 `RegisterHotKey` (thông qua `hotKeyManager`).
+     - Khi người dùng nhấn tổ hợp phím, nhân hệ điều hành Windows Win32 phát thông điệp cấp cao `WM_HOTKEY` trực tiếp vào hàng đợi tin nhắn của tiến trình, **ngay lập tức đánh thức luồng giao diện đang ngủ mà không cần người dùng phải nhấp vào khay hệ thống**.
+
 
 
 

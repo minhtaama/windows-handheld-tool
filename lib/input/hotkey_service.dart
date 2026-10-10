@@ -234,10 +234,9 @@ class HotkeyService {
       });
     }
 
-    // 3. Đăng ký bổ trợ qua hotkey_manager làm Fallback nếu không nạp được FFI GetAsyncKeyState
-    if (_getAsyncKeyState == null) {
-      await _registerFallbackHotkeys();
-    }
+    // 3. Luôn đăng ký qua hotkey_manager (Win32 RegisterHotKey) để Windows gửi thông điệp WM_HOTKEY
+    // đánh thức luồng giao diện của Flutter ngay cả khi cửa sổ đang ở chế độ ẩn ngầm (Alpha 0)
+    await _registerFallbackHotkeys();
   }
 
   /// Cập nhật tổ hợp phím tắt trong thời gian thực
@@ -259,9 +258,7 @@ class HotkeyService {
       _logger.info('Updated Virtual Keyboard Hotkey: ${_keyboardBinding.label}');
     }
 
-    if (_getAsyncKeyState == null) {
-      await _registerFallbackHotkeys();
-    }
+    await _registerFallbackHotkeys();
   }
 
   // --- QUẢN LÝ CHẾ ĐỘ GHI PHÍM BÀN PHÍM PC TRỰC TIẾP TỪ PHẦN CỨNG (GETASYNCKEYSTATE) ---

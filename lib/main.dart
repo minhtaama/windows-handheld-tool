@@ -66,26 +66,12 @@ void main() async {
   // 2. Khởi tạo Khay hệ thống (System Tray) với đường dẫn icon tuyệt đối
   await _initSystemTray();
 
-  // 3. Khởi tạo Phím tắt toàn cục & Gamepad (Chỉ 1 hotkey duy nhất cho 1 tính năng: PC HOẶC Gamepad)
-  String overlayGamepad = config.get("gamepad.overlay_combo", "BACK + RB");
-  String overlayKeyboard = config.get("hotkey.toggle_overlay", "");
-  if (overlayGamepad.isNotEmpty) {
-    overlayKeyboard = "";
-    config.set("hotkey.toggle_overlay", "");
-  } else if (overlayKeyboard.isNotEmpty) {
-    overlayGamepad = "";
-    config.set("gamepad.overlay_combo", "");
-  }
+  // 3. Khởi tạo Phím tắt toàn cục & Gamepad (Hỗ trợ song song cả Tay cầm lẫn Bàn phím)
+  final overlayGamepad = config.get("gamepad.overlay_combo", "BACK + RB");
+  final overlayKeyboard = config.get("hotkey.toggle_overlay", "Ctrl+Shift+Q");
 
-  String keyboardGamepad = config.get("gamepad.keyboard_combo", "BACK + LB");
-  String keyboardKeyboard = config.get("hotkey.toggle_keyboard", "");
-  if (keyboardGamepad.isNotEmpty) {
-    keyboardKeyboard = "";
-    config.set("hotkey.toggle_keyboard", "");
-  } else if (keyboardKeyboard.isNotEmpty) {
-    keyboardGamepad = "";
-    config.set("gamepad.keyboard_combo", "");
-  }
+  final keyboardGamepad = config.get("gamepad.keyboard_combo", "BACK + LB");
+  final keyboardKeyboard = config.get("hotkey.toggle_keyboard", "Ctrl+Shift+K");
 
   await HotkeyService.init(
     onToggleOverlay: () => OverlayController.instance.toggleOverlay(),

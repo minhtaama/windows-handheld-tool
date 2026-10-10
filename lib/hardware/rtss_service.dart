@@ -3,6 +3,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
 import '../core/logger.dart';
+import '../services/native_window_service.dart';
 import 'hardware_base.dart';
 
 // Định nghĩa con trỏ hàm Win32 API từ kernel32.dll
@@ -386,42 +387,41 @@ class RtssService {
 
       if (appEntrySize == 0 || appArrSize == 0) return null;
 
-      // Duyệt qua mảng AppEntry để tìm game đang hoạt động có PID khác 0
+      final fgPid = NativeWindowService.getForegroundProcessId();
+
+      int? fgFps;
+      int? bestCandidateFps;
+      int latestTime = 0;
+
+      // Duyệt qua mảng AppEntry để tìm game đang hoạt động thực sự (loại trừ chính app và background)
       for (int i = 0; i < appArrSize; i++) {
         final entryOffset = appArrOffset + (i * appEntrySize);
         final entryPtr = data + entryOffset;
 
-        // dwProcessID nằm ở offset 0 (4 byte đầu tiên của RTSS_SHARED_MEMORY_APP_ENTRY)
-        final pid = entryPtr.cast<Uint32>()[0];
-        if (pid != 0) {
-          // dwFrameTime nằm ở offset 280 (thời gian frame tính bằng micro giây - µs)
-          final frameTimeUs = (entryPtr + 280).cast<Uint32>()[0];
-          if (frameTimeUs > 0) {
-            final fps = (1000000.0 / frameTimeUs).round();
-            if (fps > 0 && fps < 1000) return fps;
-          }
+        final entryPid = entryPtr.cast<Uint32>()[0];
+        if (entryPid == 0) continue;
 
-          // Fallback 1: Tính từ dwFrames (offset 276) và chu kỳ đo delta ms (offset 272 - 268)
-          final frames = (entryPtr + 276).cast<Uint32>()[0];
-          final time0 = (entryPtr + 268).cast<Uint32>()[0];
-          final time1 = (entryPtr + 272).cast<Uint32>()[0];
-          final delta = time1 - time0;
-          if (delta > 0 && frames > 0) {
-            final fps = ((frames * 1000) / delta).round();
-            if (fps > 0 && fps < 1000) return fps;
-          }
+        final exeName = _readEntryExeName(entryPtr);
+        if (_isIgnoredProcess(entryPid, exeName)) continue;
 
-          // Fallback 2: Đọc từ thống kê trung bình dwStatFramerateAvg (offset 308, fps * 10)
-          if (appEntrySize >= 312) {
-            final statAvg = (entryPtr + 308).cast<Uint32>()[0];
-            if (statAvg > 0) {
-              return (statAvg / 10).round();
-            }
-          }
+        final fps = _calcFpsFromEntry(entryPtr, appEntrySize);
+        if (fps == null || fps <= 0) continue;
+
+        // Ưu tiên số 1: Trùng khớp với PID của cửa sổ Game đang ở Foreground
+        if (fgPid != 0 && entryPid == fgPid) {
+          fgFps = fps;
+          break;
+        }
+
+        // Ưu tiên số 2: Entry có nhịp render frame mới nhất (time1 gần nhất)
+        final time1 = (entryPtr + 272).cast<Uint32>()[0];
+        if (time1 >= latestTime) {
+          latestTime = time1;
+          bestCandidateFps = fps;
         }
       }
 
-      return null;
+      return fgFps ?? bestCandidateFps;
     } catch (_) {
       return null;
     } finally {
@@ -454,26 +454,37 @@ class RtssService {
       final appArrOffset = data.cast<Uint32>()[3];
       final appArrSize = data.cast<Uint32>()[4];
 
+      if (appEntrySize == 0 || appArrSize == 0) return null;
+
+      final fgPid = NativeWindowService.getForegroundProcessId();
+
+      String? fgName;
+      String? bestCandidateName;
+      int latestTime = 0;
+
       for (int i = 0; i < appArrSize; i++) {
         final entryOffset = appArrOffset + (i * appEntrySize);
         final entryPtr = data + entryOffset;
-        final pid = entryPtr.cast<Uint32>()[0];
+        final entryPid = entryPtr.cast<Uint32>()[0];
 
-        if (pid != 0) {
-          // szName là chuỗi ANSI MAX_PATH (260 byte) nằm ở offset 4
-          final bytes = <int>[];
-          for (int b = 0; b < 260; b++) {
-            final charCode = (entryPtr + 4 + b).cast<Uint8>().value;
-            if (charCode == 0) break;
-            bytes.add(charCode);
-          }
-          final fullPath = utf8.decode(bytes, allowMalformed: true);
-          final exeName = fullPath.split(r'\').last;
-          if (exeName.isNotEmpty) return exeName;
+        if (entryPid == 0) continue;
+
+        final exeName = _readEntryExeName(entryPtr);
+        if (_isIgnoredProcess(entryPid, exeName)) continue;
+
+        if (fgPid != 0 && entryPid == fgPid) {
+          fgName = exeName;
+          break;
+        }
+
+        final time1 = (entryPtr + 272).cast<Uint32>()[0];
+        if (time1 >= latestTime) {
+          latestTime = time1;
+          bestCandidateName = exeName;
         }
       }
 
-      return null;
+      return fgName ?? bestCandidateName;
     } catch (_) {
       return null;
     } finally {
@@ -481,6 +492,59 @@ class RtssService {
       if (handle.address != 0) _closeHandle(handle);
       calloc.free(namePtr);
     }
+  }
+
+  bool _isIgnoredProcess(int entryPid, String exeName) {
+    if (entryPid == pid) return true;
+    final lower = exeName.toLowerCase();
+    if (lower.contains('windows_handheld_tool')) return true;
+    const ignored = [
+      'explorer.exe',
+      'antigravity ide.exe',
+      'cloudflare warp.exe',
+      'presentmon-x64.exe',
+      'taskmgr.exe',
+      'cmd.exe',
+      'powershell.exe',
+      'devenv.exe',
+    ];
+    return ignored.contains(lower);
+  }
+
+  String _readEntryExeName(Pointer<Uint8> entryPtr) {
+    final bytes = <int>[];
+    for (int b = 0; b < 260; b++) {
+      final charCode = (entryPtr + 4 + b).cast<Uint8>().value;
+      if (charCode == 0) break;
+      bytes.add(charCode);
+    }
+    final fullPath = utf8.decode(bytes, allowMalformed: true);
+    return fullPath.split(r'\').last;
+  }
+
+  int? _calcFpsFromEntry(Pointer<Uint8> entryPtr, int appEntrySize) {
+    final frameTimeUs = (entryPtr + 280).cast<Uint32>()[0];
+    if (frameTimeUs > 0) {
+      final fps = (1000000.0 / frameTimeUs).round();
+      if (fps > 0 && fps < 1000) return fps;
+    }
+
+    final frames = (entryPtr + 276).cast<Uint32>()[0];
+    final time0 = (entryPtr + 268).cast<Uint32>()[0];
+    final time1 = (entryPtr + 272).cast<Uint32>()[0];
+    final delta = time1 - time0;
+    if (delta > 0 && frames > 0) {
+      final fps = ((frames * 1000) / delta).round();
+      if (fps > 0 && fps < 1000) return fps;
+    }
+
+    if (appEntrySize >= 312) {
+      final statAvg = (entryPtr + 308).cast<Uint32>()[0];
+      if (statAvg > 0) {
+        return (statAvg / 10).round();
+      }
+    }
+    return null;
   }
 
   /// Tìm đường dẫn tới thư mục cấu hình Profiles của RTSS trên Windows.
