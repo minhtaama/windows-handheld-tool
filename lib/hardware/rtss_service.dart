@@ -3,6 +3,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
 import '../core/logger.dart';
+import '../services/native_window_service.dart';
 import 'hardware_base.dart';
 
 // Định nghĩa con trỏ hàm Win32 API từ kernel32.dll
@@ -29,6 +30,22 @@ typedef _UnmapViewOfFileDart = int Function(Pointer<Void> lpBaseAddress);
 
 typedef _CloseHandleC = Int32 Function(Pointer<Void> hObject);
 typedef _CloseHandleDart = int Function(Pointer<Void> hObject);
+
+// Con trỏ hàm ShellExecuteW từ shell32.dll để khởi chạy tiến trình với UAC Administrator
+typedef _ShellExecuteWC = IntPtr Function(
+    IntPtr hwnd,
+    Pointer<Utf16> lpOperation,
+    Pointer<Utf16> lpFile,
+    Pointer<Utf16> lpParameters,
+    Pointer<Utf16> lpDirectory,
+    Int32 nShowCmd);
+typedef _ShellExecuteWDart = int Function(
+    int hwnd,
+    Pointer<Utf16> lpOperation,
+    Pointer<Utf16> lpFile,
+    Pointer<Utf16> lpParameters,
+    Pointer<Utf16> lpDirectory,
+    int nShowCmd);
 
 // Các hàm Win32 API được xuất bởi RTSSHooks64.dll
 typedef _LoadProfileC = Void Function(Pointer<Uint8> lpProfile);
@@ -57,18 +74,21 @@ class RtssService {
   static final RtssService instance = RtssService._();
   RtssService._() {
     _initFfi();
+    ensureSelfProcessExcluded();
   }
 
   static const int _fileMapRead = 0x0004;
   static const int _fileMapReadWrite = 0x0006; // FILE_MAP_READ | FILE_MAP_WRITE (Tương thích mọi mức đặc quyền UAC)
   static const int _fileMapAllAccess = 0x001F;
-  static const int _rtssSignature = 0x53535452; // 'RTSS' trong mã ASCII Hex (Little Endian)
+  static const int _rtssSignature = 0x52545353; // 'RTSS' trong MSVC C++ 32-bit Multicharacter Literal (0x52545353)
+  static bool _isValidSignature(int sig) => sig == _rtssSignature || sig == 0x53535452;
   static const String _osdAppOwner = 'WindowsHandheldTool';
 
   late final _OpenFileMappingDart _openFileMapping;
   late final _MapViewOfFileDart _mapViewOfFile;
   late final _UnmapViewOfFileDart _unmapViewOfFile;
   late final _CloseHandleDart _closeHandle;
+  _ShellExecuteWDart? _shellExecute;
   bool _ffiLoaded = false;
 
   DynamicLibrary? _rtssHooksDll;
@@ -93,6 +113,12 @@ class RtssService {
       _closeHandle = kernel32
           .lookupFunction<_CloseHandleC, _CloseHandleDart>('CloseHandle');
       _ffiLoaded = true;
+
+      try {
+        final shell32 = DynamicLibrary.open('shell32.dll');
+        _shellExecute = shell32
+            .lookupFunction<_ShellExecuteWC, _ShellExecuteWDart>('ShellExecuteW');
+      } catch (_) {}
     } catch (_) {
       _ffiLoaded = false;
     }
@@ -139,7 +165,7 @@ class RtssService {
     return ptr;
   }
 
-  bool _setHookProfilePropertyDword(String propertyName, int value) {
+  bool _setHookProfilePropertyDword(String propertyName, int value, [String profileName = '']) {
     _initHooksDll();
     if (!_hooksLoaded ||
         _loadProfile == null ||
@@ -150,24 +176,24 @@ class RtssService {
     }
 
     Pointer<Uint8>? namePtr;
-    Pointer<Uint8>? emptyPtr;
+    Pointer<Uint8>? profilePtr;
     Pointer<Uint32>? valPtr;
     try {
-      emptyPtr = _stringToAnsi('');
+      profilePtr = _stringToAnsi(profileName);
       namePtr = _stringToAnsi(propertyName);
       valPtr = calloc<Uint32>();
       valPtr.value = value;
 
-      _loadProfile!(emptyPtr);
+      _loadProfile!(profilePtr);
       final res = _setProfileProperty!(namePtr, valPtr.cast<Uint8>(), 4);
-      _saveProfile!(emptyPtr);
+      _saveProfile!(profilePtr);
       _updateProfiles!();
       return res != 0;
     } catch (e) {
-      _logger.warning('Error setting RTSS hook property $propertyName: $e');
+      _logger.warning('Error setting RTSS hook property $propertyName on $profileName: $e');
       return false;
     } finally {
-      if (emptyPtr != null) calloc.free(emptyPtr);
+      if (profilePtr != null) calloc.free(profilePtr);
       if (namePtr != null) calloc.free(namePtr);
       if (valPtr != null) calloc.free(valPtr);
     }
@@ -208,11 +234,16 @@ class RtssService {
 
     final namePtr = 'RTSSSharedMemoryV2'.toNativeUtf16();
     try {
-      final handle = _openFileMapping(_fileMapRead, 0, namePtr);
+      var handle = _openFileMapping(_fileMapRead, 0, namePtr);
+      if (handle.address == 0) {
+        handle = _openFileMapping(_fileMapAllAccess, 0, namePtr);
+      }
       if (handle.address != 0) {
         _closeHandle(handle);
         return true;
       }
+      return false;
+    } catch (_) {
       return false;
     } finally {
       calloc.free(namePtr);
@@ -234,7 +265,7 @@ class RtssService {
     return false;
   }
 
-  /// Đảm bảo RTSS đang chạy. Nếu chưa chạy, tự động tìm và khởi động RTSS.exe
+  /// Đảm bảo RTSS đang chạy. Áp dụng đa chiến lược khởi động (Process.start, ShellExecuteW, runas, cmd start)
   Future<bool> ensureRunning() async {
     if (isRunning()) {
       _logger.info('RTSS is running in background.');
@@ -244,17 +275,87 @@ class RtssService {
     for (final path in candidateExePaths) {
       if (File(path).existsSync()) {
         try {
-          await Process.start(path, [], runInShell: true, mode: ProcessStartMode.detached);
-          _logger.info('Auto-started RTSS from: $path');
-          await Future.delayed(const Duration(milliseconds: 1500));
-          return isRunning();
+          final dir = File(path).parent.path;
+          bool started = false;
+
+          // Chiến lược 1: Khởi chạy trực tiếp bằng Process.start (khi app đã elevated thì khởi chạy ngay không cần UAC popup)
+          try {
+            final p = await Process.start(
+              path,
+              [],
+              workingDirectory: dir,
+              mode: ProcessStartMode.detached,
+            );
+            started = p.pid > 0;
+            if (started) {
+              _logger.info('Auto-started RTSS directly via Process.start (PID: ${p.pid})');
+            }
+          } catch (e) {
+            _logger.info('Direct Process.start failed, will fallback to Win32 ShellExecute: $e');
+          }
+
+          // Chiến lược 2: Gọi ShellExecuteW với nShowCmd = 7 (SW_SHOWMINNOACTIVE) không tham số
+          if (!started && _shellExecute != null) {
+            final filePtr = path.toNativeUtf16();
+            final dirPtr = dir.toNativeUtf16();
+            try {
+              final res = _shellExecute!(0, nullptr, filePtr, nullptr, dirPtr, 7);
+              if (res > 32) {
+                started = true;
+                _logger.info('Auto-started RTSS via ShellExecuteW (default open): $path');
+              }
+            } finally {
+              calloc.free(filePtr);
+              calloc.free(dirPtr);
+            }
+          }
+
+          // Chiến lược 3: Gọi ShellExecuteW với động từ 'runas' (UAC Elevation)
+          if (!started && _shellExecute != null) {
+            final opPtr = 'runas'.toNativeUtf16();
+            final filePtr = path.toNativeUtf16();
+            final dirPtr = dir.toNativeUtf16();
+            try {
+              final res = _shellExecute!(0, opPtr, filePtr, nullptr, dirPtr, 7);
+              if (res > 32) {
+                started = true;
+                _logger.info('Auto-started RTSS via ShellExecuteW (runas): $path');
+              }
+            } finally {
+              calloc.free(opPtr);
+              calloc.free(filePtr);
+              calloc.free(dirPtr);
+            }
+          }
+
+          // Chiến lược 4: Fallback sang cmd.exe /c start
+          if (!started) {
+            try {
+              final proc = await Process.run('cmd.exe', [
+                '/c',
+                'start',
+                '""',
+                path,
+              ], workingDirectory: dir);
+              _logger.info('Auto-started RTSS via cmd.exe start (ExitCode: ${proc.exitCode})');
+            } catch (_) {}
+          }
+
+          // Chờ tối đa 5 giây (10 x 500ms) để nhân Windows hoàn tất khởi tạo Shared Memory
+          for (int attempt = 0; attempt < 10; attempt++) {
+            await Future.delayed(const Duration(milliseconds: 500));
+            if (isRunning()) {
+              _logger.info('RTSS successfully detected running.');
+              return true;
+            }
+          }
         } catch (e) {
           _logger.warning('Error starting RTSS: $e');
         }
       }
     }
 
-    _logger.warning('RTSS.exe not found for auto-start.');
+    _logger.warning('RTSS.exe not found or failed to start.');
     return false;
   }
 
@@ -278,7 +379,7 @@ class RtssService {
 
       // Đọc Header RTSS_SHARED_MEMORY (4 byte đầu tiên: dwSignature)
       final sig = data.cast<Uint32>()[0];
-      if (sig != _rtssSignature) return null;
+      if (!_isValidSignature(sig)) return null;
 
       final appEntrySize = data.cast<Uint32>()[2];
       final appArrOffset = data.cast<Uint32>()[3];
@@ -286,42 +387,41 @@ class RtssService {
 
       if (appEntrySize == 0 || appArrSize == 0) return null;
 
-      // Duyệt qua mảng AppEntry để tìm game đang hoạt động có PID khác 0
+      final fgPid = NativeWindowService.getForegroundProcessId();
+
+      int? fgFps;
+      int? bestCandidateFps;
+      int latestTime = 0;
+
+      // Duyệt qua mảng AppEntry để tìm game đang hoạt động thực sự (loại trừ chính app và background)
       for (int i = 0; i < appArrSize; i++) {
         final entryOffset = appArrOffset + (i * appEntrySize);
         final entryPtr = data + entryOffset;
 
-        // dwProcessID nằm ở offset 0 (4 byte đầu tiên của RTSS_SHARED_MEMORY_APP_ENTRY)
-        final pid = entryPtr.cast<Uint32>()[0];
-        if (pid != 0) {
-          // dwFrameTime nằm ở offset 280 (thời gian frame tính bằng micro giây - µs)
-          final frameTimeUs = (entryPtr + 280).cast<Uint32>()[0];
-          if (frameTimeUs > 0) {
-            final fps = (1000000.0 / frameTimeUs).round();
-            if (fps > 0 && fps < 1000) return fps;
-          }
+        final entryPid = entryPtr.cast<Uint32>()[0];
+        if (entryPid == 0) continue;
 
-          // Fallback 1: Tính từ dwFrames (offset 276) và chu kỳ đo delta ms (offset 272 - 268)
-          final frames = (entryPtr + 276).cast<Uint32>()[0];
-          final time0 = (entryPtr + 268).cast<Uint32>()[0];
-          final time1 = (entryPtr + 272).cast<Uint32>()[0];
-          final delta = time1 - time0;
-          if (delta > 0 && frames > 0) {
-            final fps = ((frames * 1000) / delta).round();
-            if (fps > 0 && fps < 1000) return fps;
-          }
+        final exeName = _readEntryExeName(entryPtr);
+        if (_isIgnoredProcess(entryPid, exeName)) continue;
 
-          // Fallback 2: Đọc từ thống kê trung bình dwStatFramerateAvg (offset 308, fps * 10)
-          if (appEntrySize >= 312) {
-            final statAvg = (entryPtr + 308).cast<Uint32>()[0];
-            if (statAvg > 0) {
-              return (statAvg / 10).round();
-            }
-          }
+        final fps = _calcFpsFromEntry(entryPtr, appEntrySize);
+        if (fps == null || fps <= 0) continue;
+
+        // Ưu tiên số 1: Trùng khớp với PID của cửa sổ Game đang ở Foreground
+        if (fgPid != 0 && entryPid == fgPid) {
+          fgFps = fps;
+          break;
+        }
+
+        // Ưu tiên số 2: Entry có nhịp render frame mới nhất (time1 gần nhất)
+        final time1 = (entryPtr + 272).cast<Uint32>()[0];
+        if (time1 >= latestTime) {
+          latestTime = time1;
+          bestCandidateFps = fps;
         }
       }
 
-      return null;
+      return fgFps ?? bestCandidateFps;
     } catch (_) {
       return null;
     } finally {
@@ -348,32 +448,43 @@ class RtssService {
 
       final data = map.cast<Uint8>();
       final sig = data.cast<Uint32>()[0];
-      if (sig != _rtssSignature) return null;
+      if (!_isValidSignature(sig)) return null;
 
       final appEntrySize = data.cast<Uint32>()[2];
       final appArrOffset = data.cast<Uint32>()[3];
       final appArrSize = data.cast<Uint32>()[4];
 
+      if (appEntrySize == 0 || appArrSize == 0) return null;
+
+      final fgPid = NativeWindowService.getForegroundProcessId();
+
+      String? fgName;
+      String? bestCandidateName;
+      int latestTime = 0;
+
       for (int i = 0; i < appArrSize; i++) {
         final entryOffset = appArrOffset + (i * appEntrySize);
         final entryPtr = data + entryOffset;
-        final pid = entryPtr.cast<Uint32>()[0];
+        final entryPid = entryPtr.cast<Uint32>()[0];
 
-        if (pid != 0) {
-          // szName là chuỗi ANSI MAX_PATH (260 byte) nằm ở offset 4
-          final bytes = <int>[];
-          for (int b = 0; b < 260; b++) {
-            final charCode = (entryPtr + 4 + b).cast<Uint8>().value;
-            if (charCode == 0) break;
-            bytes.add(charCode);
-          }
-          final fullPath = utf8.decode(bytes, allowMalformed: true);
-          final exeName = fullPath.split(r'\').last;
-          if (exeName.isNotEmpty) return exeName;
+        if (entryPid == 0) continue;
+
+        final exeName = _readEntryExeName(entryPtr);
+        if (_isIgnoredProcess(entryPid, exeName)) continue;
+
+        if (fgPid != 0 && entryPid == fgPid) {
+          fgName = exeName;
+          break;
+        }
+
+        final time1 = (entryPtr + 272).cast<Uint32>()[0];
+        if (time1 >= latestTime) {
+          latestTime = time1;
+          bestCandidateName = exeName;
         }
       }
 
-      return null;
+      return fgName ?? bestCandidateName;
     } catch (_) {
       return null;
     } finally {
@@ -381,6 +492,59 @@ class RtssService {
       if (handle.address != 0) _closeHandle(handle);
       calloc.free(namePtr);
     }
+  }
+
+  bool _isIgnoredProcess(int entryPid, String exeName) {
+    if (entryPid == pid) return true;
+    final lower = exeName.toLowerCase();
+    if (lower.contains('windows_handheld_tool')) return true;
+    const ignored = [
+      'explorer.exe',
+      'antigravity ide.exe',
+      'cloudflare warp.exe',
+      'presentmon-x64.exe',
+      'taskmgr.exe',
+      'cmd.exe',
+      'powershell.exe',
+      'devenv.exe',
+    ];
+    return ignored.contains(lower);
+  }
+
+  String _readEntryExeName(Pointer<Uint8> entryPtr) {
+    final bytes = <int>[];
+    for (int b = 0; b < 260; b++) {
+      final charCode = (entryPtr + 4 + b).cast<Uint8>().value;
+      if (charCode == 0) break;
+      bytes.add(charCode);
+    }
+    final fullPath = utf8.decode(bytes, allowMalformed: true);
+    return fullPath.split(r'\').last;
+  }
+
+  int? _calcFpsFromEntry(Pointer<Uint8> entryPtr, int appEntrySize) {
+    final frameTimeUs = (entryPtr + 280).cast<Uint32>()[0];
+    if (frameTimeUs > 0) {
+      final fps = (1000000.0 / frameTimeUs).round();
+      if (fps > 0 && fps < 1000) return fps;
+    }
+
+    final frames = (entryPtr + 276).cast<Uint32>()[0];
+    final time0 = (entryPtr + 268).cast<Uint32>()[0];
+    final time1 = (entryPtr + 272).cast<Uint32>()[0];
+    final delta = time1 - time0;
+    if (delta > 0 && frames > 0) {
+      final fps = ((frames * 1000) / delta).round();
+      if (fps > 0 && fps < 1000) return fps;
+    }
+
+    if (appEntrySize >= 312) {
+      final statAvg = (entryPtr + 308).cast<Uint32>()[0];
+      if (statAvg > 0) {
+        return (statAvg / 10).round();
+      }
+    }
+    return null;
   }
 
   /// Tìm đường dẫn tới thư mục cấu hình Profiles của RTSS trên Windows.
@@ -419,6 +583,29 @@ class RtssService {
       }
     }
     return null;
+  }
+
+  /// Đảm bảo RTSS không hook và không vẽ OSD lên chính cửa sổ của tiến trình ứng dụng.
+  void ensureSelfProcessExcluded() {
+    final selfExeNames = [
+      'windows_handheld_tool.exe',
+      Platform.resolvedExecutable.split(Platform.pathSeparator).last,
+    ];
+
+    for (final exeName in selfExeNames) {
+      if (exeName.isEmpty) continue;
+      // Ghi trực tiếp cấu hình INI vào thư mục Profiles của RTSS (không gọi _updateProfiles() để tránh làm rung lắc pipeline render của game đang chạy)
+      final profileDir = _findProfileDirectory();
+      if (profileDir != null) {
+        final file = File('$profileDir\\$exeName');
+        try {
+          if (!file.existsSync() || !file.readAsStringSync().contains('EnableHooking=0')) {
+            file.writeAsStringSync('[Hooking]\r\nEnableHooking=0\r\n[OSD]\r\nEnableOSD=0\r\n');
+            _logger.info('Đã tạo profile loại trừ RTSS hook cho $exeName');
+          }
+        } catch (_) {}
+      }
+    }
   }
 
   /// Hàm đọc giá trị INI dùng chung (DRY).
@@ -572,17 +759,22 @@ class RtssService {
   }
 
   /// Bật hoặc tắt lớp phủ OSD trên màn hình game.
-  /// Bật EnableOSD (subsystem OSD), đặt EnableStat = 0 để nhường toàn quyền
-  /// hiển thị cho chuỗi thông số tùy biến từ Shared Memory (tránh số FPS mặc định của RTSS đè lên).
+  /// Bật EnableOSD và duy trì EnableStat = 1 để kích hoạt engine thống kê khung hình RTSS
   bool setOsdEnabled(bool enabled) {
     final val = enabled ? 1 : 0;
     _setHookProfilePropertyDword('EnableOSD', val);
-    _setHookProfilePropertyDword('EnableStat', 0);
+    _setHookProfilePropertyDword('EnableStat', 0); // Đặt 0 để RTSS không tự vẽ số FPS màu cam nội bộ đè lên OSD của app
     _setProfileValues('OSD', {
       'EnableOSD': '$val',
       'EnableStat': '0',
       'ShowForegroundStat': '0',
     });
+    _initHooksDll();
+    if (_hooksLoaded && _updateProfiles != null) {
+      try {
+        _updateProfiles!();
+      } catch (_) {}
+    }
     return true;
   }
 
@@ -660,7 +852,7 @@ class RtssService {
 
       final data = map.cast<Uint8>();
       final sig = data.cast<Uint32>()[0];
-      if (sig != _rtssSignature) return false;
+      if (!_isValidSignature(sig)) return false;
 
       final ver = data.cast<Uint32>()[1];
       final osdEntrySize = data.cast<Uint32>()[5];
@@ -727,40 +919,59 @@ class RtssService {
       final entryOffset = osdArrOffset + (targetSlotIndex * osdEntrySize);
       final entryPtr = data + entryOffset;
 
-      // 1. Ghi tên chủ sở hữu slot szOSDOwner (offset 256, dung lượng 256 byte)
-      final ownerEncoded = utf8.encode(_osdAppOwner);
-      for (int i = 0; i < ownerEncoded.length && i < 255; i++) {
-        (entryPtr + 256 + i).cast<Uint8>().value = ownerEncoded[i];
-      }
-      (entryPtr + 256 + ownerEncoded.length.clamp(0, 255)).cast<Uint8>().value = 0;
-
-      // 2. Ghi chuỗi văn bản OSD theo chuẩn RTSS SDK:
-      final textBytes = utf8.encode(text);
-
-      if (ver >= 0x00020007) {
-        // Với shared memory v2.7 trở lên: Sử dụng szOSDEx (offset 512, 4096 byte) hỗ trợ đầy đủ markup tag
-        const maxLenEx = 4095;
-        for (int i = 0; i < textBytes.length && i < maxLenEx; i++) {
-          (entryPtr + 512 + i).cast<Uint8>().value = textBytes[i];
+      // 1. Kiểm tra cơ chế đồng bộ khóa dwBusy (v2.14+ tại offset 36)
+      Pointer<Int32>? busyPtr;
+      if (ver >= 0x0002000e) {
+        busyPtr = (data + 36).cast<Int32>();
+        // Bit 0 của dwBusy: 1 nếu Renderer RTSS đang khóa đọc bộ đệm để vẽ lên frame game
+        if ((busyPtr.value & 1) != 0) {
+          return false;
         }
-        final endEx = textBytes.length.clamp(0, maxLenEx);
-        (entryPtr + 512 + endEx).cast<Uint8>().value = 0;
-
-        // Xóa sạch szOSD cơ bản (offset 0) để RTSS chỉ đọc szOSDEx mở rộng
-        (entryPtr + 0).cast<Uint8>().value = 0;
-      } else {
-        // Phiên bản cũ hơn v2.7: Ghi vào szOSD cơ bản (offset 0, 256 byte)
-        const maxLenBasic = 255;
-        for (int i = 0; i < textBytes.length && i < maxLenBasic; i++) {
-          (entryPtr + i).cast<Uint8>().value = textBytes[i];
-        }
-        final endBasic = textBytes.length.clamp(0, maxLenBasic);
-        (entryPtr + endBasic).cast<Uint8>().value = 0;
+        busyPtr.value = busyPtr.value | 1; // Chiếm quyền ghi
       }
 
-      // 3. Tăng trường dwOSDFrame (offset 32 trong RTSS_SHARED_MEMORY) để kích hoạt RTSS refresh ngay lập tức
-      final framePtr = (data + 32).cast<Uint32>();
-      framePtr.value = framePtr.value + 1;
+      try {
+        // Ghi tên chủ sở hữu slot szOSDOwner (offset 256, dung lượng 256 byte)
+        final ownerEncoded = utf8.encode(_osdAppOwner);
+        for (int i = 0; i < ownerEncoded.length && i < 255; i++) {
+          (entryPtr + 256 + i).cast<Uint8>().value = ownerEncoded[i];
+        }
+        (entryPtr + 256 + ownerEncoded.length.clamp(0, 255)).cast<Uint8>().value = 0;
+
+        // Ghi chuỗi văn bản OSD theo chuẩn RTSS SDK
+        final textBytes = utf8.encode(text);
+
+        if (ver >= 0x00020007) {
+          // Chuẩn RTSS SDK v2.7+: Bắt buộc đặt szOSD[0] = 0 (chuỗi rỗng) để tránh việc RTSS
+          // render nối tiếp cả szOSD và szOSDEx gây lỗi hiển thị trùng lặp 2 lần!
+          entryPtr.cast<Uint8>().value = 0;
+
+          // Ghi chuỗi đầy đủ vào szOSDEx (offset 512, dung lượng 4096 byte)
+          const maxLenEx = 4095;
+          for (int i = 0; i < textBytes.length && i < maxLenEx; i++) {
+            (entryPtr + 512 + i).cast<Uint8>().value = textBytes[i];
+          }
+          final endEx = textBytes.length.clamp(0, maxLenEx);
+          (entryPtr + 512 + endEx).cast<Uint8>().value = 0;
+        } else {
+          // Fallback cho phiên bản RTSS v2.0 - v2.6 cũ: Ghi vào szOSD cơ bản (tối đa 255 byte)
+          const maxLenBasic = 255;
+          for (int i = 0; i < textBytes.length && i < maxLenBasic; i++) {
+            (entryPtr + i).cast<Uint8>().value = textBytes[i];
+          }
+          final endBasic = textBytes.length.clamp(0, maxLenBasic);
+          (entryPtr + endBasic).cast<Uint8>().value = 0;
+        }
+
+        // Tăng trường dwOSDFrame (offset 32 trong RTSS_SHARED_MEMORY) để kích hoạt RTSS refresh ngay lập tức
+        final framePtr = (data + 32).cast<Uint32>();
+        framePtr.value = framePtr.value + 1;
+      } finally {
+        // Giải phóng khóa dwBusy sau khi hoàn tất ghi
+        if (busyPtr != null) {
+          busyPtr.value = 0;
+        }
+      }
 
       return true;
     } catch (e) {
@@ -796,7 +1007,7 @@ class RtssService {
 
       final data = map.cast<Uint8>();
       final sig = data.cast<Uint32>()[0];
-      if (sig != _rtssSignature) return false;
+      if (!_isValidSignature(sig)) return false;
 
       final osdEntrySize = data.cast<Uint32>()[5];
       final osdArrOffset = data.cast<Uint32>()[6];

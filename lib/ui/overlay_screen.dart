@@ -87,6 +87,9 @@ class _OverlayScreenState extends State<OverlayScreen>
         final panelWidth = (screenWidth * (OverlayController.instance.widthPercent / 100.0))
             .clamp(320.0, 850.0);
 
+        // Panel trải dài toàn dải 100% chiều cao màn hình và phủ đè lên trên thanh Taskbar
+        const bottomPadding = 20.0;
+
         return ExcludeSemantics(
           excluding: true,
           child: IgnorePointer(
@@ -115,9 +118,9 @@ class _OverlayScreenState extends State<OverlayScreen>
                           duration: const Duration(milliseconds: 200),
                           curve: Curves.easeOutCubic,
                           width: panelWidth,
-                          padding: const EdgeInsets.only(
+                          padding: EdgeInsets.only(
                             top: 20,
-                            bottom: 20,
+                            bottom: bottomPadding,
                             right: 16,
                             left: 8,
                           ),

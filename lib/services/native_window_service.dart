@@ -34,9 +34,6 @@ typedef _GetWindowLongPtrWDart = int Function(int hWnd, int nIndex);
 typedef _SetWindowLongPtrWC = IntPtr Function(IntPtr hWnd, Int32 nIndex, IntPtr dwNewLong);
 typedef _SetWindowLongPtrWDart = int Function(int hWnd, int nIndex, int dwNewLong);
 
-typedef _IsWindowVisibleC = Int32 Function(IntPtr hWnd);
-typedef _IsWindowVisibleDart = int Function(int hWnd);
-
 typedef _IsWindowC = Int32 Function(IntPtr hWnd);
 typedef _IsWindowDart = int Function(int hWnd);
 
@@ -62,11 +59,9 @@ class NativeWindowService {
 
   static const int swpNoSize = 0x0001;
   static const int swpNoMove = 0x0002;
-  static const int swpNoZOrder = 0x0004;
   static const int swpNoActivate = 0x0010;
   static const int swpFrameChanged = 0x0020;
   static const int swpShowWindow = 0x0040;
-  static const int swpHideWindow = 0x0080;
 
   static const int gwlExStyle = -20;
   static const int wsExTransparent = 0x00000020;
@@ -83,7 +78,6 @@ class NativeWindowService {
   static _FindWindowWDart? _findWindowW;
   static _SetWindowPosDart? _setWindowPos;
   static _GetSystemMetricsDart? _getSystemMetrics;
-  static _IsWindowVisibleDart? _isWindowVisible;
   static _IsWindowDart? _isWindow;
   static _InvalidateRectDart? _invalidateRect;
   static _GetWindowLongPtrWDart? _getWindowLongPtrW;
@@ -101,7 +95,6 @@ class NativeWindowService {
       _findWindowW = user32.lookupFunction<_FindWindowWC, _FindWindowWDart>('FindWindowW');
       _setWindowPos = user32.lookupFunction<_SetWindowPosC, _SetWindowPosDart>('SetWindowPos');
       _getSystemMetrics = user32.lookupFunction<_GetSystemMetricsC, _GetSystemMetricsDart>('GetSystemMetrics');
-      _isWindowVisible = user32.lookupFunction<_IsWindowVisibleC, _IsWindowVisibleDart>('IsWindowVisible');
       _isWindow = user32.lookupFunction<_IsWindowC, _IsWindowDart>('IsWindow');
       _invalidateRect = user32.lookupFunction<_InvalidateRectC, _InvalidateRectDart>('InvalidateRect');
       _setLayeredWindowAttributes = user32.lookupFunction<_SetLayeredWindowAttributesC, _SetLayeredWindowAttributesDart>('SetLayeredWindowAttributes');
@@ -190,7 +183,7 @@ class NativeWindowService {
   }
 
   /// Hiển thị cửa sổ Fullscreen Transparent Overlay mà KHÔNG cướp Focus của Game
-  static bool showOverlayNoActivate({Size? size, Offset? position}) {
+  static bool showOverlayNoActivate({Size? size}) {
     _ensureInitialized();
     final hwnd = getWindowHandle();
     if (hwnd == 0) {
@@ -202,7 +195,9 @@ class NativeWindowService {
     final width = physicalSize.width.toInt();
     final height = physicalSize.height.toInt();
 
-    // 1. Cấu hình Extended Styles: Bỏ cờ WS_EX_TRANSPARENT để nhận cảm ứng/chuột
+    // 1. Cấu hình Extended Styles: Bỏ cờ WS_EX_TRANSPARENT để nhận cảm ứng/chuột,
+    // duy trì WS_EX_TOOLWINDOW và WS_EX_NOACTIVATE để tuyệt đối không cướp Focus của Game
+    // (ngăn chặn triệt để Game Engine bóp FPS xuống 15 và tránh lỗi DXGI_STATUS_OCCLUDED)
     if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
       try {
         final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
@@ -251,38 +246,12 @@ class NativeWindowService {
         _setWindowLongPtrW!(
           hwnd,
           gwlExStyle,
-          currentExStyle | wsExTransparent | wsExNoActivate,
+          currentExStyle | wsExTransparent | wsExNoActivate | wsExToolWindow,
         );
       } catch (_) {}
     }
 
     _logger.info('Switched Overlay to click-through state (WS_EX_TRANSPARENT, Alpha 0)');
     return true;
-  }
-
-  /// Kiểm tra trạng thái hiển thị của cửa sổ Win32
-  static bool isWindowVisible() {
-    _ensureInitialized();
-    final hwnd = getWindowHandle();
-    if (hwnd == 0) return false;
-    return (_isWindowVisible?.call(hwnd) ?? 0) != 0;
-  }
-
-  /// Tái khẳng định vị thế Topmost của cửa sổ Overlay (chống bị Tablet Taskbar đè lên).
-  /// Hàm cực nhẹ, chỉ cập nhật con trỏ danh sách liên kết DWM mà không thay đổi kích thước hay vẽ lại.
-  static bool reassertTopmost() {
-    _ensureInitialized();
-    final hwnd = getWindowHandle();
-    if (hwnd == 0) return false;
-    final res = _setWindowPos?.call(
-      hwnd,
-      hwndTopMost,
-      0,
-      0,
-      0,
-      0,
-      swpNoActivate | swpNoMove | swpNoSize,
-    );
-    return res != 0;
   }
 }

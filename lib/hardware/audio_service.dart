@@ -88,8 +88,6 @@ public class AudioControl {
       _isSettingVolume = false;
       if (res.exitCode != 0) {
         _logger.warning('Điều chỉnh âm lượng trả về mã lỗi: ${res.exitCode}');
-      } else {
-        _logger.info('Đã cập nhật âm lượng: $target%');
       }
       if (_pendingVolume != null) {
         final next = _pendingVolume!;

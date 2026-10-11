@@ -22,6 +22,8 @@ HHOOK g_hHook = nullptr;
 BOOL g_isOverlayActive = FALSE;
 int g_hookMode = 0; // 0: Borderless, 1: Shared Texture
 HANDLE g_hSharedTexture = nullptr;
+HANDLE g_hSharedTextureBGRA = nullptr;
+HANDLE g_hSharedTextureRGBA = nullptr;
 #pragma data_seg()
 #pragma comment(linker, "/SECTION:.shared,RWS")
 
@@ -214,30 +216,63 @@ HRESULT STDMETHODCALLTYPE Hooked_Present(
     UINT Flags)
 {
     // Nếu đang chạy chế độ Shared Texture Injection và Overlay đang mở
-    if (g_hookMode == OVERLAY_HOOK_MODE_SHARED_TEXTURE && g_isOverlayActive && g_hSharedTexture) {
+    if (g_hookMode == OVERLAY_HOOK_MODE_SHARED_TEXTURE && g_isOverlayActive && (g_hSharedTextureBGRA || g_hSharedTextureRGBA || g_hSharedTexture)) {
         ID3D11Device* pDevice = nullptr;
         if (SUCCEEDED(pThis->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&pDevice))) && pDevice) {
             ID3D11DeviceContext* pContext = nullptr;
             pDevice->GetImmediateContext(&pContext);
             if (pContext) {
-                ID3D11Texture2D* pSharedTexture = nullptr;
-                HRESULT hrOpen = pDevice->OpenSharedResource(
-                    g_hSharedTexture,
-                    __uuidof(ID3D11Texture2D),
-                    reinterpret_cast<void**>(&pSharedTexture)
-                );
+                ID3D11Texture2D* pBackBuffer = nullptr;
+                if (SUCCEEDED(pThis->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer))) && pBackBuffer) {
+                    D3D11_TEXTURE2D_DESC backDesc{};
+                    pBackBuffer->GetDesc(&backDesc);
 
-                if (SUCCEEDED(hrOpen) && pSharedTexture) {
-                    ID3D11Texture2D* pBackBuffer = nullptr;
-                    if (SUCCEEDED(pThis->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer))) && pBackBuffer) {
-                        // Sao chép texture trực tiếp vào BackBuffer trước khi xuất hình
-                        pContext->CopySubresourceRegion(
-                            pBackBuffer, 0, 0, 0, 0,
-                            pSharedTexture, 0, nullptr
-                        );
-                        pBackBuffer->Release();
+                    // Chọn Shared Handle có format phù hợp nhất với BackBuffer của game (R8G8B8A8 vs B8G8R8A8)
+                    HANDLE hSharedToOpen = g_hSharedTexture;
+                    if (backDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+                        backDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ||
+                        backDesc.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS) {
+                        hSharedToOpen = g_hSharedTextureRGBA ? g_hSharedTextureRGBA : (g_hSharedTexture ? g_hSharedTexture : g_hSharedTextureBGRA);
+                    } else {
+                        hSharedToOpen = g_hSharedTextureBGRA ? g_hSharedTextureBGRA : (g_hSharedTexture ? g_hSharedTexture : g_hSharedTextureRGBA);
                     }
-                    pSharedTexture->Release();
+
+                    if (hSharedToOpen) {
+                        ID3D11Texture2D* pSharedTexture = nullptr;
+                        HRESULT hrOpen = pDevice->OpenSharedResource(
+                            hSharedToOpen,
+                            __uuidof(ID3D11Texture2D),
+                            reinterpret_cast<void**>(&pSharedTexture)
+                        );
+
+                        if (SUCCEEDED(hrOpen) && pSharedTexture) {
+                            D3D11_TEXTURE2D_DESC sharedDesc{};
+                            pSharedTexture->GetDesc(&sharedDesc);
+
+                            // Chỉ sao chép vùng Side Dock Panel bên mép phải (khoảng 40% bề rộng màn hình)
+                            // Giữ nguyên vẹn 60% màn hình bên trái cho thế giới game mà không che khuất
+                            UINT panelW = static_cast<UINT>(sharedDesc.Width * 0.40f);
+                            if (panelW > sharedDesc.Width) panelW = sharedDesc.Width;
+
+                            D3D11_BOX box{};
+                            box.left = sharedDesc.Width - panelW;
+                            box.right = sharedDesc.Width;
+                            box.top = 0;
+                            box.bottom = sharedDesc.Height;
+                            box.front = 0;
+                            box.back = 1;
+
+                            UINT destX = backDesc.Width > panelW ? (backDesc.Width - panelW) : 0;
+
+                            // Chép trực tiếp kết cấu Side Panel vào BackBuffer trước khi GPU xuất hình
+                            pContext->CopySubresourceRegion(
+                                pBackBuffer, 0, destX, 0, 0,
+                                pSharedTexture, 0, &box
+                            );
+                            pSharedTexture->Release();
+                        }
+                    }
+                    pBackBuffer->Release();
                 }
                 pContext->Release();
             }
@@ -282,7 +317,27 @@ HRESULT STDMETHODCALLTYPE Hooked_SetFullscreenState(
         return S_OK;
     }
 
-    // Chế độ Shared Texture Injection: Cho phép Game chuyển đổi Fullscreen Exclusive thật sự
+    // Chế độ Shared Texture Injection:
+    // Nếu đã có GPU Shared Texture, cho phép game chạy Fullscreen Exclusive thật sự.
+    // Nếu chưa có kết cấu dùng chung (fallback bảo vệ an toàn), cưỡng bức Borderless để tránh làm biến mất Panel!
+    if (g_hookMode == OVERLAY_HOOK_MODE_SHARED_TEXTURE) {
+        if (!g_hSharedTexture && Fullscreen) {
+            DXGI_SWAP_CHAIN_DESC desc{};
+            if (SUCCEEDED(pThis->GetDesc(&desc)) && desc.OutputWindow) {
+                MakeWindowBorderless(desc.OutputWindow);
+            }
+            if (g_origSetFullscreenState) {
+                g_origSetFullscreenState(pThis, FALSE, nullptr);
+            }
+            return S_OK;
+        }
+
+        if (g_origSetFullscreenState) {
+            return g_origSetFullscreenState(pThis, Fullscreen, pTarget);
+        }
+        return S_OK;
+    }
+
     if (g_origSetFullscreenState) {
         return g_origSetFullscreenState(pThis, Fullscreen, pTarget);
     }
@@ -409,11 +464,14 @@ void HookSwapChain(IDXGISwapChain* pSwapChain) {
     void** vtable = *reinterpret_cast<void***>(pSwapChain);
     if (!vtable) return;
 
-    // 0. Hook Present (Slot 8) - Direct3D Shared Texture Injection
-    if (vtable[8] != Hooked_Present) {
-        PatchVTable(vtable, 8, reinterpret_cast<void*>(Hooked_Present),
-                    reinterpret_cast<void**>(&g_origPresent));
-        OutputDebugStringA("[DXGI-Hook] IDXGISwapChain::Present VTable hooked!\n");
+    // 0. Hook Present (Slot 8) - Chỉ kích hoạt khi chạy chế độ Direct3D Shared Texture Injection
+    // Ở chế độ Borderless, giữ nguyên vẹn Slot 8 để RTSS độc quyền vẽ OSD, tránh xung đột VTable
+    if (g_hookMode == OVERLAY_HOOK_MODE_SHARED_TEXTURE) {
+        if (vtable[8] != Hooked_Present) {
+            PatchVTable(vtable, 8, reinterpret_cast<void*>(Hooked_Present),
+                        reinterpret_cast<void**>(&g_origPresent));
+            OutputDebugStringA("[DXGI-Hook] IDXGISwapChain::Present VTable hooked!\n");
+        }
     }
 
     // 1. Hook SetFullscreenState (Slot 10)
@@ -453,11 +511,6 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(
 
         // 2. Loại bỏ cờ Mode Switch độc quyền
         pDesc->Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
-
-        // 3. Xóa viền cửa sổ game thành Borderless Fullscreen
-        if (pDesc->OutputWindow) {
-            MakeWindowBorderless(pDesc->OutputWindow);
-        }
     }
 
     HRESULT hr = S_OK;
@@ -465,8 +518,10 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(
         hr = g_origCreateSwapChain(pThis, pDevice, pDesc, ppSwapChain);
     }
 
-    // 4. Hook SetFullscreenState, ResizeTarget, ResizeBuffers trên SwapChain mới tạo
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
+        if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS && pDesc && pDesc->OutputWindow) {
+            MakeWindowBorderless(pDesc->OutputWindow);
+        }
         HookSwapChain(*ppSwapChain);
     }
 
@@ -495,10 +550,9 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
         if (pDesc) {
             descCopy = *pDesc;
 
-            // Cưỡng bức chế độ Scaling = DXGI_SCALING_STRETCH (0) để tự động Upscale
-            if (descCopy.Scaling == DXGI_SCALING_NONE) {
-                descCopy.Scaling = DXGI_SCALING_STRETCH;
-            }
+            // TUYỆT ĐỐI KHÔNG ép descCopy.Scaling = DXGI_SCALING_STRETCH!
+            // Mô hình FLIP (FLIP_DISCARD / FLIP_SEQUENTIAL) của D3D12/D3D11 bắt buộc Scaling = DXGI_SCALING_NONE,
+            // nếu ép STRETCH thì DirectX runtime trả về DXGI_ERROR_INVALID_CALL khiến game crash lập tức!
 
             // Loại bỏ cờ Mode Switch độc quyền
             descCopy.Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
@@ -511,10 +565,6 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
             fsDescCopy.Windowed = TRUE;
             pActualFsDesc = &fsDescCopy;
         }
-
-        if (hWnd) {
-            MakeWindowBorderless(hWnd);
-        }
     }
 
     HRESULT hr = S_OK;
@@ -523,6 +573,10 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
     }
 
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
+        // Chỉ chuyển đổi Borderless SAU KHI SwapChain đã khởi tạo thành công để không làm gián đoạn graphics pipeline
+        if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS && hWnd) {
+            MakeWindowBorderless(hWnd);
+        }
         HookSwapChain(*ppSwapChain);
     }
 
@@ -644,9 +698,6 @@ HRESULT WINAPI Hooked_D3D11CreateDeviceAndSwapChain(
         modifiedDesc = *pSwapChainDesc;
         modifiedDesc.Windowed = TRUE;
         modifiedDesc.Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
-        if (modifiedDesc.OutputWindow) {
-            MakeWindowBorderless(modifiedDesc.OutputWindow);
-        }
         pActualDesc = &modifiedDesc;
     }
 
@@ -658,6 +709,9 @@ HRESULT WINAPI Hooked_D3D11CreateDeviceAndSwapChain(
     }
 
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
+        if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS && pSwapChainDesc && pSwapChainDesc->OutputWindow) {
+            MakeWindowBorderless(pSwapChainDesc->OutputWindow);
+        }
         HookSwapChain(*ppSwapChain);
     }
 
@@ -809,6 +863,220 @@ DXGI_HOOK_API int WINAPI GetOverlayHookMode(void) {
 DXGI_HOOK_API void WINAPI SetSharedTextureHandle(HANDLE hSharedTexture) {
     g_hSharedTexture = hSharedTexture;
     OutputDebugStringA("[DXGI-Hook] SetSharedTextureHandle updated\n");
+}
+
+DXGI_HOOK_API HANDLE WINAPI GetSharedTextureHandle(void) {
+    return g_hSharedTexture;
+}
+
+// =========================================================================
+// Host Direct3D 11 Texture Capture Pipeline (Dành cho Ứng dụng Flutter)
+// =========================================================================
+
+namespace {
+ID3D11Device*        g_pHostDevice = nullptr;
+ID3D11DeviceContext* g_pHostContext = nullptr;
+ID3D11Texture2D*     g_pHostTexture = nullptr;      // Format B8G8R8A8_UNORM
+ID3D11Texture2D*     g_pHostTextureRGBA = nullptr;  // Format R8G8B8A8_UNORM
+HDC                  g_hHostMemDC = nullptr;
+HBITMAP              g_hHostBitmap = nullptr;
+void*                g_pHostBits = nullptr;
+void*                g_pHostBitsRGBA = nullptr;
+UINT                 g_hostWidth = 0;
+UINT                 g_hostHeight = 0;
+} // namespace
+
+DXGI_HOOK_API void WINAPI ReleaseOverlaySharedTexture(void) {
+    if (g_hHostBitmap) {
+        DeleteObject(g_hHostBitmap);
+        g_hHostBitmap = nullptr;
+        g_pHostBits = nullptr;
+    }
+    if (g_pHostBitsRGBA) {
+        free(g_pHostBitsRGBA);
+        g_pHostBitsRGBA = nullptr;
+    }
+    if (g_hHostMemDC) {
+        DeleteDC(g_hHostMemDC);
+        g_hHostMemDC = nullptr;
+    }
+    if (g_pHostTextureRGBA) {
+        g_pHostTextureRGBA->Release();
+        g_pHostTextureRGBA = nullptr;
+    }
+    if (g_pHostTexture) {
+        g_pHostTexture->Release();
+        g_pHostTexture = nullptr;
+    }
+    if (g_pHostContext) {
+        g_pHostContext->Release();
+        g_pHostContext = nullptr;
+    }
+    if (g_pHostDevice) {
+        g_pHostDevice->Release();
+        g_pHostDevice = nullptr;
+    }
+    g_hSharedTexture = nullptr;
+    g_hSharedTextureBGRA = nullptr;
+    g_hSharedTextureRGBA = nullptr;
+    g_hostWidth = 0;
+    g_hostHeight = 0;
+    OutputDebugStringA("[DXGI-Hook] ReleaseOverlaySharedTexture: Released host resources\n");
+}
+
+DXGI_HOOK_API BOOL WINAPI CreateOverlaySharedTexture(UINT width, UINT height) {
+    if (width == 0 || height == 0) return FALSE;
+
+    ReleaseOverlaySharedTexture();
+
+    D3D_FEATURE_LEVEL featureLevels[] = {
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0
+    };
+    D3D_FEATURE_LEVEL actualLevel;
+
+    HRESULT hr = D3D11CreateDevice(
+        nullptr,
+        D3D_DRIVER_TYPE_HARDWARE,
+        nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        featureLevels,
+        ARRAYSIZE(featureLevels),
+        D3D11_SDK_VERSION,
+        &g_pHostDevice,
+        &actualLevel,
+        &g_pHostContext
+    );
+
+    if (FAILED(hr) || !g_pHostDevice) {
+        OutputDebugStringA("[DXGI-Hook] CreateOverlaySharedTexture: D3D11CreateDevice failed\n");
+        return FALSE;
+    }
+
+    // 1. Tạo GPU Shared Texture chuẩn B8G8R8A8_UNORM
+    D3D11_TEXTURE2D_DESC descBGRA{};
+    descBGRA.Width = width;
+    descBGRA.Height = height;
+    descBGRA.MipLevels = 1;
+    descBGRA.ArraySize = 1;
+    descBGRA.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    descBGRA.SampleDesc.Count = 1;
+    descBGRA.SampleDesc.Quality = 0;
+    descBGRA.Usage = D3D11_USAGE_DEFAULT;
+    descBGRA.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    descBGRA.CPUAccessFlags = 0;
+    descBGRA.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+
+    hr = g_pHostDevice->CreateTexture2D(&descBGRA, nullptr, &g_pHostTexture);
+    if (FAILED(hr) || !g_pHostTexture) {
+        OutputDebugStringA("[DXGI-Hook] CreateOverlaySharedTexture: CreateTexture2D (BGRA) failed\n");
+        ReleaseOverlaySharedTexture();
+        return FALSE;
+    }
+
+    IDXGIResource* pResourceBGRA = nullptr;
+    hr = g_pHostTexture->QueryInterface(__uuidof(IDXGIResource), reinterpret_cast<void**>(&pResourceBGRA));
+    if (SUCCEEDED(hr) && pResourceBGRA) {
+        HANDLE hShared = nullptr;
+        if (SUCCEEDED(pResourceBGRA->GetSharedHandle(&hShared))) {
+            g_hSharedTextureBGRA = hShared;
+            g_hSharedTexture = hShared;
+            OutputDebugStringA("[DXGI-Hook] CreateOverlaySharedTexture: SharedHandle (BGRA) created successfully\n");
+        }
+        pResourceBGRA->Release();
+    }
+
+    // 2. Tạo GPU Shared Texture chuẩn R8G8B8A8_UNORM dành cho các tựa game DirectX chuẩn RGBA
+    D3D11_TEXTURE2D_DESC descRGBA = descBGRA;
+    descRGBA.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    hr = g_pHostDevice->CreateTexture2D(&descRGBA, nullptr, &g_pHostTextureRGBA);
+    if (SUCCEEDED(hr) && g_pHostTextureRGBA) {
+        IDXGIResource* pResourceRGBA = nullptr;
+        hr = g_pHostTextureRGBA->QueryInterface(__uuidof(IDXGIResource), reinterpret_cast<void**>(&pResourceRGBA));
+        if (SUCCEEDED(hr) && pResourceRGBA) {
+            HANDLE hSharedRGBA = nullptr;
+            if (SUCCEEDED(pResourceRGBA->GetSharedHandle(&hSharedRGBA))) {
+                g_hSharedTextureRGBA = hSharedRGBA;
+                OutputDebugStringA("[DXGI-Hook] CreateOverlaySharedTexture: SharedHandle (RGBA) created successfully\n");
+            }
+            pResourceRGBA->Release();
+        }
+    }
+
+    // Tạo GDI Memory DC & 32-bit DIB Bitmap để capture cửa sổ Flutter
+    HDC screenDC = GetDC(nullptr);
+    g_hHostMemDC = CreateCompatibleDC(screenDC);
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -static_cast<LONG>(height); // Top-down DIB
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    g_hHostBitmap = CreateDIBSection(g_hHostMemDC, &bmi, DIB_RGB_COLORS, &g_pHostBits, nullptr, 0);
+    if (g_hHostBitmap) {
+        SelectObject(g_hHostMemDC, g_hHostBitmap);
+    }
+    ReleaseDC(nullptr, screenDC);
+
+    // Cấp phát bộ đệm CPU RGBA để chuyển đổi pixel màu nhanh cho texture RGBA
+    g_pHostBitsRGBA = malloc(static_cast<size_t>(width) * height * 4);
+
+    g_hostWidth = width;
+    g_hostHeight = height;
+    return (g_hSharedTextureBGRA != nullptr || g_hSharedTextureRGBA != nullptr);
+}
+
+DXGI_HOOK_API BOOL WINAPI UpdateOverlaySharedTextureFromHwnd(HWND hWnd) {
+    if (!hWnd || !IsWindow(hWnd)) {
+        return FALSE;
+    }
+
+    // Tự động phục hồi hoặc khởi tạo kết cấu nếu chưa có
+    if (!g_pHostTexture || !g_pHostContext || !g_pHostBits || !g_hHostMemDC) {
+        RECT rc{};
+        GetClientRect(hWnd, &rc);
+        UINT w = rc.right - rc.left;
+        UINT h = rc.bottom - rc.top;
+        if (w == 0 || h == 0) {
+            w = static_cast<UINT>(GetSystemMetrics(SM_CXSCREEN));
+            h = static_cast<UINT>(GetSystemMetrics(SM_CYSCREEN));
+        }
+        if (!CreateOverlaySharedTexture(w, h)) {
+            return FALSE;
+        }
+    }
+
+    // Chụp trực tiếp bề mặt Render của cửa sổ Flutter vào DIB Section
+    BOOL printed = PrintWindow(hWnd, g_hHostMemDC, 2 /* PW_RENDERFULLCONTENT */);
+    if (!printed) {
+        HDC wndDC = GetDC(hWnd);
+        if (wndDC) {
+            BitBlt(g_hHostMemDC, 0, 0, g_hostWidth, g_hostHeight, wndDC, 0, 0, SRCCOPY);
+            ReleaseDC(hWnd, wndDC);
+        }
+    }
+
+    // 1. Nạp dữ liệu BGRA vào GPU VRAM Direct3D 11 Texture BGRA
+    UINT rowPitch = g_hostWidth * 4;
+    g_pHostContext->UpdateSubresource(g_pHostTexture, 0, nullptr, g_pHostBits, rowPitch, 0);
+
+    // 2. Swizzle nhanh kênh màu B và R sang RGBA và nạp vào Texture RGBA
+    if (g_pHostTextureRGBA && g_pHostBitsRGBA && g_pHostBits) {
+        const uint32_t* src = static_cast<const uint32_t*>(g_pHostBits);
+        uint32_t* dst = static_cast<uint32_t*>(g_pHostBitsRGBA);
+        size_t totalPixels = static_cast<size_t>(g_hostWidth) * g_hostHeight;
+        for (size_t i = 0; i < totalPixels; ++i) {
+            uint32_t p = src[i];
+            dst[i] = (p & 0xFF00FF00) | ((p & 0x00FF0000) >> 16) | ((p & 0x000000FF) << 16);
+        }
+        g_pHostContext->UpdateSubresource(g_pHostTextureRGBA, 0, nullptr, g_pHostBitsRGBA, rowPitch, 0);
+    }
+
+    return TRUE;
 }
 
 DXGI_HOOK_API BOOL WINAPI InjectDxgiHook(DWORD dwProcessId) {

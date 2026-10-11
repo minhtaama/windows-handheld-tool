@@ -19,7 +19,6 @@ import '../services/system_optimizer.dart';
 import '../services/virtual_keyboard_service.dart';
 import '../services/autostart_service.dart';
 import '../services/dxgi_hook_service.dart';
-import '../services/native_window_service.dart';
 import '../services/overlay_controller.dart';
 import '../services/rtss_installer_service.dart';
 import '../services/system_telemetry_service.dart';
@@ -144,23 +143,23 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     final savedFps = widget.config.get("hardware.rtss.fps_limit", 60);
     _fpsLimit = _rtssCtrl.isAvailable() ? _rtssCtrl.getValue() : savedFps;
     _rtssOsdEnabled = widget.config.get("hardware.rtss.osd_enabled", true);
-    if (_rtssCtrl.isAvailable()) {
-      _rtssOsdEnabled = _rtssCtrl.isOsdEnabled();
-    }
     _rtssOsdZoom = widget.config.get("hardware.rtss.osd_zoom", 2);
-    if (_rtssCtrl.isAvailable()) {
-      _rtssOsdZoom = _rtssCtrl.getOsdZoom();
-    }
     final savedOsdPos = widget.config.get(
       "hardware.rtss.osd_position",
       "topLeft",
     );
     _rtssOsdPosition = RtssOsdPosition.values.firstWhere(
       (p) => p.name == savedOsdPos,
-      orElse: () => _rtssCtrl.isAvailable()
-          ? _rtssCtrl.getOsdPosition()
-          : RtssOsdPosition.topLeft,
+      orElse: () => RtssOsdPosition.topLeft,
     );
+    if (_rtssCtrl.isAvailable()) {
+      _rtssCtrl.setOsdEnabled(_rtssOsdEnabled);
+      _rtssCtrl.setOsdZoom(_rtssOsdZoom);
+      _rtssCtrl.setOsdPosition(_rtssOsdPosition);
+      if (_rtssOsdEnabled) {
+        _refreshOsdText();
+      }
+    }
     _rtssOsdMetrics = RtssOsdMetricsConfig.fromConfig(widget.config);
     _touchEnabled = TouchscreenService.isEnabled;
     _autoStartEnabled = AutostartService.instance.isEnabled;
@@ -429,7 +428,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   void _onGamepadButton(GamepadButton button) {
     if (!mounted || !OverlayController.instance.isVisible) return;
-    NativeWindowService.reassertTopmost();
 
     switch (button) {
       case GamepadButton.lb:
@@ -1027,6 +1025,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         _rtssCtrl.setValue(_fpsLimit);
         _rtssCtrl.setOsdZoom(_rtssOsdZoom);
         _rtssCtrl.setOsdPosition(_rtssOsdPosition);
+        _refreshOsdText();
       }
     }
   }
@@ -1069,10 +1068,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   @override
   Widget build(BuildContext context) {
-    return Listener(
-      onPointerDown: (_) => NativeWindowService.reassertTopmost(),
-      behavior: HitTestBehavior.translucent,
-      child: Column(
+    return Column(
         children: [
           // 1. Thanh Tab Bar nổi phía trên (Compact Mode với 4 Tab)
           AppTabBar(
@@ -1129,8 +1125,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   /// Trả về nội dung trang tương ứng với Tab được chọn

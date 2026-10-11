@@ -68,6 +68,18 @@ DXGI_HOOK_API int WINAPI GetOverlayHookMode(void);
 /// Thiết lập con trỏ tài nguyên GPU được chia sẻ (D3D11 Shared Texture Handle)
 DXGI_HOOK_API void WINAPI SetSharedTextureHandle(HANDLE hSharedTexture);
 
+/// Lấy con trỏ tài nguyên GPU được chia sẻ hiện tại
+DXGI_HOOK_API HANDLE WINAPI GetSharedTextureHandle(void);
+
+/// Khởi tạo kết cấu Direct3D 11 dùng chung trên tiến trình Host (Ứng dụng Flutter)
+DXGI_HOOK_API BOOL WINAPI CreateOverlaySharedTexture(UINT width, UINT height);
+
+/// Giải phóng kết cấu Direct3D 11 dùng chung trên tiến trình Host
+DXGI_HOOK_API void WINAPI ReleaseOverlaySharedTexture(void);
+
+/// Chụp khung hình từ cửa sổ Flutter và nạp trực tiếp vào GPU VRAM Shared Texture
+DXGI_HOOK_API BOOL WINAPI UpdateOverlaySharedTextureFromHwnd(HWND hWnd);
+
 #ifdef __cplusplus
 }
 #endif
