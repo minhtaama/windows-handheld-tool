@@ -590,20 +590,8 @@ HRESULT STDMETHODCALLTYPE Hooked_SetFullscreenState(
     }
 
     // Chế độ Shared Texture Injection:
-    // Nếu đã có GPU Shared Texture, cho phép game chạy Fullscreen Exclusive thật sự.
-    // Nếu chưa có kết cấu dùng chung (fallback bảo vệ an toàn), cưỡng bức Borderless để tránh làm biến mất Panel!
+    // Tôn trọng hoàn toàn thiết lập Fullscreen Exclusive hoặc Windowed của Game
     if (g_hookMode == OVERLAY_HOOK_MODE_SHARED_TEXTURE) {
-        if (!g_hSharedTexture && Fullscreen) {
-            DXGI_SWAP_CHAIN_DESC desc{};
-            if (SUCCEEDED(pThis->GetDesc(&desc)) && desc.OutputWindow) {
-                MakeWindowBorderless(desc.OutputWindow);
-            }
-            if (g_origSetFullscreenState) {
-                g_origSetFullscreenState(pThis, FALSE, nullptr);
-            }
-            return S_OK;
-        }
-
         if (g_origSetFullscreenState) {
             return g_origSetFullscreenState(pThis, Fullscreen, pTarget);
         }
@@ -617,12 +605,12 @@ HRESULT STDMETHODCALLTYPE Hooked_SetFullscreenState(
 }
 
 // Hook hàm ResizeTarget trên SwapChain (Slot 14)
-// Tự động kéo dãn (Dynamic Upscaling) bất kỳ độ phân giải nào (720p, 800p, 1080p, 2K, 4K)
+// Bảo toàn độ phân giải render thực tế của game (720p, 800p, 1080p), chỉ kéo dãn khung cửa sổ ngoài
 HRESULT STDMETHODCALLTYPE Hooked_ResizeTarget(
     IDXGISwapChain* pThis,
     const DXGI_MODE_DESC* pNewTargetParameters)
 {
-    OutputDebugStringA("[DXGI-Hook] ResizeTarget called (Handling Dynamic Resolution scaling)\n");
+    OutputDebugStringA("[DXGI-Hook] ResizeTarget called (Preserving native render resolution)\n");
 
     if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS) {
         HWND hWnd = nullptr;
@@ -631,29 +619,10 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeTarget(
             hWnd = desc.OutputWindow;
         }
 
-        // Lấy kích thước vật lý thực tế động của màn hình hiện tại
-        HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO mi = { sizeof(MONITORINFO) };
-        UINT screenW = static_cast<UINT>(GetSystemMetrics(SM_CXSCREEN));
-        UINT screenH = static_cast<UINT>(GetSystemMetrics(SM_CYSCREEN));
-        if (GetMonitorInfo(hMon, &mi)) {
-            screenW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
-            screenH = static_cast<UINT>(mi.rcMonitor.bottom - mi.rcMonitor.top);
-        }
-
-        // Ghi đè tham số modeDesc sang độ phân giải thực tế của màn hình để cửa sổ không bị thu nhỏ
-        DXGI_MODE_DESC modifiedMode{};
-        const DXGI_MODE_DESC* pActualMode = pNewTargetParameters;
-        if (pNewTargetParameters) {
-            modifiedMode = *pNewTargetParameters;
-            modifiedMode.Width = screenW;
-            modifiedMode.Height = screenH;
-            pActualMode = &modifiedMode;
-        }
-
+        // Truyền nguyên bản tham số độ phân giải của game vào hàm gốc để không bị ép tải 1080p native
         HRESULT hr = S_OK;
         if (g_origResizeTarget) {
-            hr = g_origResizeTarget(pThis, pActualMode);
+            hr = g_origResizeTarget(pThis, pNewTargetParameters);
         }
 
         if (hWnd) {
@@ -669,6 +638,7 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeTarget(
     }
     return S_OK;
 }
+
 
 // Hook hàm ResizeBuffers trên SwapChain (Slot 13)
 HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(
@@ -736,14 +706,14 @@ void HookSwapChain(IDXGISwapChain* pSwapChain) {
     void** vtable = *reinterpret_cast<void***>(pSwapChain);
     if (!vtable) return;
 
-    // 0. Hook Present (Slot 8) - Chỉ kích hoạt khi chạy chế độ Direct3D Shared Texture Injection
-    // Ở chế độ Borderless, giữ nguyên vẹn Slot 8 để RTSS độc quyền vẽ OSD, tránh xung đột VTable
-    if (g_hookMode == OVERLAY_HOOK_MODE_SHARED_TEXTURE) {
-        if (vtable[8] != Hooked_Present) {
-            PatchVTable(vtable, 8, reinterpret_cast<void*>(Hooked_Present),
-                        reinterpret_cast<void**>(&g_origPresent));
-            OutputDebugStringA("[DXGI-Hook] IDXGISwapChain::Present VTable hooked!\n");
-        }
+    // 0. Hook Present (Slot 8)
+    // Hooked_Present có cơ chế bảo vệ: chỉ chạy render khi g_hookMode == 1 && g_isOverlayActive && hShared.
+    // Khi ở chế độ Borderless hoặc panel đóng, chỉ tốn 1 phép kiểm tra điều kiện rồi gọi hàm gốc,
+    // đảm bảo 0 overhead hiệu năng và luôn sẵn sàng ngay khi người dùng chuyển sang Shared Texture.
+    if (vtable[8] != Hooked_Present) {
+        PatchVTable(vtable, 8, reinterpret_cast<void*>(Hooked_Present),
+                    reinterpret_cast<void**>(&g_origPresent));
+        OutputDebugStringA("[DXGI-Hook] IDXGISwapChain::Present VTable hooked!\n");
     }
 
     // 1. Hook SetFullscreenState (Slot 10)
@@ -1427,9 +1397,14 @@ DXGI_HOOK_API BOOL WINAPI MakeWindowBorderless(HWND hWnd) {
     SetWindowPos(hWnd, HWND_TOP, screenX, screenY, screenW, screenH,
                  SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
+    // 3. Đảm bảo cửa sổ game nhận Foreground Focus để tránh bị engine bóp FPS khi chạy nền (15-20 FPS)
+    SetForegroundWindow(hWnd);
+    SetFocus(hWnd);
+
     OutputDebugStringA("[DXGI-Hook] Window converted to Borderless Fullscreen successfully!\n");
     return TRUE;
 }
+
 
 // =========================================================================
 // Proxy DXGI Export Functions

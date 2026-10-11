@@ -82,6 +82,16 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   final Map<int, GlobalKey> _itemKeys = {};
 
   GlobalKey _getItemKey(int index) {
+    if (_selectedTabIndex == 3) {
+      if (index == 6) {
+        _itemKeys[6] = _overlayHotkeyKey;
+        return _overlayHotkeyKey;
+      }
+      if (index == 7) {
+        _itemKeys[7] = _virtualKeyboardHotkeyKey;
+        return _virtualKeyboardHotkeyKey;
+      }
+    }
     return _itemKeys.putIfAbsent(index, () => GlobalKey());
   }
 
@@ -392,6 +402,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         _selectedTabIndex = newIndex;
         _focusedIndex = 0;
         _itemKeys.clear();
+        if (newIndex == 3) {
+          _itemKeys[6] = _overlayHotkeyKey;
+          _itemKeys[7] = _virtualKeyboardHotkeyKey;
+        }
       });
       if (_scrollController.hasClients) {
         _scrollController.jumpTo(0);
@@ -1144,11 +1158,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
               DxgiHookService.instance.isHookActive ||
               DxgiHookService.instance.isEnabled,
           isGamepadConnected: GamepadService.isConnected,
-          overlayHotkeyTileKey: _overlayHotkeyKey,
           overlayHotkeyDevice: _overlayHotkeyDevice,
           overlayHotkey: _overlayHotkey,
           onOverlayHotkeyChanged: _updateOverlayHotkey,
-          virtualKeyboardHotkeyTileKey: _virtualKeyboardHotkeyKey,
           virtualKeyboardHotkeyDevice: _virtualKeyboardHotkeyDevice,
           virtualKeyboardHotkey: _virtualKeyboardHotkey,
           onVirtualKeyboardHotkeyChanged: _updateVirtualKeyboardHotkey,

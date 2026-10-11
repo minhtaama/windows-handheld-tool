@@ -37,12 +37,10 @@ class SettingsTab extends StatelessWidget {
   final bool isGamepadConnected;
 
   // Cấu hình Phím tắt Đơn nhất (Bàn phím PC HOẶC Gamepad)
-  final GlobalKey<HotkeyTileState>? overlayHotkeyTileKey;
   final String overlayHotkeyDevice;
   final String overlayHotkey;
   final void Function(String device, String hotkey) onOverlayHotkeyChanged;
 
-  final GlobalKey<HotkeyTileState>? virtualKeyboardHotkeyTileKey;
   final String virtualKeyboardHotkeyDevice;
   final String virtualKeyboardHotkey;
   final void Function(String device, String hotkey)
@@ -72,11 +70,9 @@ class SettingsTab extends StatelessWidget {
     required this.isTdpHardwareActive,
     required this.isDxgiHookActive,
     required this.isGamepadConnected,
-    this.overlayHotkeyTileKey,
     required this.overlayHotkeyDevice,
     required this.overlayHotkey,
     required this.onOverlayHotkeyChanged,
-    this.virtualKeyboardHotkeyTileKey,
     required this.virtualKeyboardHotkeyDevice,
     required this.virtualKeyboardHotkey,
     required this.onVirtualKeyboardHotkeyChanged,
@@ -189,7 +185,7 @@ class SettingsTab extends StatelessWidget {
 
         // Phím tắt mở Quick Settings (Đơn nhất: Bàn phím PC HOẶC Gamepad)
         HotkeyTile(
-          key: overlayHotkeyTileKey ?? getItemKey(6),
+          key: getItemKey(6),
           icon: Icons.dashboard_customize_rounded,
           title: "Phím tắt mở Quick Settings",
           device: overlayHotkeyDevice,
@@ -202,7 +198,7 @@ class SettingsTab extends StatelessWidget {
 
         // Phím tắt mở Bàn phím ảo (Đơn nhất: Bàn phím PC HOẶC Gamepad)
         HotkeyTile(
-          key: virtualKeyboardHotkeyTileKey ?? getItemKey(7),
+          key: getItemKey(7),
           icon: Icons.keyboard_alt_rounded,
           title: "Phím tắt mở Bàn phím ảo",
           device: virtualKeyboardHotkeyDevice,
@@ -343,7 +339,7 @@ class SettingsTab extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      "v1.2.0 (Beta)",
+                      "v1.2.0-oct11 (Beta)",
                       style: AppTheme.caption.copyWith(
                         color: AppTheme.background,
                       ),

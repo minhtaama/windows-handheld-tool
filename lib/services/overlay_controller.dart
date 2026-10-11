@@ -72,13 +72,20 @@ class OverlayController extends ChangeNotifier {
         }
       }
 
-      // 2. Hiển thị cửa sổ Fullscreen Transparent Overlay ở trạng thái SWP_NOACTIVATE & Always-on-Top
-      NativeWindowService.showOverlayNoActivate();
+      // 2. Hiển thị cửa sổ theo chế độ Hook tương ứng
+      if (DxgiHookService.instance.hookMode == OverlayHookMode.dxgiBorderless) {
+        // Chế độ Borderless: Hiển thị cửa sổ Fullscreen Transparent Overlay (SWP_NOACTIVATE & Always-on-Top)
+        NativeWindowService.showOverlayNoActivate();
+      } else {
+        // Chế độ Shared Texture: Chuẩn bị cửa sổ ngầm (HWND_BOTTOM, alpha = 0) để PrintWindow chụp hình,
+        // TUYỆT ĐỐI không đưa lên Topmost trên Desktop để bảo vệ quyền Fullscreen Exclusive của Game
+        NativeWindowService.prepareWindowForSharedTextureCapture();
+      }
 
       // 3. Kích hoạt hoạt cảnh trượt từ mép phải vào
       onAnimateShow?.call();
 
-      logger.info('Đã mở Side Dock Panel (Fullscreen Transparent Overlay, Gamepad Muted in Game).');
+      logger.info('Đã mở Side Dock Panel (Mode: ${DxgiHookService.instance.hookMode.name}, Gamepad Muted in Game).');
     } catch (e) {
       logger.error('Lỗi khi mở Overlay', e);
     }
@@ -102,8 +109,14 @@ class OverlayController extends ChangeNotifier {
         await onAnimateHide!();
       }
 
-      // 4. Chuyển cửa sổ sang chế độ xuyên thấu (WS_EX_TRANSPARENT)
-      NativeWindowService.hideOverlayWindow();
+      // 4. Xử lý cửa sổ theo chế độ Hook tương ứng
+      if (DxgiHookService.instance.hookMode == OverlayHookMode.dxgiBorderless) {
+        // Chế độ Borderless: Rút hoàn toàn cửa sổ bằng SW_HIDE để mở khóa DWM iFlip cho Game
+        NativeWindowService.hideOverlayWindow();
+      } else {
+        // Chế độ Shared Texture: Duy trì trạng thái ngầm ở đáy Z-order với alpha = 0
+        NativeWindowService.prepareWindowForSharedTextureCapture();
+      }
 
       logger.info('Đã đóng Side Dock Panel (Gamepad restored in Game).');
     } catch (e) {

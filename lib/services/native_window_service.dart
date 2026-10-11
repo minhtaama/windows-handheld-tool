@@ -49,6 +49,9 @@ typedef _GetForegroundWindowDart = int Function();
 typedef _GetWindowThreadProcessIdC = Uint32 Function(IntPtr hWnd, Pointer<Uint32> lpdwProcessId);
 typedef _GetWindowThreadProcessIdDart = int Function(int hWnd, Pointer<Uint32> lpdwProcessId);
 
+typedef _ShowWindowC = Int32 Function(IntPtr hWnd, Int32 nCmdShow);
+typedef _ShowWindowDart = int Function(int hWnd, int nCmdShow);
+
 /// Dịch vụ quản lý cửa sổ Native Win32 tối ưu cho Gaming Overlay chuẩn Fullscreen Transparent Overlay.
 /// Bao phủ toàn màn hình cố định và sử dụng SWP_NOACTIVATE
 /// để đảm bảo không cướp Focus của Game (chống văng/minimize game DirectX).
@@ -56,12 +59,16 @@ class NativeWindowService {
   static const _logger = AppLogger('NativeWindowService');
 
   static const int hwndTopMost = -1;
+  static const int hwndBottom = 1;
 
   static const int swpNoSize = 0x0001;
   static const int swpNoMove = 0x0002;
   static const int swpNoActivate = 0x0010;
   static const int swpFrameChanged = 0x0020;
   static const int swpShowWindow = 0x0040;
+
+  static const int swHide = 0;
+  static const int swShowNoActivate = 8;
 
   static const int gwlExStyle = -20;
   static const int wsExTransparent = 0x00000020;
@@ -85,6 +92,7 @@ class NativeWindowService {
   static _SetLayeredWindowAttributesDart? _setLayeredWindowAttributes;
   static _GetForegroundWindowDart? _getForegroundWindow;
   static _GetWindowThreadProcessIdDart? _getWindowThreadProcessId;
+  static _ShowWindowDart? _showWindow;
 
   static int? _cachedHwnd;
 
@@ -100,6 +108,7 @@ class NativeWindowService {
       _setLayeredWindowAttributes = user32.lookupFunction<_SetLayeredWindowAttributesC, _SetLayeredWindowAttributesDart>('SetLayeredWindowAttributes');
       _getForegroundWindow = user32.lookupFunction<_GetForegroundWindowC, _GetForegroundWindowDart>('GetForegroundWindow');
       _getWindowThreadProcessId = user32.lookupFunction<_GetWindowThreadProcessIdC, _GetWindowThreadProcessIdDart>('GetWindowThreadProcessId');
+      _showWindow = user32.lookupFunction<_ShowWindowC, _ShowWindowDart>('ShowWindow');
 
       try {
         _getWindowLongPtrW = user32.lookupFunction<_GetWindowLongPtrWC, _GetWindowLongPtrWDart>('GetWindowLongPtrW');
@@ -195,6 +204,9 @@ class NativeWindowService {
     final width = physicalSize.width.toInt();
     final height = physicalSize.height.toInt();
 
+    // 0. Đưa cửa sổ trở lại cây hiển thị của Windows bằng SW_SHOWNOACTIVATE (không cướp Focus của Game)
+    _showWindow?.call(hwnd, swShowNoActivate);
+
     // 1. Cấu hình Extended Styles: Bỏ cờ WS_EX_TRANSPARENT để nhận cảm ứng/chuột,
     // duy trì WS_EX_TOOLWINDOW và WS_EX_NOACTIVATE để tuyệt đối không cướp Focus của Game
     // (ngăn chặn triệt để Game Engine bóp FPS xuống 15 và tránh lỗi DXGI_STATUS_OCCLUDED)
@@ -230,7 +242,7 @@ class NativeWindowService {
     return true;
   }
 
-  /// Ẩn tương tác Overlay: Bật cờ xuyên thấu WS_EX_TRANSPARENT và alpha 0 để mọi click đi thẳng vào game
+  /// Ẩn tương tác Overlay: Rút cửa sổ khỏi cây DWM bằng SW_HIDE để kích hoạt Independent Flip (iFlip) cho game
   static bool hideOverlayWindow() {
     _ensureInitialized();
     final hwnd = getWindowHandle();
@@ -251,7 +263,58 @@ class NativeWindowService {
       } catch (_) {}
     }
 
-    _logger.info('Switched Overlay to click-through state (WS_EX_TRANSPARENT, Alpha 0)');
+    // 3. Rút hoàn toàn cửa sổ khỏi cây hợp thành DWM để mở khóa cơ chế Independent Flip (iFlip) cho Game
+    _showWindow?.call(hwnd, swHide);
+
+    _logger.info('Switched Overlay to hidden state (SW_HIDE, DWM iFlip unlocked for Game)');
+    return true;
+  }
+
+  /// Chuẩn bị cửa sổ Flutter cho chế độ Direct3D Shared Texture Injection:
+  /// Đặt ở đáy Z-order (HWND_BOTTOM), loại bỏ WS_EX_TOPMOST và giữ alpha = 0 (trong suốt 100%).
+  /// Giúp Flutter Engine tiếp tục render khung hình ngầm để PrintWindow chụp vào GPU Shared Texture,
+  /// đồng thời TUYỆT ĐỐI không làm mất quyền Fullscreen Exclusive của game hay văng game ra Desktop.
+  static bool prepareWindowForSharedTextureCapture({Size? size}) {
+    _ensureInitialized();
+    final hwnd = getWindowHandle();
+    if (hwnd == 0) return false;
+
+    final physicalSize = size ?? getPhysicalScreenSize();
+    final width = physicalSize.width.toInt();
+    final height = physicalSize.height.toInt();
+
+    // 0. Đưa cửa sổ vào trạng thái hiển thị ngầm
+    _showWindow?.call(hwnd, swShowNoActivate);
+
+    // 1. Cấu hình Extended Styles: LOẠI BỎ cờ WS_EX_TOPMOST để tuyệt đối không đè lên Game Fullscreen
+    if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
+      try {
+        final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
+        _setWindowLongPtrW!(
+          hwnd,
+          gwlExStyle,
+          (currentExStyle & ~wsExTopMost) | wsExLayered | wsExNoActivate | wsExTransparent | wsExToolWindow,
+        );
+      } catch (_) {}
+    }
+
+    // 2. Đặt alpha = 0 để hoàn toàn vô hình trên Windows Desktop
+    _setLayeredWindowAttributes?.call(hwnd, 0, 0, lwaAlpha);
+
+    // 3. Đặt cửa sổ xuống đáy Z-order (HWND_BOTTOM)
+    _setWindowPos?.call(
+      hwnd,
+      hwndBottom,
+      0,
+      0,
+      width,
+      height,
+      swpNoActivate | swpShowWindow | swpFrameChanged,
+    );
+
+    // 4. Buộc cập nhật frame cho Flutter
+    _invalidateRect?.call(hwnd, nullptr, 1);
     return true;
   }
 }
+
