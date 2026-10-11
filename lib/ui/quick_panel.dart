@@ -144,6 +144,17 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
     _tdp = _tdpCtrl.getValue();
     _tdpAuto = widget.config.get("hardware.tdp.auto", false);
+    final initialTdp = _tdpAuto ? _tdpCtrl.maxVal : _tdp;
+    _tdpCtrl.setValue(initialTdp);
+
+    // Chống hiện tượng ACPI Power Plan của Windows tự động ghi đè lại giới hạn sau khi boot máy
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        final currentTdp = _tdpAuto ? _tdpCtrl.maxVal : _tdp;
+        _tdpCtrl.setValue(currentTdp);
+      }
+    });
+
     _fan = _fanCtrl.getValue();
     _fanAuto = _fanCtrl.isAuto();
     _brightness = _brightnessCtrl.getValue();

@@ -51,6 +51,9 @@ class TdpController extends HardwareController {
           unit: "W",
         ) {
     _initRyzenAdj();
+    if (_isHardwareActive) {
+      setValue(_currentTdp);
+    }
   }
 
   /// Tự động đồng bộ các tệp driver giữa thư mục bin và thư mục gốc của tệp thực thi.
