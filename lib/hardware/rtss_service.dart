@@ -594,11 +594,7 @@ class RtssService {
 
     for (final exeName in selfExeNames) {
       if (exeName.isEmpty) continue;
-      // 1. Ghi qua RTSSHooks64.dll API trước (tự động bypass giới hạn quyền của hệ thống)
-      _setHookProfilePropertyDword('EnableHooking', 0, exeName);
-      _setHookProfilePropertyDword('EnableOSD', 0, exeName);
-
-      // 2. Thử ghi trực tiếp vào file cấu hình nếu có quyền
+      // Ghi trực tiếp cấu hình INI vào thư mục Profiles của RTSS (không gọi _updateProfiles() để tránh làm rung lắc pipeline render của game đang chạy)
       final profileDir = _findProfileDirectory();
       if (profileDir != null) {
         final file = File('$profileDir\\$exeName');

@@ -122,6 +122,52 @@ flowchart TD
 
 ---
 
+### Bản Chất Kỹ Thuật Giúp Các Công Cụ OEM (GPD Assistant, ASUS Armoury Crate) Hiển Thị Đè Lên Toàn Bộ Thanh Tác Vụ
+
+```mermaid
+flowchart TD
+    subgraph OEM_Architecture["Kiến Trúc Đè Taskbar Của Công Cụ OEM (GPD Tool / Armoury Crate)"]
+        Cert["Được Ký Số Chứng Chỉ Tin Cậy + Cài đặt vào C:\\Program Files"] --> UIAccess["Hệ điều hành cấp Cờ Đặc Quyền Giao Diện (UIAccess Token)"]
+        UIAccess --> API_Band["Gọi hàm hệ thống user32.dll: CreateWindowInBand / SetWindowBand"]
+        API_Band --> Z_SystemTools["Đưa cửa sổ vào Phân Lớp Công Cụ Hệ Thống (ZBID_SYSTEM_TOOLS = 2)"]
+        TaskbarPos["Thanh Tác Vụ Windows 11 (Shell_TrayWnd)"] --> Z_Default["Chỉ nằm tối đa ở Phân Lớp Mặc Định (ZBID_DEFAULT = 0)"]
+        Z_SystemTools -->|Thứ tự vật lý cao hơn tuyệt đối| DWM_Render["DWM luôn vẽ cửa sổ đè lên Taskbar (Triệt tiêu Race Condition)"]
+        Z_Default -.->|Không thể vượt qua| Z_SystemTools
+    end
+```
+
+#### 1. Xuất phát từ bế tắc thực tế (The "Why")
+- **Trước đây làm bằng cách nào?**: Ứng dụng tạo một cửa sổ nổi trên cùng thông thường (`WS_EX_TOPMOST`) và liên tục gọi hàm thay đổi thứ tự cửa sổ (`SetWindowPos(HWND_TOPMOST)`).
+- **Bị nghẽn kỹ thuật gì?**: Thanh tác vụ cảm ứng của Windows 11 (`Shell_TrayWnd`) cũng là một cửa sổ mang thuộc tính nổi trên cùng (`HWND_TOPMOST`). Khi người dùng chạm ngón tay vào màn hình, tiến trình quản trị giao diện `explorer.exe` lập tức gọi `SetWindowPos(HWND_TOPMOST)` sau cùng theo mốc thời gian CPU, cướp đỉnh danh sách liên kết kép của DWM và đè lên bảng điều khiển (hiện tượng chạy đua thứ tự - Race Condition).
+- **Các công cụ OEM giải quyết triệt để ra sao?**: Các nhà sản xuất thiết bị gốc (như GPD, ASUS, AYANEO, Lenovo) khai thác 3 cơ chế cấp thấp của hệ điều hành Windows:
+  1. Cờ đặc quyền truy cập giao diện người dùng (`UIAccess Token`).
+  2. Phân lớp hiển thị công cụ hệ thống (`ZBID_SYSTEM_TOOLS`).
+  3. Cơ chế đăng ký thanh công cụ độc quyền màn hình nền (`Application Desktop Toolbar - AppBar`).
+
+#### 2. Bóc trần bản chất vật lý dưới tầng nhân Windows (First Principles)
+1. **Cơ chế 1: Chữ ký số mật mã và cờ đặc quyền truy cập giao diện (`UIAccess`)**:
+   - Trong tập tin khai báo tài nguyên (`App.manifest`), ứng dụng của nhà sản xuất cấu hình thuộc tính: `<requestedExecutionLevel level="asInvoker" uiAccess="true"/>`.
+   - Khi tiến trình được khởi chạy, nhân hệ điều hành Windows (`ntoskrnl.exe`) thực hiện hai bước kiểm tra an ninh nghiêm ngặt:
+     * Kiểm tra chữ ký số mật mã (`Digital Certificate`) gán trên tập tin nhị phân xem có bắt nguồn từ một Nhà cấp chứng chỉ gốc tin cậy (`Trusted Root Certification Authorities`) hay không.
+     * Kiểm tra đường dẫn thư mục cài đặt có nằm trong các thư mục được hệ thống bảo vệ nghiêm ngặt (như `C:\Program Files` hoặc `C:\Windows\System32`) hay không.
+   - Khi cả hai điều kiện thỏa mãn, nhân hệ thống cấp cờ đặc quyền giao diện (`TokenUIAccess`) vào thẻ định danh tiến trình (`Process Access Token`).
+   - Cờ này cho phép ứng dụng vượt qua toàn bộ cơ chế cô lập đặc quyền giao diện người dùng (`User Interface Privilege Isolation - UIPI`), cho phép cửa sổ gửi thông điệp và vẽ đè lên các tiến trình có mức đặc quyền cao hơn.
+
+2. **Cơ chế 2: Phân lớp cửa sổ công cụ hệ thống (`ZBID_SYSTEM_TOOLS = 2`)**:
+   - Trình quản lý hợp thành giao diện DWM tổ chức toàn bộ các cửa sổ trên Windows thành nhiều phân lớp theo trục Z (`Z-Order Bands`).
+   - Mọi ứng dụng thông thường (kể cả khi bật `WS_EX_TOPMOST`) và **toàn bộ thanh tác vụ Windows 11 (`Shell_TrayWnd`)** đều chỉ được xếp tối đa ở phân lớp màn hình nền mặc định: `ZBID_DEFAULT = 0`.
+   - Khi có cờ `TokenUIAccess`, ứng dụng gọi hàm nội bộ chưa công bố của `user32.dll`: `CreateWindowInBand` hoặc `SetWindowBand` với chỉ số phân lớp `ZBID_SYSTEM_TOOLS = 2` (hoặc `ZBID_IMMERSIVE_APPCHROME = 15` - phân lớp dành cho Xbox Game Bar và Bàn phím ảo cảm ứng `TabTip.exe`).
+   - Theo nguyên lý hợp thành khung hình của DWM, phân lớp `ZBID_SYSTEM_TOOLS` có vị trí vật lý **cao hơn tuyệt đối** so với phân lớp `ZBID_DEFAULT`.
+   - Kết quả: Cho dù tiến trình `explorer.exe` có phát lệnh `SetWindowPos(HWND_TOPMOST)` bao nhiêu lần đi nữa, DWM vẫn luôn luôn thực hiện thao tác vẽ các điểm ảnh của bảng điều khiển đè lên trên thanh tác vụ.
+
+3. **Cơ chế 3: Tái cấu trúc diện tích màn hình nền bằng Shell AppBar (`SHAppBarMessage`)**:
+   - Một số phần mềm bảng điều khiển cạnh bên (Side Dock) sử dụng API chính thức của Windows Shell: hàm gửi thông điệp thanh ứng dụng (`SHAppBarMessage`) với cờ đăng ký mới (`ABM_NEW`) và chỉ định cạnh bám (`ABM_SETPOS` với cạnh phải `ABE_RIGHT`).
+   - Khi nhận thông điệp này, tiến trình `explorer.exe` tự động tính toán lại diện tích làm việc của màn hình (`Desktop Work Area`).
+   - Thanh tác vụ Windows 11 bị hệ điều hành cưỡng bức co ngắn chiều ngang lại (ví dụ màn hình rộng 1920px, bảng điều khiển chiếm 360px thì thanh tác vụ chỉ được phép trải dài từ tọa độ `X = 0` đến `X = 1560`).
+   - Tại vùng tọa độ từ `X = 1560` đến `1920`, thanh tác vụ hoàn toàn không tồn tại bề mặt hiển thị, triệt tiêu 100% khả năng che khuất bảng điều khiển.
+
+---
+
 ## Phương Án 2: Móc Hàm Khởi Tạo Chuỗi Khung Hình Cưỡng Bức Không Viền (DXGI `CreateSwapChain` Hooking)
 
 ### 1. Cơ chế kỹ thuật (Kiến trúc AYASpace / Handheld Companion)

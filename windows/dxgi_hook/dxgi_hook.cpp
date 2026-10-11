@@ -464,11 +464,14 @@ void HookSwapChain(IDXGISwapChain* pSwapChain) {
     void** vtable = *reinterpret_cast<void***>(pSwapChain);
     if (!vtable) return;
 
-    // 0. Hook Present (Slot 8) - Direct3D Shared Texture Injection
-    if (vtable[8] != Hooked_Present) {
-        PatchVTable(vtable, 8, reinterpret_cast<void*>(Hooked_Present),
-                    reinterpret_cast<void**>(&g_origPresent));
-        OutputDebugStringA("[DXGI-Hook] IDXGISwapChain::Present VTable hooked!\n");
+    // 0. Hook Present (Slot 8) - Chỉ kích hoạt khi chạy chế độ Direct3D Shared Texture Injection
+    // Ở chế độ Borderless, giữ nguyên vẹn Slot 8 để RTSS độc quyền vẽ OSD, tránh xung đột VTable
+    if (g_hookMode == OVERLAY_HOOK_MODE_SHARED_TEXTURE) {
+        if (vtable[8] != Hooked_Present) {
+            PatchVTable(vtable, 8, reinterpret_cast<void*>(Hooked_Present),
+                        reinterpret_cast<void**>(&g_origPresent));
+            OutputDebugStringA("[DXGI-Hook] IDXGISwapChain::Present VTable hooked!\n");
+        }
     }
 
     // 1. Hook SetFullscreenState (Slot 10)
@@ -508,11 +511,6 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(
 
         // 2. Loại bỏ cờ Mode Switch độc quyền
         pDesc->Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
-
-        // 3. Xóa viền cửa sổ game thành Borderless Fullscreen
-        if (pDesc->OutputWindow) {
-            MakeWindowBorderless(pDesc->OutputWindow);
-        }
     }
 
     HRESULT hr = S_OK;
@@ -520,8 +518,10 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(
         hr = g_origCreateSwapChain(pThis, pDevice, pDesc, ppSwapChain);
     }
 
-    // 4. Hook SetFullscreenState, ResizeTarget, ResizeBuffers trên SwapChain mới tạo
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
+        if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS && pDesc && pDesc->OutputWindow) {
+            MakeWindowBorderless(pDesc->OutputWindow);
+        }
         HookSwapChain(*ppSwapChain);
     }
 
@@ -550,10 +550,9 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
         if (pDesc) {
             descCopy = *pDesc;
 
-            // Cưỡng bức chế độ Scaling = DXGI_SCALING_STRETCH (0) để tự động Upscale
-            if (descCopy.Scaling == DXGI_SCALING_NONE) {
-                descCopy.Scaling = DXGI_SCALING_STRETCH;
-            }
+            // TUYỆT ĐỐI KHÔNG ép descCopy.Scaling = DXGI_SCALING_STRETCH!
+            // Mô hình FLIP (FLIP_DISCARD / FLIP_SEQUENTIAL) của D3D12/D3D11 bắt buộc Scaling = DXGI_SCALING_NONE,
+            // nếu ép STRETCH thì DirectX runtime trả về DXGI_ERROR_INVALID_CALL khiến game crash lập tức!
 
             // Loại bỏ cờ Mode Switch độc quyền
             descCopy.Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
@@ -566,10 +565,6 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
             fsDescCopy.Windowed = TRUE;
             pActualFsDesc = &fsDescCopy;
         }
-
-        if (hWnd) {
-            MakeWindowBorderless(hWnd);
-        }
     }
 
     HRESULT hr = S_OK;
@@ -578,6 +573,10 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
     }
 
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
+        // Chỉ chuyển đổi Borderless SAU KHI SwapChain đã khởi tạo thành công để không làm gián đoạn graphics pipeline
+        if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS && hWnd) {
+            MakeWindowBorderless(hWnd);
+        }
         HookSwapChain(*ppSwapChain);
     }
 
@@ -699,9 +698,6 @@ HRESULT WINAPI Hooked_D3D11CreateDeviceAndSwapChain(
         modifiedDesc = *pSwapChainDesc;
         modifiedDesc.Windowed = TRUE;
         modifiedDesc.Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
-        if (modifiedDesc.OutputWindow) {
-            MakeWindowBorderless(modifiedDesc.OutputWindow);
-        }
         pActualDesc = &modifiedDesc;
     }
 
@@ -713,6 +709,9 @@ HRESULT WINAPI Hooked_D3D11CreateDeviceAndSwapChain(
     }
 
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
+        if (g_hookMode == OVERLAY_HOOK_MODE_BORDERLESS && pSwapChainDesc && pSwapChainDesc->OutputWindow) {
+            MakeWindowBorderless(pSwapChainDesc->OutputWindow);
+        }
         HookSwapChain(*ppSwapChain);
     }
 

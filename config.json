@@ -14,8 +14,8 @@
     "gamepad": {
         "enabled": true,
         "poll_interval_ms": 50,
-        "overlay_combo": "",
-        "keyboard_combo": ""
+        "overlay_combo": "BACK + RB",
+        "keyboard_combo": "BACK + LB"
     },
     "system": {
         "autostart": true
