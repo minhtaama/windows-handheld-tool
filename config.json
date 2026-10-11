@@ -1,11 +1,11 @@
 {
     "overlay": {
         "width": 360,
-        "width_percent": 30,
+        "width_percent": 40,
         "animation_duration_ms": 400,
         "side": "right",
         "scale_percent": 100,
-        "scale": 1.0
+        "scale": 1.1
     },
     "hotkey": {
         "toggle_overlay": "Ctrl+Shift+Q",
@@ -30,7 +30,7 @@
             "min": 5,
             "max": 35,
             "step": 1,
-            "current": 20,
+            "current": 15,
             "auto": true
         },
         "fan": {
@@ -38,7 +38,7 @@
             "max": 100,
             "step": 5,
             "current": 50,
-            "auto": true
+            "auto": false
         },
         "brightness": {
             "min": 0,
@@ -56,7 +56,7 @@
             "current": 50
         },
         "rtss": {
-            "fps_limit": 0,
+            "fps_limit": 50,
             "osd_enabled": true,
             "osd_zoom": 1,
             "osd_show_fps": true,
@@ -66,7 +66,8 @@
             "osd_show_ram": true,
             "osd_show_battery": true,
             "osd_show_fan": false,
-            "osd_layout": "compact"
+            "osd_layout": "vertical",
+            "osd_position": "topRight"
         }
     }
 }

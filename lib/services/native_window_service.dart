@@ -34,9 +34,6 @@ typedef _GetWindowLongPtrWDart = int Function(int hWnd, int nIndex);
 typedef _SetWindowLongPtrWC = IntPtr Function(IntPtr hWnd, Int32 nIndex, IntPtr dwNewLong);
 typedef _SetWindowLongPtrWDart = int Function(int hWnd, int nIndex, int dwNewLong);
 
-typedef _IsWindowVisibleC = Int32 Function(IntPtr hWnd);
-typedef _IsWindowVisibleDart = int Function(int hWnd);
-
 typedef _IsWindowC = Int32 Function(IntPtr hWnd);
 typedef _IsWindowDart = int Function(int hWnd);
 
@@ -52,9 +49,6 @@ typedef _GetForegroundWindowDart = int Function();
 typedef _GetWindowThreadProcessIdC = Uint32 Function(IntPtr hWnd, Pointer<Uint32> lpdwProcessId);
 typedef _GetWindowThreadProcessIdDart = int Function(int hWnd, Pointer<Uint32> lpdwProcessId);
 
-typedef _GetWindowRectC = Int32 Function(IntPtr hWnd, Pointer<Int32> lpRect);
-typedef _GetWindowRectDart = int Function(int hWnd, Pointer<Int32> lpRect);
-
 /// Dịch vụ quản lý cửa sổ Native Win32 tối ưu cho Gaming Overlay chuẩn Fullscreen Transparent Overlay.
 /// Bao phủ toàn màn hình cố định và sử dụng SWP_NOACTIVATE
 /// để đảm bảo không cướp Focus của Game (chống văng/minimize game DirectX).
@@ -65,11 +59,9 @@ class NativeWindowService {
 
   static const int swpNoSize = 0x0001;
   static const int swpNoMove = 0x0002;
-  static const int swpNoZOrder = 0x0004;
   static const int swpNoActivate = 0x0010;
   static const int swpFrameChanged = 0x0020;
   static const int swpShowWindow = 0x0040;
-  static const int swpHideWindow = 0x0080;
 
   static const int gwlExStyle = -20;
   static const int wsExTransparent = 0x00000020;
@@ -86,7 +78,6 @@ class NativeWindowService {
   static _FindWindowWDart? _findWindowW;
   static _SetWindowPosDart? _setWindowPos;
   static _GetSystemMetricsDart? _getSystemMetrics;
-  static _IsWindowVisibleDart? _isWindowVisible;
   static _IsWindowDart? _isWindow;
   static _InvalidateRectDart? _invalidateRect;
   static _GetWindowLongPtrWDart? _getWindowLongPtrW;
@@ -94,7 +85,6 @@ class NativeWindowService {
   static _SetLayeredWindowAttributesDart? _setLayeredWindowAttributes;
   static _GetForegroundWindowDart? _getForegroundWindow;
   static _GetWindowThreadProcessIdDart? _getWindowThreadProcessId;
-  static _GetWindowRectDart? _getWindowRect;
 
   static int? _cachedHwnd;
 
@@ -105,13 +95,11 @@ class NativeWindowService {
       _findWindowW = user32.lookupFunction<_FindWindowWC, _FindWindowWDart>('FindWindowW');
       _setWindowPos = user32.lookupFunction<_SetWindowPosC, _SetWindowPosDart>('SetWindowPos');
       _getSystemMetrics = user32.lookupFunction<_GetSystemMetricsC, _GetSystemMetricsDart>('GetSystemMetrics');
-      _isWindowVisible = user32.lookupFunction<_IsWindowVisibleC, _IsWindowVisibleDart>('IsWindowVisible');
       _isWindow = user32.lookupFunction<_IsWindowC, _IsWindowDart>('IsWindow');
       _invalidateRect = user32.lookupFunction<_InvalidateRectC, _InvalidateRectDart>('InvalidateRect');
       _setLayeredWindowAttributes = user32.lookupFunction<_SetLayeredWindowAttributesC, _SetLayeredWindowAttributesDart>('SetLayeredWindowAttributes');
       _getForegroundWindow = user32.lookupFunction<_GetForegroundWindowC, _GetForegroundWindowDart>('GetForegroundWindow');
       _getWindowThreadProcessId = user32.lookupFunction<_GetWindowThreadProcessIdC, _GetWindowThreadProcessIdDart>('GetWindowThreadProcessId');
-      _getWindowRect = user32.lookupFunction<_GetWindowRectC, _GetWindowRectDart>('GetWindowRect');
 
       try {
         _getWindowLongPtrW = user32.lookupFunction<_GetWindowLongPtrWC, _GetWindowLongPtrWDart>('GetWindowLongPtrW');
@@ -194,95 +182,8 @@ class NativeWindowService {
     return Size(width.toDouble(), height.toDouble());
   }
 
-  /// Lấy chiều cao thực tế của thanh Taskbar Windows (Shell_TrayWnd) nếu đang hiển thị ở cạnh đáy màn hình.
-  /// Trả về 0.0 nếu Taskbar đang ẩn, auto-hide thụt xuống (<=4px) hoặc không tìm thấy.
-  static double getVisibleTaskbarHeight() {
-    _ensureInitialized();
-    if (_findWindowW == null || _getWindowRect == null || _getSystemMetrics == null) return 0.0;
-
-    final classNamePtr = 'Shell_TrayWnd'.toNativeUtf16();
-    try {
-      final hTaskbar = _findWindowW!(classNamePtr, nullptr);
-      if (hTaskbar == 0) return 0.0;
-
-      if (_isWindowVisible != null && _isWindowVisible!(hTaskbar) == 0) {
-        return 0.0;
-      }
-
-      final rectPtr = calloc<Int32>(4);
-      try {
-        final ok = _getWindowRect!(hTaskbar, rectPtr);
-        if (ok != 0) {
-          final top = rectPtr[1];
-          final screenHeight = _getSystemMetrics!(smCyScreen);
-          // Độ nhô thực tế của Taskbar so với đáy màn hình
-          final visibleHeight = screenHeight - top;
-
-          // Nếu Taskbar đã chìm khỏi mép màn hình hoặc chỉ còn gờ nhỏ 2-4px của auto-hide
-          if (visibleHeight > 4 && top < screenHeight) {
-            return visibleHeight.toDouble();
-          }
-        }
-      } finally {
-        calloc.free(rectPtr);
-      }
-    } catch (_) {
-    } finally {
-      calloc.free(classNamePtr);
-    }
-    return 0.0;
-  }
-
-  /// Kiểm tra xem cửa sổ tiền cảnh (Foreground Window) có đang chạy toàn màn hình (Game Fullscreen/Borderless) hay không.
-  static bool isForegroundFullscreen() {
-    _ensureInitialized();
-    if (_getForegroundWindow == null || _getWindowRect == null || _getSystemMetrics == null) return false;
-
-    final hFg = _getForegroundWindow!();
-    if (hFg == 0) return false;
-
-    // Bỏ qua chính cửa sổ của ứng dụng Overlay
-    final ourHwnd = getWindowHandle();
-    if (hFg == ourHwnd) return false;
-
-    // Bỏ qua cửa sổ Desktop (Progman) và Taskbar (Shell_TrayWnd)
-    final progmanPtr = 'Progman'.toNativeUtf16();
-    final taskbarPtr = 'Shell_TrayWnd'.toNativeUtf16();
-    try {
-      if (_findWindowW != null) {
-        final hProgman = _findWindowW!(progmanPtr, nullptr);
-        final hTaskbar = _findWindowW!(taskbarPtr, nullptr);
-        if (hFg == hProgman || hFg == hTaskbar) return false;
-      }
-    } finally {
-      calloc.free(progmanPtr);
-      calloc.free(taskbarPtr);
-    }
-
-    final rectPtr = calloc<Int32>(4);
-    try {
-      final ok = _getWindowRect!(hFg, rectPtr);
-      if (ok != 0) {
-        final left = rectPtr[0];
-        final top = rectPtr[1];
-        final right = rectPtr[2];
-        final bottom = rectPtr[3];
-        final screenWidth = _getSystemMetrics!(smCxScreen);
-        final screenHeight = _getSystemMetrics!(smCyScreen);
-
-        // Cửa sổ phủ kín hoặc vượt qua toàn bộ màn hình (Fullscreen/Borderless)
-        if (left <= 0 && top <= 0 && right >= screenWidth && bottom >= screenHeight) {
-          return true;
-        }
-      }
-    } finally {
-      calloc.free(rectPtr);
-    }
-    return false;
-  }
-
   /// Hiển thị cửa sổ Fullscreen Transparent Overlay mà KHÔNG cướp Focus của Game
-  static bool showOverlayNoActivate({Size? size, Offset? position}) {
+  static bool showOverlayNoActivate({Size? size}) {
     _ensureInitialized();
     final hwnd = getWindowHandle();
     if (hwnd == 0) {
@@ -322,10 +223,7 @@ class NativeWindowService {
       swpNoActivate | swpShowWindow | swpFrameChanged,
     );
 
-    // 3. Cưỡng bức đẩy lùi thanh Taskbar chính và phụ nằm ngay sau cửa sổ Overlay (1 lần duy nhất)
-    _demoteTaskbars(hwnd);
-
-    // 4. Yêu cầu vẽ lại frame ngay lập tức
+    // 3. Yêu cầu vẽ lại frame ngay lập tức
     _invalidateRect?.call(hwnd, nullptr, 1);
 
     _logger.info('Displayed Fullscreen Transparent Overlay (${width}x$height)');
@@ -355,59 +253,5 @@ class NativeWindowService {
 
     _logger.info('Switched Overlay to click-through state (WS_EX_TRANSPARENT, Alpha 0)');
     return true;
-  }
-
-  /// Kiểm tra trạng thái hiển thị của cửa sổ Win32
-  static bool isWindowVisible() {
-    _ensureInitialized();
-    final hwnd = getWindowHandle();
-    if (hwnd == 0) return false;
-    return (_isWindowVisible?.call(hwnd) ?? 0) != 0;
-  }
-
-  /// Tái khẳng định vị thế Topmost của cửa sổ Overlay (chống bị Tablet Taskbar đè lên).
-  /// Vừa đưa cửa sổ lên HWND_TOPMOST, vừa đẩy lùi thanh Taskbar của Windows nằm ra phía sau.
-  static bool reassertTopmost() {
-    _ensureInitialized();
-    final hwnd = getWindowHandle();
-    if (hwnd == 0) return false;
-    final res = _setWindowPos?.call(
-      hwnd,
-      hwndTopMost,
-      0,
-      0,
-      0,
-      0,
-      swpNoActivate | swpNoMove | swpNoSize,
-    );
-    _demoteTaskbars(hwnd);
-    return (res ?? 0) != 0;
-  }
-
-  /// Đẩy lùi toàn bộ thanh Taskbar của Windows (Shell_TrayWnd & Shell_SecondaryTrayWnd)
-  /// nằm ngay sau cửa sổ Overlay trong danh sách liên kết Z-Order của Win32 Kernel (DRY).
-  static void _demoteTaskbars(int overlayHwnd) {
-    if (_findWindowW == null || _setWindowPos == null || overlayHwnd == 0) return;
-
-    for (final taskbarClass in ['Shell_TrayWnd', 'Shell_SecondaryTrayWnd']) {
-      final classNamePtr = taskbarClass.toNativeUtf16();
-      try {
-        final hTaskbar = _findWindowW!(classNamePtr, nullptr);
-        if (hTaskbar != 0 && hTaskbar != overlayHwnd) {
-          _setWindowPos!(
-            hTaskbar,
-            overlayHwnd,
-            0,
-            0,
-            0,
-            0,
-            swpNoActivate | swpNoMove | swpNoSize,
-          );
-        }
-      } catch (_) {
-      } finally {
-        calloc.free(classNamePtr);
-      }
-    }
   }
 }

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../core/app_theme.dart';
 import '../core/config.dart';
-import '../services/native_window_service.dart';
 import '../services/overlay_controller.dart';
 import 'quick_panel.dart';
 
@@ -59,7 +58,6 @@ class _OverlayScreenState extends State<OverlayScreen>
     // Đăng ký bộ kích hoạt hoạt cảnh với OverlayController
     OverlayController.instance.onAnimateShow = () async {
       try {
-        NativeWindowService.reassertTopmost();
         await _animController.forward(from: 0.0);
       } catch (_) {}
     };

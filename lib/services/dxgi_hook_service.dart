@@ -166,9 +166,7 @@ class DxgiHookService extends ChangeNotifier {
   bool createOverlaySharedTexture(int width, int height) {
     if (!_isAvailable || _createOverlaySharedTexture == null) return false;
     try {
-      final res = _createOverlaySharedTexture!(width, height) != 0;
-      _logger.info('CreateOverlaySharedTexture ($width x $height): $res');
-      return res;
+      return _createOverlaySharedTexture!(width, height) != 0;
     } catch (e) {
       _logger.error('Error calling CreateOverlaySharedTexture: $e');
       return false;
@@ -180,7 +178,6 @@ class DxgiHookService extends ChangeNotifier {
     if (!_isAvailable || _releaseOverlaySharedTexture == null) return;
     try {
       _releaseOverlaySharedTexture!();
-      _logger.info('Released Host Overlay Shared Texture');
     } catch (e) {
       _logger.error('Error calling ReleaseOverlaySharedTexture: $e');
     }

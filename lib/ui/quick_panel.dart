@@ -19,7 +19,6 @@ import '../services/system_optimizer.dart';
 import '../services/virtual_keyboard_service.dart';
 import '../services/autostart_service.dart';
 import '../services/dxgi_hook_service.dart';
-import '../services/native_window_service.dart';
 import '../services/overlay_controller.dart';
 import '../services/rtss_installer_service.dart';
 import '../services/system_telemetry_service.dart';
@@ -429,7 +428,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   void _onGamepadButton(GamepadButton button) {
     if (!mounted || !OverlayController.instance.isVisible) return;
-    NativeWindowService.reassertTopmost();
 
     switch (button) {
       case GamepadButton.lb:
@@ -1070,10 +1068,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   @override
   Widget build(BuildContext context) {
-    return Listener(
-      onPointerDown: (_) => NativeWindowService.reassertTopmost(),
-      behavior: HitTestBehavior.translucent,
-      child: Column(
+    return Column(
         children: [
           // 1. Thanh Tab Bar nổi phía trên (Compact Mode với 4 Tab)
           AppTabBar(
@@ -1130,8 +1125,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   /// Trả về nội dung trang tương ứng với Tab được chọn

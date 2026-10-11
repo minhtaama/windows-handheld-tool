@@ -38,14 +38,12 @@ class OverlayController extends ChangeNotifier {
   void updateWidthPercent(int percent) {
     config?.set("overlay.width_percent", percent);
     notifyListeners();
-    logger.info('Đã cập nhật độ rộng panel: $percent%.');
   }
 
   /// Thay đổi tỷ lệ phóng đại nội dung UI Scale
   void updateScale(double newScale) {
     config?.set("overlay.scale", newScale);
     notifyListeners();
-    logger.info('Đã cập nhật tỷ lệ UI Scale: ${newScale}x.');
   }
 
   /// Mở Side Dock Panel: Ngắt gamepad trong game, bật cửa sổ Overlay và chạy hoạt cảnh trượt vào
@@ -117,7 +115,6 @@ class OverlayController extends ChangeNotifier {
   Future<void> toggleOverlay() async {
     final now = DateTime.now();
     if (now.difference(_lastToggleTime).inMilliseconds < 350) {
-      logger.info('Bỏ qua toggleOverlay do debounce (< 350ms).');
       return;
     }
     _lastToggleTime = now;
@@ -132,6 +129,5 @@ class OverlayController extends ChangeNotifier {
   /// Xử lý sự kiện khi người dùng click chuột ra ngoài panel sang game/desktop
   void handleWindowBlur() {
     // Duy trì hiển thị để không làm gián đoạn trải nghiệm chơi game
-    logger.info('Bỏ qua sự kiện Window Blur để duy trì hiển thị trên Game.');
   }
 }

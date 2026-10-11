@@ -180,14 +180,8 @@ class _HandheldAppState extends State<HandheldApp> {
     super.initState();
     // Đợi frame đầu tiên vẽ xong hoàn toàn vào DirectX rồi dời off-screen chạy ngầm
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      _logger.info(
-        'DEBUG-MAIN-INIT: PostFrameCallback fired (First frame rendered)',
-      );
       await Future.delayed(const Duration(milliseconds: 150));
       NativeWindowService.hideOverlayWindow();
-      _logger.info(
-        'DEBUG-MAIN-INIT: Initial NativeWindowService.hideOverlayWindow() completed',
-      );
     });
   }
 

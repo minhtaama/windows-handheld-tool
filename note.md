@@ -153,18 +153,22 @@ flowchart TD
    - Khi cả hai điều kiện thỏa mãn, nhân hệ thống cấp cờ đặc quyền giao diện (`TokenUIAccess`) vào thẻ định danh tiến trình (`Process Access Token`).
    - Cờ này cho phép ứng dụng vượt qua toàn bộ cơ chế cô lập đặc quyền giao diện người dùng (`User Interface Privilege Isolation - UIPI`), cho phép cửa sổ gửi thông điệp và vẽ đè lên các tiến trình có mức đặc quyền cao hơn.
 
-2. **Cơ chế 2: Phân lớp cửa sổ công cụ hệ thống (`ZBID_SYSTEM_TOOLS = 2`)**:
-   - Trình quản lý hợp thành giao diện DWM tổ chức toàn bộ các cửa sổ trên Windows thành nhiều phân lớp theo trục Z (`Z-Order Bands`).
-   - Mọi ứng dụng thông thường (kể cả khi bật `WS_EX_TOPMOST`) và **toàn bộ thanh tác vụ Windows 11 (`Shell_TrayWnd`)** đều chỉ được xếp tối đa ở phân lớp màn hình nền mặc định: `ZBID_DEFAULT = 0`.
-   - Khi có cờ `TokenUIAccess`, ứng dụng gọi hàm nội bộ chưa công bố của `user32.dll`: `CreateWindowInBand` hoặc `SetWindowBand` với chỉ số phân lớp `ZBID_SYSTEM_TOOLS = 2` (hoặc `ZBID_IMMERSIVE_APPCHROME = 15` - phân lớp dành cho Xbox Game Bar và Bàn phím ảo cảm ứng `TabTip.exe`).
-   - Theo nguyên lý hợp thành khung hình của DWM, phân lớp `ZBID_SYSTEM_TOOLS` có vị trí vật lý **cao hơn tuyệt đối** so với phân lớp `ZBID_DEFAULT`.
-   - Kết quả: Cho dù tiến trình `explorer.exe` có phát lệnh `SetWindowPos(HWND_TOPMOST)` bao nhiêu lần đi nữa, DWM vẫn luôn luôn thực hiện thao tác vẽ các điểm ảnh của bảng điều khiển đè lên trên thanh tác vụ.
+2. **Cơ chế 2: Phân lớp cửa sổ công cụ hệ thống (`ZBID_SYSTEM_TOOLS = 2`) & Bản chất phân lớp của Touch Taskbar Windows 11**:
+   - **Cấu trúc phân lớp Z-Order (`Z-Order Bands`) của DWM**: Trình quản lý hợp thành giao diện DWM tổ chức toàn bộ các bề mặt hiển thị thành nhiều tầng phân lớp vật lý độc lập:
+     * Phân lớp mặc định (`ZBID_DEFAULT = 0`): Nơi cư ngụ của toàn bộ các ứng dụng người dùng thông thường, kể cả khi cửa sổ được gắn cờ trên cùng (`HWND_TOPMOST` / `WS_EX_TOPMOST`).
+     * Phân lớp giao diện hệ thống nâng cao (`ZBID_IMMERSIVE_APPCHROME = 15`): Nơi Windows 11 phân bổ cho thanh tác vụ cảm ứng (Touch Taskbar trong chế độ Tablet Mode), thanh trò chơi Xbox Game Bar, và Bàn phím ảo cảm ứng (`TabTip.exe`).
+     * Phân lớp công cụ hệ thống tối cao (`ZBID_SYSTEM_TOOLS = 2`): Nơi dành cho các công cụ giám sát hệ thống và trợ lý phần cứng có đặc quyền.
+   - **Bản chất hiện tượng Touch Taskbar đè lên ứng dụng ngoài Desktop**:
+     * Khác với thanh tác vụ Win32 cổ điển (`Shell_TrayWnd` trên Windows 10 nằm ở phân lớp 0), thanh tác vụ cảm ứng Windows 11 là một giao diện XAML hiện đại chạy trực tiếp trong phân lớp `ZBID_IMMERSIVE_APPCHROME = 15`.
+     * Khi trò chơi khởi chạy: Windows Shell nhận diện ứng dụng toàn màn hình và tự động rút thanh tác vụ xuống để nhường quyền hiển thị.
+     * Khi ở ngoài màn hình nền Desktop: Windows 11 ở chế độ Tablet Mode duy trì cố định thanh tác vụ cảm ứng ở phân lớp 15 để đảm bảo khả năng tiếp nhận cảm ứng ngón tay của người dùng. Cửa sổ ứng dụng thông thường (ở phân lớp 0) dù có phát lệnh `SetWindowPos(HWND_TOPMOST)` bao nhiêu lần thì theo nguyên lý pha trộn điểm ảnh của DWM, các điểm ảnh của phân lớp 15 luôn được kết xuất đè lên trên các điểm ảnh của phân lớp 0.
+   - **Cách các phần mềm OEM (GPD Assistant, Armoury Crate) vượt qua**:
+     * Khi có cờ đặc quyền `TokenUIAccess`, ứng dụng gọi hàm nội bộ chưa công bố của `user32.dll`: `CreateWindowInBand` hoặc `SetWindowBand` để đưa cửa sổ của mình vào phân lớp `ZBID_SYSTEM_TOOLS = 2`.
+     * Do phân lớp 2 có độ ưu tiên cao hơn hoặc ngang hàng, DWM mới cho phép cửa sổ vẽ đè hoàn toàn lên thanh tác vụ cảm ứng.
 
-3. **Cơ chế 3: Tái cấu trúc diện tích màn hình nền bằng Shell AppBar (`SHAppBarMessage`)**:
-   - Một số phần mềm bảng điều khiển cạnh bên (Side Dock) sử dụng API chính thức của Windows Shell: hàm gửi thông điệp thanh ứng dụng (`SHAppBarMessage`) với cờ đăng ký mới (`ABM_NEW`) và chỉ định cạnh bám (`ABM_SETPOS` với cạnh phải `ABE_RIGHT`).
-   - Khi nhận thông điệp này, tiến trình `explorer.exe` tự động tính toán lại diện tích làm việc của màn hình (`Desktop Work Area`).
-   - Thanh tác vụ Windows 11 bị hệ điều hành cưỡng bức co ngắn chiều ngang lại (ví dụ màn hình rộng 1920px, bảng điều khiển chiếm 360px thì thanh tác vụ chỉ được phép trải dài từ tọa độ `X = 0` đến `X = 1560`).
-   - Tại vùng tọa độ từ `X = 1560` đến `1920`, thanh tác vụ hoàn toàn không tồn tại bề mặt hiển thị, triệt tiêu 100% khả năng che khuất bảng điều khiển.
+3. **Cơ chế 3: Tái cấu trúc diện tích màn hình nền & Thích ứng giao diện**:
+   - **Tái cấu trúc diện tích làm việc (`Desktop Work Area`)**: Một số phần mềm bảng điều khiển cạnh bên (Side Dock) sử dụng API chính thức của Windows Shell: hàm gửi thông điệp thanh ứng dụng (`SHAppBarMessage`) với cờ đăng ký mới (`ABM_NEW`) và chỉ định cạnh bám (`ABM_SETPOS` với cạnh phải `ABE_RIGHT`). Khi nhận thông điệp này, tiến trình `explorer.exe` tự động tính toán lại diện tích làm việc của màn hình. Thanh tác vụ Windows 11 bị hệ điều hành cưỡng bức co ngắn chiều ngang lại (ví dụ màn hình rộng 1920px, bảng điều khiển chiếm 360px thì thanh tác vụ chỉ được phép trải dài từ `X = 0` đến `X = 1560`). Tại vùng `X = 1560` đến `1920`, thanh tác vụ hoàn toàn không tồn tại bề mặt hiển thị.
+   - **Thích ứng khoảng lề giao diện theo ngữ cảnh (`Adaptive Bottom Padding`)**: Khi không có đặc quyền UIAccess để chen chân vào phân lớp hệ thống, giải pháp kiến trúc tối ưu là tự động nhận diện ngữ cảnh: Trong game toàn màn hình thì mở rộng toàn bộ 100% diện tích; ngoài màn hình nền Desktop thì tự động đẩy lề đáy bảng điều khiển lên trên nóc thanh tác vụ, đảm bảo toàn bộ các nút bấm và thông tin không bị che khuất mà không cần can thiệp thô bạo vào hệ điều hành.
 
 ---
 
