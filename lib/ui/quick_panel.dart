@@ -207,37 +207,73 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     // Lắng nghe sự kiện điều hướng từ Gamepad
     _gamepadSub = GamepadService.buttonEvents.listen(_onGamepadButton);
 
-    // Kích hoạt Timer quét cảm biến phần cứng định kỳ 1s khi panel mở
-    _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1000), (
-      timer,
-    ) {
-      if (!mounted) return;
-      setState(() {
+    // Lắng nghe sự kiện đóng/mở panel để cập nhật số liệu ngay lập tức khi mở
+    OverlayController.instance.addListener(_onOverlayVisibilityChanged);
+
+    // Kích hoạt Timer quét cảm biến phần cứng định kỳ 1s
+    _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
+      _updateTelemetry();
+    });
+  }
+
+  void _onOverlayVisibilityChanged() {
+    if (!mounted) return;
+    if (OverlayController.instance.isVisible) {
+      _updateTelemetry();
+    }
+  }
+
+  /// Cập nhật dữ liệu phần cứng thông minh:
+  /// - Khi panel ẩn & OSD tắt: Ngủ đông hoàn toàn, không tốn 0.01% CPU/GPU.
+  /// - Khi panel ẩn & OSD bật: Chỉ đọc số liệu cần thiết cho RTSS và ghi OSD, TUYỆT ĐỐI KHÔNG gọi setState().
+  /// - Khi panel mở: Đọc toàn diện và gọi setState() để cập nhật giao diện người dùng.
+  void _updateTelemetry() {
+    if (!mounted) return;
+    final isVisible = OverlayController.instance.isVisible;
+
+    // 1. Panel đang ẩn và OSD không bật: Ngủ đông hoàn toàn
+    if (!isVisible && !_rtssOsdEnabled) {
+      return;
+    }
+
+    // 2. Panel đang ẩn nhưng RTSS OSD đang bật:
+    // Cập nhật trực tiếp số liệu cho OSD, KHÔNG gọi setState() của Flutter engine
+    if (!isVisible) {
+      _isRtssRunning = _rtssCtrl.isAvailable();
+      if (_isRtssRunning) {
         _telemetryData = SystemTelemetryService.instance.getSnapshot();
-
-        // Cập nhật công suất thực tế tức thời từ bảng cảm biến PM Table phần cứng (AMD SMU)
-        final hwTdp = _tdpCtrl.getLiveTdp();
-        if (hwTdp != null) {
-          _liveTdp = hwTdp.round();
-        } else {
-          _liveTdp = _tdp;
+        if (_rtssOsdMetrics.showTdp) {
+          final hwTdp = _tdpCtrl.getLiveTdp();
+          _liveTdp = hwTdp != null ? hwTdp.round() : _tdp;
         }
+        _liveFps = _rtssCtrl.getLiveFps();
+        _refreshOsdText();
+      } else {
+        _checkRtssWatchdog();
+      }
+      return;
+    }
 
-        _liveFan = _fan;
+    // 3. Panel đang mở: Cập nhật đầy đủ và kích hoạt render UI qua setState()
+    setState(() {
+      _telemetryData = SystemTelemetryService.instance.getSnapshot();
 
-        _isRtssRunning = _rtssCtrl.isAvailable();
-        if (_isRtssRunning) {
-          _liveFps = _rtssCtrl.getLiveFps();
-          _activeGame = _rtssCtrl.getActiveGame();
-          if (_rtssOsdEnabled) {
-            _refreshOsdText();
-          }
-        } else {
-          _liveFps = null;
-          _activeGame = null;
-          _checkRtssWatchdog();
+      final hwTdp = _tdpCtrl.getLiveTdp();
+      _liveTdp = hwTdp != null ? hwTdp.round() : _tdp;
+      _liveFan = _fan;
+
+      _isRtssRunning = _rtssCtrl.isAvailable();
+      if (_isRtssRunning) {
+        _liveFps = _rtssCtrl.getLiveFps();
+        _activeGame = _rtssCtrl.getActiveGame();
+        if (_rtssOsdEnabled) {
+          _refreshOsdText();
         }
-      });
+      } else {
+        _liveFps = null;
+        _activeGame = null;
+        _checkRtssWatchdog();
+      }
     });
   }
 
@@ -254,17 +290,18 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     RtssService.instance.ensureRunning().then((success) {
       _isRevivingRtss = false;
       if (mounted && success) {
-        setState(() {
-          _isRtssRunning = _rtssCtrl.isAvailable();
-          if (_isRtssRunning) {
-            _rtssCtrl.setOsdEnabled(_rtssOsdEnabled);
-            _rtssCtrl.setValue(_fpsLimit);
-            _rtssCtrl.setOsdZoom(_rtssOsdZoom);
-            _rtssCtrl.setOsdPosition(_rtssOsdPosition);
-            _liveFps = _rtssCtrl.getLiveFps();
-            _activeGame = _rtssCtrl.getActiveGame();
-          }
-        });
+        _isRtssRunning = _rtssCtrl.isAvailable();
+        if (_isRtssRunning) {
+          _rtssCtrl.setOsdEnabled(_rtssOsdEnabled);
+          _rtssCtrl.setValue(_fpsLimit);
+          _rtssCtrl.setOsdZoom(_rtssOsdZoom);
+          _rtssCtrl.setOsdPosition(_rtssOsdPosition);
+          _liveFps = _rtssCtrl.getLiveFps();
+          _activeGame = _rtssCtrl.getActiveGame();
+        }
+        if (OverlayController.instance.isVisible) {
+          setState(() {});
+        }
       }
     }).catchError((_) {
       _isRevivingRtss = false;
@@ -273,6 +310,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   @override
   void dispose() {
+    OverlayController.instance.removeListener(_onOverlayVisibilityChanged);
     _gamepadSub?.cancel();
     _telemetryTimer?.cancel();
     _scrollController.dispose();
@@ -462,6 +500,52 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     }
   }
 
+  void _adjustFocusedSlider(int direction) {
+    switch (_selectedTabIndex) {
+      case 1:
+        if (_focusedIndex == 1) {
+          _updateTdp(
+            (_tdp + direction * _tdpCtrl.step).clamp(
+              _tdpCtrl.minVal,
+              _tdpCtrl.maxVal,
+            ),
+          );
+        } else if (_focusedIndex == 3) {
+          _updateFan(
+            (_fan + direction * _fanCtrl.step).clamp(
+              _fanCtrl.minVal,
+              _fanCtrl.maxVal,
+            ),
+          );
+        } else if (_focusedIndex == 4 && RtssInstallerService.isInstalled()) {
+          _updateFpsLimit(
+            (_fpsLimit + direction * _rtssCtrl.step).clamp(
+              _rtssCtrl.minVal,
+              _rtssCtrl.maxVal,
+            ),
+          );
+        }
+        break;
+      case 2:
+        if (_focusedIndex == 0) {
+          _updateBrightness(
+            (_brightness + direction * _brightnessCtrl.step).clamp(
+              _brightnessCtrl.minVal,
+              _brightnessCtrl.maxVal,
+            ),
+          );
+        } else if (_focusedIndex == 1) {
+          _updateAudio(
+            (_audio + direction * _audioCtrl.step).clamp(
+              _audioCtrl.minVal,
+              _audioCtrl.maxVal,
+            ),
+          );
+        }
+        break;
+    }
+  }
+
   void _handleGamepadLeft() {
     final layout = _getTabLayout(_selectedTabIndex);
     final (r, c) = _findGridPosition(layout, _focusedIndex);
@@ -475,72 +559,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       return;
     }
 
-    // Nếu hàng chỉ có 1 phần tử (Slider, Toggle, Preset), điều chỉnh giá trị của phần tử
-    switch (_selectedTabIndex) {
-      case 1:
-        if (_focusedIndex == 0) {
-          _toggleTdpAuto();
-        } else if (_focusedIndex == 1) {
-          _updateTdp(max(_tdpCtrl.minVal, _tdp - _tdpCtrl.step));
-        } else if (_focusedIndex == 2) {
-          _toggleFanAuto();
-        } else if (_focusedIndex == 3) {
-          _updateFan(max(_fanCtrl.minVal, _fan - _fanCtrl.step));
-        } else if (_focusedIndex == 4 && RtssInstallerService.isInstalled()) {
-          _updateFpsLimit(max(_rtssCtrl.minVal, _fpsLimit - _rtssCtrl.step));
-        } else if (_focusedIndex == 5 && RtssInstallerService.isInstalled()) {
-          _toggleRtssOsd();
-        } else if (_focusedIndex == 6 && RtssInstallerService.isInstalled()) {
-          _cyclePreset(
-            const [1, 2, 3, 4],
-            _rtssOsdZoom,
-            -1,
-            _updateRtssOsdZoom,
-          );
-        } else if (_focusedIndex == 7 && RtssInstallerService.isInstalled()) {
-          _cyclePreset(
-            RtssOsdPosition.values,
-            _rtssOsdPosition,
-            -1,
-            _updateRtssOsdPosition,
-          );
-        } else if (_focusedIndex == 8 && RtssInstallerService.isInstalled()) {
-          _cyclePreset(
-            RtssOsdLayout.values,
-            _rtssOsdMetrics.layout,
-            -1,
-            _updateRtssOsdLayout,
-          );
-        }
-        break;
-      case 2:
-        if (_focusedIndex == 0) {
-          _updateBrightness(
-            max(_brightnessCtrl.minVal, _brightness - _brightnessCtrl.step),
-          );
-        } else if (_focusedIndex == 1) {
-          _updateAudio(max(_audioCtrl.minVal, _audio - _audioCtrl.step));
-        } else if (_focusedIndex == 2) {
-          _toggleTouchscreen();
-        }
-        break;
-      case 3:
-        if (_focusedIndex == 4) {
-          _toggleAutoStart(!_autoStartEnabled);
-        } else if (_focusedIndex == 5) {
-          _cyclePreset(OverlayHookMode.values, _hookMode, -1, _updateHookMode);
-        } else if (_focusedIndex == 8) {
-          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, -1, _updateScale);
-        } else if (_focusedIndex == 9) {
-          _cyclePreset(
-            const [30, 35, 40, 45],
-            _widthPercent,
-            -1,
-            _updateWidthPercent,
-          );
-        }
-        break;
-    }
+    // Chỉ điều chỉnh giá trị nếu phần tử đang focus là Slider
+    _adjustFocusedSlider(-1);
   }
 
   void _handleGamepadRight() {
@@ -556,67 +576,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       return;
     }
 
-    // Nếu hàng chỉ có 1 phần tử (Slider, Toggle, Preset), điều chỉnh giá trị của phần tử
-    switch (_selectedTabIndex) {
-      case 1:
-        if (_focusedIndex == 0) {
-          _toggleTdpAuto();
-        } else if (_focusedIndex == 1) {
-          _updateTdp(min(_tdpCtrl.maxVal, _tdp + _tdpCtrl.step));
-        } else if (_focusedIndex == 2) {
-          _toggleFanAuto();
-        } else if (_focusedIndex == 3) {
-          _updateFan(min(_fanCtrl.maxVal, _fan + _fanCtrl.step));
-        } else if (_focusedIndex == 4 && RtssInstallerService.isInstalled()) {
-          _updateFpsLimit(min(_rtssCtrl.maxVal, _fpsLimit + _rtssCtrl.step));
-        } else if (_focusedIndex == 5 && RtssInstallerService.isInstalled()) {
-          _toggleRtssOsd();
-        } else if (_focusedIndex == 6 && RtssInstallerService.isInstalled()) {
-          _cyclePreset(const [1, 2, 3, 4], _rtssOsdZoom, 1, _updateRtssOsdZoom);
-        } else if (_focusedIndex == 7 && RtssInstallerService.isInstalled()) {
-          _cyclePreset(
-            RtssOsdPosition.values,
-            _rtssOsdPosition,
-            1,
-            _updateRtssOsdPosition,
-          );
-        } else if (_focusedIndex == 8 && RtssInstallerService.isInstalled()) {
-          _cyclePreset(
-            RtssOsdLayout.values,
-            _rtssOsdMetrics.layout,
-            1,
-            _updateRtssOsdLayout,
-          );
-        }
-        break;
-      case 2:
-        if (_focusedIndex == 0) {
-          _updateBrightness(
-            min(_brightnessCtrl.maxVal, _brightness + _brightnessCtrl.step),
-          );
-        } else if (_focusedIndex == 1) {
-          _updateAudio(min(_audioCtrl.maxVal, _audio + _audioCtrl.step));
-        } else if (_focusedIndex == 2) {
-          _toggleTouchscreen();
-        }
-        break;
-      case 3:
-        if (_focusedIndex == 4) {
-          _toggleAutoStart(!_autoStartEnabled);
-        } else if (_focusedIndex == 5) {
-          _cyclePreset(OverlayHookMode.values, _hookMode, 1, _updateHookMode);
-        } else if (_focusedIndex == 8) {
-          _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
-        } else if (_focusedIndex == 9) {
-          _cyclePreset(
-            const [30, 35, 40, 45],
-            _widthPercent,
-            1,
-            _updateWidthPercent,
-          );
-        }
-        break;
-    }
+    // Chỉ điều chỉnh giá trị nếu phần tử đang focus là Slider
+    _adjustFocusedSlider(1);
   }
 
   void _handleGamepadA() {
@@ -700,12 +661,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           ], runInShell: true);
         } else if (_focusedIndex == 3) {
           SystemOptimizer.trimMemory();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Đã giải phóng bộ nhớ RAM tiến trình!'),
-              duration: Duration(seconds: 1),
-            ),
-          );
         } else if (_focusedIndex == 4) {
           _toggleAutoStart(!_autoStartEnabled);
         } else if (_focusedIndex == 5) {
@@ -962,20 +917,11 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
 
   Future<void> _toggleTouchscreen() async {
-    final success = await TouchscreenService.toggleTouchscreen();
+    await TouchscreenService.toggleTouchscreen();
     if (mounted) {
       setState(() {
         _touchEnabled = TouchscreenService.isEnabled;
       });
-      if (!success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Cần quyền Administrator để bật/tắt cảm ứng!'),
-            duration: Duration(seconds: 2),
-            backgroundColor: AppTheme.danger,
-          ),
-        );
-      }
     }
   }
 
@@ -985,7 +931,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       _rtssInstallMsg = 'Đang kích hoạt trình cài đặt RTSS...';
     });
 
-    final success = await RtssInstallerService.installRtss(
+    await RtssInstallerService.installRtss(
       onStatusUpdate: (msg) {
         if (mounted) {
           setState(() {
@@ -1000,17 +946,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         _isInstallingRtss = false;
         _isRtssRunning = _rtssCtrl.isAvailable();
       });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success
-                ? 'Đã cài đặt và kết nối RTSS thành công!'
-                : 'Cài đặt RTSS thất bại hoặc bị hủy.',
-          ),
-          backgroundColor: success ? AppTheme.accent : AppTheme.danger,
-        ),
-      );
     }
   }
 
@@ -1032,38 +967,15 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   void _toggleAutoStart(bool val) async {
     setState(() => _autoStartEnabled = val);
-    final success = await AutostartService.instance.setEnabled(val);
+    await AutostartService.instance.setEnabled(val);
     if (mounted) {
       setState(() => _autoStartEnabled = AutostartService.instance.isEnabled);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success
-                ? (val
-                      ? 'Đã bật khởi động cùng Windows (Task Scheduler elevated)!'
-                      : 'Đã tắt khởi động cùng Windows!')
-                : 'Không thể thay đổi tác vụ khởi động (Cần quyền Admin).',
-          ),
-          duration: const Duration(seconds: 2),
-          backgroundColor: success ? AppTheme.accent : AppTheme.danger,
-        ),
-      );
     }
   }
 
   void _updateHookMode(OverlayHookMode mode) {
     setState(() => _hookMode = mode);
     DxgiHookService.instance.setHookMode(mode);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          mode == OverlayHookMode.sharedTexture
-              ? 'Chuyển sang Direct3D Shared Texture Injection (Present Hook)'
-              : 'Chuyển sang DXGI Borderless Hook (iFlip Mode)',
-        ),
-        duration: const Duration(seconds: 2),
-      ),
-    );
   }
 
   @override
@@ -1218,12 +1130,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           },
           onTrimMemory: () {
             SystemOptimizer.trimMemory();
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Đã giải phóng bộ nhớ RAM tiến trình!'),
-                duration: Duration(seconds: 1),
-              ),
-            );
           },
           onClosePanel: () => OverlayController.instance.hideOverlay(),
           isRtssRunning: _isRtssRunning,

@@ -336,29 +336,23 @@ class GamepadService {
         int activeThumbLY = 0;
         bool foundActiveGamepad = false;
 
-        // Quét qua tối đa 4 tay cầm kết nối
-        for (int i = 0; i < 4; i++) {
-          final res = _xInputGetState!(i, _pState!);
-          if (res == 0) { // ERROR_SUCCESS = 0
-            foundActiveGamepad = true;
-            final gamepad = _pState!.ref.gamepad;
-            final buttons = gamepad.wButtons;
+        // Chỉ quét trực tiếp tay cầm chính ở Slot 0 (Handheld Controller tích hợp)
+        final res = _xInputGetState!(0, _pState!);
+        if (res == 0) { // ERROR_SUCCESS = 0
+          foundActiveGamepad = true;
+          final gamepad = _pState!.ref.gamepad;
+          final buttons = gamepad.wButtons;
 
-            if (_overlayMask != 0 && (buttons & _overlayMask) == _overlayMask) {
-              anyOverlayComboPressed = true;
-            }
-            if (_keyboardMask != 0 && (buttons & _keyboardMask) == _keyboardMask) {
-              anyKeyboardComboPressed = true;
-            }
-
-            activeButtons |= buttons;
-            if (gamepad.sThumbLX.abs() > activeThumbLX.abs()) {
-              activeThumbLX = gamepad.sThumbLX;
-            }
-            if (gamepad.sThumbLY.abs() > activeThumbLY.abs()) {
-              activeThumbLY = gamepad.sThumbLY;
-            }
+          if (_overlayMask != 0 && (buttons & _overlayMask) == _overlayMask) {
+            anyOverlayComboPressed = true;
           }
+          if (_keyboardMask != 0 && (buttons & _keyboardMask) == _keyboardMask) {
+            anyKeyboardComboPressed = true;
+          }
+
+          activeButtons = buttons;
+          activeThumbLX = gamepad.sThumbLX;
+          activeThumbLY = gamepad.sThumbLY;
         }
 
         _isConnected = foundActiveGamepad;
