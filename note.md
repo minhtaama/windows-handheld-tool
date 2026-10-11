@@ -747,6 +747,7 @@ flowchart TD
 - Toàn bộ các khối lệnh can thiệp kiểu dáng cửa sổ (`MakeWindowBorderless`, cưỡng bức `Windowed = TRUE`, triệt tiêu `ALLOW_MODE_SWITCH`, chặn `SetFullscreenState`) phải được bọc trong điều kiện nghiêm ngặt:
   $$\text{if } (g\_hookMode == \text{OVERLAY\_HOOK_MODE\_BORDERLESS})$$
 - Khi người chơi chọn `OVERLAY_HOOK_MODE_SHARED_TEXTURE` ($g\_hookMode = 1$), DLL đóng vai trò một lớp trung chuyển trong suốt (Transparent Pass-Through), giữ nguyên vẹn 100% trạng thái hiển thị của trò chơi và chỉ kích hoạt duy nhất luồng tiêm kết cấu Direct3D tại khe thời gian `Present`.
+- **Tính độc lập khi nâng cấp đồ họa (Zero-Side-Effect Guarantee)**: Toàn bộ việc nâng cấp thuật toán vẽ từ sao chép thô `CopySubresourceRegion` sang đường ống vẽ đổ bóng `Textured Quad Blit & Alpha Blending` (Phương án C) được đóng gói cô lập hoàn toàn bên trong khối kiểm tra `g_hookMode == OVERLAY_HOOK_MODE_SHARED_TEXTURE` của hàm `Hooked_Present`. Do đó, khi người dùng lựa chọn chế độ DXGI Borderless Hook (`g_hookMode == 0`), toàn bộ mã nguồn của Phương án C sẽ bị bỏ qua 100%, đảm bảo tuyệt đối không gây ra bất kỳ tác động phụ hay ảnh hưởng chéo nào đến độ ổn định của chế độ Borderless.
 
 #### 3. Bế tắc kỹ thuật và giải pháp triệt để cho Direct3D Shared Texture Pipeline (Surface Sharing & Format Family Harmonization)
 - **Bản chất vật lý của Direct3D Inter-Process Texture Sharing**: Để đưa được hình ảnh từ một ứng dụng độc lập vào trong bộ đệm khung hình của trò chơi DirectX mà không tạo thêm cửa sổ ngoài, tiến trình nguồn (Host) phải khởi tạo một đối tượng kết cấu Direct3D 11 (`ID3D11Texture2D`) mang cờ tài nguyên chia sẻ `D3D11_RESOURCE_MISC_SHARED` trong nhân đồ họa (DXGKRNL). Sau đó, tiến trình nguồn lấy con trỏ định danh tài nguyên chia sẻ (`HANDLE hSharedTexture`) qua giao diện `IDXGIResource::GetSharedHandle` và đưa vào phân đoạn nhớ dùng chung toàn hệ thống (`#pragma data_seg(".shared")`).
@@ -757,9 +758,14 @@ flowchart TD
   * Đa số các tựa game Direct3D hiện đại (Unreal Engine, Unity, Frostbite) sử dụng chuỗi hoán đổi khung hình định dạng `DXGI_FORMAT_R8G8B8A8_UNORM` (thuộc họ `R8G8B8A8_TYPELESS`), trong khi bề mặt render Win32 GDI mặc định là `DXGI_FORMAT_B8G8R8A8_UNORM` (thuộc họ `B8G8R8A8_TYPELESS`).
   * Đặc tả phần cứng Direct3D 11 của hàm `CopySubresourceRegion` **nghiêm cấm sao chép dữ liệu giữa hai họ định dạng khác nhau**. Lời gọi sao chép sẽ bị nhân đồ họa âm thầm từ chối (Silent Drop) hoặc báo lỗi D3D11 Error.
   * *Giải pháp*: Xây dựng đường ống kết cấu kép (`Dual Shared Texture Pipeline`): Host tạo đồng thời hai kết cấu GPU chia sẻ (`g_hSharedTextureBGRA` và `g_hSharedTextureRGBA`). Khi chụp điểm ảnh, hệ thống cập nhật kết cấu BGRA và thực hiện thuật toán hoán đổi kênh màu (Color Channel Swizzle: đảo bit $R \leftrightarrow B$) nạp vào kết cấu RGBA. Tại hàm `Hooked_Present`, hook đọc `pBackBuffer->GetDesc(&backDesc)` và tự động chọn đúng handle cùng họ định dạng với game, đảm bảo tương thích 100% mọi tựa game DirectX 11.
-- **Bế tắc 3: Bảo toàn không gian quan sát của game (Subresource Region Dock Clipping)**:
-  * Sao chép toàn bộ màn hình sẽ khiến 60% vùng trong suốt bên trái của cửa sổ Flutter đè nền đen lên thế giới game.
-  * *Giải pháp*: Hàm `CopySubresourceRegion` sử dụng cấu trúc `D3D11_BOX` chỉ trích xuất và ghi đè duy nhất khu vực Side Dock Panel (40% bề rộng mép phải màn hình), giữ nguyên vẹn 60% không gian hiển thị bên trái cho trò chơi. Đồng thời, tại `Hooked_SetFullscreenState`, nếu chưa sẵn sàng kết cấu dùng chung, hệ thống tự động fallback sang `MakeWindowBorderless` để bảo vệ hiển thị cho người dùng.
+- **Bế tắc 3: Sai lệch độ phân giải và sập game khi sao chép byte thô (Resolution Mismatch Crash & Textured Quad Blit)**:
+  * Lệnh sao chép byte thô `CopySubresourceRegion` có ràng buộc phần cứng: $\text{DstY} + \text{box.bottom} \le \text{backDesc.Height}$. Khi game chạy 720p hoặc 800p trên màn hình 1080p, $\text{sharedDesc.Height} = 1080 > 720$, GPU Driver lập tức phát mã lỗi phần cứng `DXGI_ERROR_DEVICE_REMOVED`, làm sập và văng game ra Desktop. Đồng thời, sao chép byte thô không hỗ trợ co dãn tỷ lệ và không hòa trộn được độ trong suốt (Alpha Blending).
+  * *Giải pháp triệt để (Phương án C - Textured Quad Render Pipeline)*: Thay thế hoàn toàn `CopySubresourceRegion` bằng quy trình render Shader Quad Blit:
+    1. Nhúng trực tiếp bytecode HLSL Vertex Shader và Pixel Shader (`overlay_vs.h`, `overlay_ps.h`) biên dịch sẵn qua `fxc.exe` (không phụ thuộc runtime compiler ngoài).
+    2. Cấu hình cơ chế sao lưu và khôi phục toàn diện `D3D11StateBackup` để không làm sai lệch trạng thái render của game.
+    3. Tạo RenderTargetView từ `pBackBuffer` của game và ShaderResourceView từ Shared Texture của Panel.
+    4. Kích hoạt bộ lọc song tuyến tính phần cứng (`Bilinear Sampler`) và bộ hòa trộn độ trong suốt phần cứng (`D3D11_BLEND_SRC_ALPHA`, `D3D11_BLEND_INV_SRC_ALPHA`).
+    5. Thiết lập Viewport khớp với kích thước BackBuffer của game và thực thi lệnh vẽ dải tam giác `pContext->Draw(4, 0)` với tỷ lệ dock 40% mép phải. GPU tự động co dãn điểm ảnh mượt mà từ 1080p xuống 720p/800p mà không bao giờ vi phạm giới hạn bộ nhớ, bảo toàn hiệu ứng bo góc và nền mờ trong suốt hoàn hảo.
 
 ---
 
@@ -1243,9 +1249,34 @@ flowchart TD
    - Khi game chạy độc quyền toàn màn hình (Exclusive Fullscreen) ở độ phân giải 720p, bộ điều khiển xuất hình phần cứng của GPU (Display Controller / CRTC) buộc màn hình vật lý chuyển sang tần số và ma trận quét 720p.
    - Khi cửa sổ ứng dụng người dùng (Flutter Window trên Desktop 1080p) trồi lên, nhân Windows buộc phải thu hồi quyền độc quyền (Exclusive Drop).
    - Quá trình chuyển đổi ngược từ 720p về 1080p khiến màn hình bị ngắt tín hiệu hiển thị (Màn hình đen). Cửa sổ Flutter khi được vẽ lại trong lúc độ phân giải màn hình đang chuyển dịch bị kẹt kích thước bộ đệm ở 720p trong một màn hình nền đen 1080p.
-2. **Sai lệch kích thước kết cấu khi tiêm vào chuỗi hoán đổi khung hình (Texture Blit Dimensions Mismatch)**:
-   - Trong kiến trúc Shared Texture, bề mặt đồ họa của Flutter (kết cấu kích thước $1920 \times 1080$) được chia sẻ trực tiếp qua tay cầm kết cấu (Shared Handle) để vẽ vào bộ đệm sau (BackBuffer) của game tại hàm `Present()`.
-   - Nếu game chạy 720p, bộ đệm BackBuffer của game chỉ có kích thước $1280 \times 720$. Lệnh sao chép kết cấu Direct3D (`CopySubresourceRegion` hoặc `DrawIndexed`) khi hai tài nguyên có kích thước và định dạng pixel không đồng nhất sẽ bị tầng DirectX Debug Runtime phát hiện lỗi nghiêm trọng, phát mã lỗi hủy bỏ thiết bị (`DXGI_ERROR_DEVICE_REMOVED`) khiến game văng ra màn hình ngoài ngay lập tức.
+2. **Sai lệch kích thước kết cấu khi tiêm vào chuỗi hoán đổi khung hình (Texture Blit Dimensions Mismatch & Out-of-Bounds Crash)**:
+   - Trong kiến trúc Shared Texture, bề mặt đồ họa của Flutter (kết cấu kích thước $1920 \times 1080$) được chia sẻ trực tiếp qua tay cầm kết cấu (Shared Handle) để chép vào bộ đệm sau (BackBuffer) của game tại hàm `Present()`.
+   - Hàm sao chép Direct3D 11 `ID3D11DeviceContext::CopySubresourceRegion()` có quy tắc ràng buộc phần cứng nghiêm ngặt:
+     $$\text{DstX} + (\text{box.right} - \text{box.left}) \le \text{backDesc.Width}$$
+     $$\text{DstY} + (\text{box.bottom} - \text{box.top}) \le \text{backDesc.Height}$$
+   - Khi game chạy ở độ phân giải 720p ($1280 \times 720$), bộ đệm đích chỉ có $\text{backDesc.Height} = 720$. Tuy nhiên, hộp cắt nguồn từ Panel lại lấy $\text{box.bottom} = \text{sharedDesc.Height} = 1080$.
+   - Khi đó: $0 + 1080 > 720$. Trình điều khiển đồ họa (DirectX Runtime & GPU Driver) phát hiện hành vi ghi đè tràn biên bộ đệm (Out-of-Bounds Memory Write), lập tức phát mã lỗi phần cứng hủy bỏ thiết bị đồ họa (**`DXGI_ERROR_DEVICE_REMOVED`** hoặc **`DXGI_ERROR_DEVICE_HUNG`**), khiến toàn bộ tiến trình game bị sập và văng ra ngoài màn hình Desktop.
+   - Hơn nữa, `CopySubresourceRegion` là hàm sao chép byte nguyên thủy 1:1, **hoàn toàn không hỗ trợ co dãn tỷ lệ (No Stretch / No Scaling)**. Nếu không xử lý đúng, hình ảnh Panel sẽ bị cắt cụt đáy màn hình hoặc vỡ bố cục.
+
+   * **Ba hướng khắc phục kỹ thuật**:
+     - *Hướng 1 (Cấp bách - Kẹp biên an toàn trong C++)*: Bắt buộc phải tính toán lại hộp cắt nguồn `D3D11_BOX` dựa trên kích thước thực tế của `backDesc`, kẹp biên $\text{box.bottom} = \min(\text{sharedDesc.Height}, \text{backDesc.Height})$ và $\text{box.right} - \text{box.left} \le \text{backDesc.Width}$ để triệt tiêu hoàn toàn mã lỗi tràn biên DirectX.
+     - *Hướng 2 (Chuẩn mực đồ họa của OBS / Discord Overlay - Phương án C)*: Thay vì dùng `CopySubresourceRegion`, sử dụng một cặp Vertex + Pixel Shader đơn giản để vẽ hình chữ nhật phủ (Textured Quad Blit) lên góc phải màn hình game với bộ lọc song tuyến tính (Bilinear Sampler). Card đồ họa sẽ tự động co giãn kết cấu 1080p của Panel xuống 720p mượt mà và bảo toàn độ trong suốt (Alpha Blending).
+     - *Hướng 3 (Chuẩn mực hệ sinh thái Handheld của GPDTool - Khuyên dùng nhất)*: Sử dụng **DXGI Borderless Hook (Chế độ 0)**. Cưỡng bức game thành Borderless Fullscreen để cửa sổ Flutter trong suốt nổi đè lên trên bằng bộ hợp thành DWM iFlip của Windows. Windows duy trì 1080p gốc, game chạy 720p được GPU tự co dãn (AMD RSR / FSR), loại bỏ hoàn toàn sự can thiệp vào bộ nhớ texture nội bộ của game.
+
+   * **Đánh giá Chuyên sâu Kiến trúc Phương án C (Direct3D 11 Textured Quad Shader Pipeline)**:
+     - **Bản chất vật lý**:
+       + Thay vì coi kết cấu là một khối byte vùng nhớ cần chép thô, GPU xem nó như một bề mặt bản đồ chất liệu (Texture Map).
+       + Bộ lấy mẫu phần cứng (Hardware Texture Sampler Unit) tự động thực hiện phép nội suy song tuyến tính (Bilinear Interpolation) giữa các điểm ảnh theo tỷ lệ tọa độ chuẩn hóa UV $[0.0, 1.0]$.
+       + Nhờ đó, một kết cấu nguồn $1920 \times 1080$ sẽ được tự động co nhỏ vừa khít vào một khung chữ nhật bất kỳ trên bộ đệm đích $1280 \times 720$ (hoặc phóng to lên 4K) mà không bao giờ vi phạm ràng buộc kích thước bộ nhớ phần cứng.
+     - **Ưu điểm (Pros)**:
+       1. *Miễn nhiễm 100% với lỗi sai lệch độ phân giải*: Hoạt động ổn định trên mọi độ phân giải (720p, 800p, 900p, 1080p, 1440p, 4K) và mọi tỷ lệ khung hình (16:9, 16:10).
+       2. *Hòa trộn trong suốt thực thụ (True Alpha Blending)*: Sử dụng chế độ hòa trộn `D3D11_BLEND_SRC_ALPHA` và `D3D11_BLEND_INV_SRC_ALPHA`, các hiệu ứng đổ bóng mờ, bo góc panel hay nền trong suốt của Flutter sẽ hòa quyện tự nhiên vào không gian 3D của game, không bị hiện tượng hộp đen đục ngầu như khi copy thô.
+       3. *Không phụ thuộc vào cửa sổ Windows*: Hoạt động được trên cả các game chạy Độc chiếm phần cứng (Exclusive Fullscreen) thuần túy.
+     - **Nhược điểm & Thách thức (Cons)**:
+       1. *Chi phí quản lý trạng thái đường ống đồ họa (Pipeline State Backup/Restore)*: Để không làm lỗi hình ảnh của game, mã nguồn C++ bắt buộc phải sao lưu toàn bộ trạng thái DirectX của game trước khi vẽ (Viewport, BlendState, DepthStencilState, Shaders, InputLayout, RenderTargetViews) và phục hồi nguyên vẹn 100% sau khi vẽ xong. Bỏ sót bất kỳ cờ nào cũng có thể khiến khung hình tiếp theo của game bị nhấp nháy hoặc biến dạng.
+       2. *Độ phức tạp biên dịch*: Cần nhúng sẵn mã bytecode nhị phân của Vertex Shader và Pixel Shader vào thẳng DLL (qua `fxc.exe`) để không phụ thuộc vào các thư viện biên dịch bên ngoài.
+       3. *Nguy cơ Anti-Cheat*: Việc can thiệp trực tiếp vào quy trình vẽ của SwapChain trong một số tựa game online cạnh tranh có thể bị các hệ thống chống gian lận (Anti-Cheat) nghi ngờ. Do đó phương án này tối ưu nhất cho các tựa game offline / thiết bị chơi game cầm tay cá nhân.
+
 3. **Tại sao RTSS Overlay không hiện trong game?**:
    - Tiến trình `RTSS.exe` đòi hỏi quyền Quản trị viên (UAC Elevation). Nếu lệnh khởi chạy `ShellExecuteW(runas, ...)` bị Windows chặn hoặc người dùng chưa cấp quyền chạy ngầm, RTSS hoàn toàn không tồn tại trong bộ nhớ RAM (`Get-Process RTSS` = rỗng).
    - RTSS có nguyên lý bất di bất dịch: **Phải khởi chạy RTSS TRƯỚC KHI game mở lên**. Nếu game đã chạy trước khi RTSS khởi động, móc chặn đồ họa (`RTSSHooks64.dll`) không thể tiêm vào tiến trình game.

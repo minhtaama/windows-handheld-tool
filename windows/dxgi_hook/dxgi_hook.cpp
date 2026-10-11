@@ -1,5 +1,7 @@
 #include "dxgi_hook.h"
 #include "minhook/MinHook.h"
+#include "overlay_vs.h"
+#include "overlay_ps.h"
 
 #include <string>
 #include <vector>
@@ -208,8 +210,217 @@ DWORD WINAPI Hooked_XInputGetStateEx(DWORD dwUserIndex, void* pState) {
     return res;
 }
 
+// =========================================================================
+// Direct3D 11 Textured Quad Rendering Pipeline (Phương án C)
+// =========================================================================
+
+struct PanelConfigBuffer {
+    float panelRatio;
+    float padding[3];
+};
+
+namespace {
+ID3D11VertexShader*       g_pOverlayVS = nullptr;
+ID3D11PixelShader*        g_pOverlayPS = nullptr;
+ID3D11BlendState*         g_pOverlayBlendState = nullptr;
+ID3D11SamplerState*       g_pOverlaySamplerState = nullptr;
+ID3D11DepthStencilState*  g_pOverlayDepthStencilState = nullptr;
+ID3D11RasterizerState*    g_pOverlayRasterizerState = nullptr;
+ID3D11Buffer*             g_pOverlayConstantBuffer = nullptr;
+ID3D11Device*             g_pCachedDevice = nullptr;
+
+void ReleaseOverlayRenderResources() {
+    if (g_pOverlayConstantBuffer)     { g_pOverlayConstantBuffer->Release(); g_pOverlayConstantBuffer = nullptr; }
+    if (g_pOverlayRasterizerState)    { g_pOverlayRasterizerState->Release(); g_pOverlayRasterizerState = nullptr; }
+    if (g_pOverlayDepthStencilState)  { g_pOverlayDepthStencilState->Release(); g_pOverlayDepthStencilState = nullptr; }
+    if (g_pOverlaySamplerState)       { g_pOverlaySamplerState->Release(); g_pOverlaySamplerState = nullptr; }
+    if (g_pOverlayBlendState)         { g_pOverlayBlendState->Release(); g_pOverlayBlendState = nullptr; }
+    if (g_pOverlayPS)                 { g_pOverlayPS->Release(); g_pOverlayPS = nullptr; }
+    if (g_pOverlayVS)                 { g_pOverlayVS->Release(); g_pOverlayVS = nullptr; }
+    g_pCachedDevice = nullptr;
+}
+
+bool EnsureOverlayRenderResources(ID3D11Device* pDevice) {
+    if (!pDevice) return false;
+    if (g_pCachedDevice != pDevice) {
+        ReleaseOverlayRenderResources();
+        g_pCachedDevice = pDevice;
+    }
+
+    if (g_pOverlayVS && g_pOverlayPS && g_pOverlayBlendState && g_pOverlaySamplerState &&
+        g_pOverlayDepthStencilState && g_pOverlayRasterizerState && g_pOverlayConstantBuffer) {
+        return true;
+    }
+
+    // 1. Tạo Vertex Shader
+    if (!g_pOverlayVS) {
+        HRESULT hr = pDevice->CreateVertexShader(g_overlayVSBytecode, sizeof(g_overlayVSBytecode), nullptr, &g_pOverlayVS);
+        if (FAILED(hr)) return false;
+    }
+
+    // 2. Tạo Pixel Shader
+    if (!g_pOverlayPS) {
+        HRESULT hr = pDevice->CreatePixelShader(g_overlayPSBytecode, sizeof(g_overlayPSBytecode), nullptr, &g_pOverlayPS);
+        if (FAILED(hr)) return false;
+    }
+
+    // 3. Tạo Blend State (Hardware Alpha Blending)
+    if (!g_pOverlayBlendState) {
+        D3D11_BLEND_DESC blendDesc{};
+        blendDesc.AlphaToCoverageEnable = FALSE;
+        blendDesc.IndependentBlendEnable = FALSE;
+        blendDesc.RenderTarget[0].BlendEnable = TRUE;
+        blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+        HRESULT hr = pDevice->CreateBlendState(&blendDesc, &g_pOverlayBlendState);
+        if (FAILED(hr)) return false;
+    }
+
+    // 4. Tạo Sampler State (Bilinear Clamp)
+    if (!g_pOverlaySamplerState) {
+        D3D11_SAMPLER_DESC sampDesc{};
+        sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        sampDesc.MinLOD = 0;
+        sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+
+        HRESULT hr = pDevice->CreateSamplerState(&sampDesc, &g_pOverlaySamplerState);
+        if (FAILED(hr)) return false;
+    }
+
+    // 5. Tạo Depth-Stencil State (Disable Depth Test & Write)
+    if (!g_pOverlayDepthStencilState) {
+        D3D11_DEPTH_STENCIL_DESC dsDesc{};
+        dsDesc.DepthEnable = FALSE;
+        dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+        dsDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;
+        dsDesc.StencilEnable = FALSE;
+
+        HRESULT hr = pDevice->CreateDepthStencilState(&dsDesc, &g_pOverlayDepthStencilState);
+        if (FAILED(hr)) return false;
+    }
+
+    // 6. Tạo Rasterizer State (Cull None, Solid)
+    if (!g_pOverlayRasterizerState) {
+        D3D11_RASTERIZER_DESC rastDesc{};
+        rastDesc.FillMode = D3D11_FILL_SOLID;
+        rastDesc.CullMode = D3D11_CULL_NONE;
+        rastDesc.FrontCounterClockwise = FALSE;
+        rastDesc.DepthClipEnable = FALSE;
+
+        HRESULT hr = pDevice->CreateRasterizerState(&rastDesc, &g_pOverlayRasterizerState);
+        if (FAILED(hr)) return false;
+    }
+
+    // 7. Tạo Constant Buffer cho Panel Ratio
+    if (!g_pOverlayConstantBuffer) {
+        D3D11_BUFFER_DESC cbDesc{};
+        cbDesc.ByteWidth = sizeof(PanelConfigBuffer);
+        cbDesc.Usage = D3D11_USAGE_DEFAULT;
+        cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        cbDesc.CPUAccessFlags = 0;
+
+        HRESULT hr = pDevice->CreateBuffer(&cbDesc, nullptr, &g_pOverlayConstantBuffer);
+        if (FAILED(hr)) return false;
+    }
+
+    return true;
+}
+
+struct D3D11StateBackup {
+    ID3D11RenderTargetView*   m_prevRTV = nullptr;
+    ID3D11DepthStencilView*   m_prevDSV = nullptr;
+    UINT                      m_prevNumViewports = 0;
+    D3D11_VIEWPORT            m_prevViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    ID3D11BlendState*         m_prevBlendState = nullptr;
+    FLOAT                     m_prevBlendFactor[4] = {0};
+    UINT                      m_prevSampleMask = 0;
+    ID3D11DepthStencilState*  m_prevDepthStencilState = nullptr;
+    UINT                      m_prevStencilRef = 0;
+    ID3D11RasterizerState*    m_prevRasterizerState = nullptr;
+    ID3D11VertexShader*       m_prevVS = nullptr;
+    ID3D11PixelShader*        m_prevPS = nullptr;
+    ID3D11GeometryShader*     m_prevGS = nullptr;
+    ID3D11InputLayout*        m_prevInputLayout = nullptr;
+    D3D11_PRIMITIVE_TOPOLOGY  m_prevTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+    ID3D11ShaderResourceView* m_prevPS_SRV = nullptr;
+    ID3D11SamplerState*       m_prevPS_Sampler = nullptr;
+    ID3D11Buffer*             m_prevVS_CB = nullptr;
+
+    void Backup(ID3D11DeviceContext* ctx) {
+        if (!ctx) return;
+        ctx->OMGetRenderTargets(1, &m_prevRTV, &m_prevDSV);
+        m_prevNumViewports = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+        ctx->RSGetViewports(&m_prevNumViewports, m_prevViewports);
+        ctx->OMGetBlendState(&m_prevBlendState, m_prevBlendFactor, &m_prevSampleMask);
+        ctx->OMGetDepthStencilState(&m_prevDepthStencilState, &m_prevStencilRef);
+        ctx->RSGetState(&m_prevRasterizerState);
+        ctx->VSGetShader(&m_prevVS, nullptr, nullptr);
+        ctx->PSGetShader(&m_prevPS, nullptr, nullptr);
+        ctx->GSGetShader(&m_prevGS, nullptr, nullptr);
+        ctx->IAGetInputLayout(&m_prevInputLayout);
+        ctx->IAGetPrimitiveTopology(&m_prevTopology);
+        ctx->PSGetShaderResources(0, 1, &m_prevPS_SRV);
+        ctx->PSGetSamplers(0, 1, &m_prevPS_Sampler);
+        ctx->VSGetConstantBuffers(0, 1, &m_prevVS_CB);
+    }
+
+    void Restore(ID3D11DeviceContext* ctx) {
+        if (!ctx) return;
+        ctx->OMSetRenderTargets(1, &m_prevRTV, m_prevDSV);
+        if (m_prevRTV) { m_prevRTV->Release(); m_prevRTV = nullptr; }
+        if (m_prevDSV) { m_prevDSV->Release(); m_prevDSV = nullptr; }
+
+        if (m_prevNumViewports > 0) {
+            ctx->RSSetViewports(m_prevNumViewports, m_prevViewports);
+        }
+
+        ctx->OMSetBlendState(m_prevBlendState, m_prevBlendFactor, m_prevSampleMask);
+        if (m_prevBlendState) { m_prevBlendState->Release(); m_prevBlendState = nullptr; }
+
+        ctx->OMSetDepthStencilState(m_prevDepthStencilState, m_prevStencilRef);
+        if (m_prevDepthStencilState) { m_prevDepthStencilState->Release(); m_prevDepthStencilState = nullptr; }
+
+        ctx->RSSetState(m_prevRasterizerState);
+        if (m_prevRasterizerState) { m_prevRasterizerState->Release(); m_prevRasterizerState = nullptr; }
+
+        ctx->VSSetShader(m_prevVS, nullptr, 0);
+        if (m_prevVS) { m_prevVS->Release(); m_prevVS = nullptr; }
+
+        ctx->PSSetShader(m_prevPS, nullptr, 0);
+        if (m_prevPS) { m_prevPS->Release(); m_prevPS = nullptr; }
+
+        ctx->GSSetShader(m_prevGS, nullptr, 0);
+        if (m_prevGS) { m_prevGS->Release(); m_prevGS = nullptr; }
+
+        ctx->IASetInputLayout(m_prevInputLayout);
+        if (m_prevInputLayout) { m_prevInputLayout->Release(); m_prevInputLayout = nullptr; }
+
+        ctx->IASetPrimitiveTopology(m_prevTopology);
+
+        ctx->PSSetShaderResources(0, 1, &m_prevPS_SRV);
+        if (m_prevPS_SRV) { m_prevPS_SRV->Release(); m_prevPS_SRV = nullptr; }
+
+        ctx->PSSetSamplers(0, 1, &m_prevPS_Sampler);
+        if (m_prevPS_Sampler) { m_prevPS_Sampler->Release(); m_prevPS_Sampler = nullptr; }
+
+        ctx->VSSetConstantBuffers(0, 1, &m_prevVS_CB);
+        if (m_prevVS_CB) { m_prevVS_CB->Release(); m_prevVS_CB = nullptr; }
+    }
+};
+} // namespace
+
 // Hook hàm Present trên SwapChain (Slot 8)
-// Xử lý Phương án 3: Direct3D Shared Texture Injection (OBS / Discord style)
+// Xử lý Phương án C: Direct3D Textured Quad Shader Pipeline với Bilinear Scaling & Alpha Blending
 HRESULT STDMETHODCALLTYPE Hooked_Present(
     IDXGISwapChain* pThis,
     UINT SyncInterval,
@@ -237,7 +448,7 @@ HRESULT STDMETHODCALLTYPE Hooked_Present(
                         hSharedToOpen = g_hSharedTextureBGRA ? g_hSharedTextureBGRA : (g_hSharedTexture ? g_hSharedTexture : g_hSharedTextureRGBA);
                     }
 
-                    if (hSharedToOpen) {
+                    if (hSharedToOpen && EnsureOverlayRenderResources(pDevice)) {
                         ID3D11Texture2D* pSharedTexture = nullptr;
                         HRESULT hrOpen = pDevice->OpenSharedResource(
                             hSharedToOpen,
@@ -249,26 +460,86 @@ HRESULT STDMETHODCALLTYPE Hooked_Present(
                             D3D11_TEXTURE2D_DESC sharedDesc{};
                             pSharedTexture->GetDesc(&sharedDesc);
 
-                            // Chỉ sao chép vùng Side Dock Panel bên mép phải (khoảng 40% bề rộng màn hình)
-                            // Giữ nguyên vẹn 60% màn hình bên trái cho thế giới game mà không che khuất
-                            UINT panelW = static_cast<UINT>(sharedDesc.Width * 0.40f);
-                            if (panelW > sharedDesc.Width) panelW = sharedDesc.Width;
+                            // Tạo Render Target View cho BackBuffer của trò chơi
+                            D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+                            rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+                            rtvDesc.Texture2D.MipSlice = 0;
+                            if (backDesc.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS) {
+                                rtvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                            } else if (backDesc.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS) {
+                                rtvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                            } else {
+                                rtvDesc.Format = backDesc.Format;
+                            }
 
-                            D3D11_BOX box{};
-                            box.left = sharedDesc.Width - panelW;
-                            box.right = sharedDesc.Width;
-                            box.top = 0;
-                            box.bottom = sharedDesc.Height;
-                            box.front = 0;
-                            box.back = 1;
+                            ID3D11RenderTargetView* pRTV = nullptr;
+                            HRESULT hrRTV = pDevice->CreateRenderTargetView(pBackBuffer, &rtvDesc, &pRTV);
 
-                            UINT destX = backDesc.Width > panelW ? (backDesc.Width - panelW) : 0;
+                            // Tạo Shader Resource View cho Shared Texture nhận từ Flutter UI
+                            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+                            srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                            srvDesc.Texture2D.MostDetailedMip = 0;
+                            srvDesc.Texture2D.MipLevels = 1;
+                            if (sharedDesc.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS) {
+                                srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                            } else if (sharedDesc.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS) {
+                                srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                            } else {
+                                srvDesc.Format = sharedDesc.Format;
+                            }
 
-                            // Chép trực tiếp kết cấu Side Panel vào BackBuffer trước khi GPU xuất hình
-                            pContext->CopySubresourceRegion(
-                                pBackBuffer, 0, destX, 0, 0,
-                                pSharedTexture, 0, &box
-                            );
+                            ID3D11ShaderResourceView* pSRV = nullptr;
+                            HRESULT hrSRV = pDevice->CreateShaderResourceView(pSharedTexture, &srvDesc, &pSRV);
+
+                            if (SUCCEEDED(hrRTV) && pRTV && SUCCEEDED(hrSRV) && pSRV) {
+                                // 1. Sao lưu toàn bộ trạng thái DirectX Pipeline hiện tại của trò chơi
+                                D3D11StateBackup stateBackup;
+                                stateBackup.Backup(pContext);
+
+                                // 2. Nạp hằng số panelRatio (0.40 = dock 40% màn hình bên phải)
+                                PanelConfigBuffer config{};
+                                config.panelRatio = 0.40f;
+                                pContext->UpdateSubresource(g_pOverlayConstantBuffer, 0, nullptr, &config, 0, 0);
+
+                                // 3. Thiết lập Viewport bao phủ đúng kích thước thực tế BackBuffer của game
+                                D3D11_VIEWPORT vp{};
+                                vp.TopLeftX = 0.0f;
+                                vp.TopLeftY = 0.0f;
+                                vp.Width = static_cast<FLOAT>(backDesc.Width);
+                                vp.Height = static_cast<FLOAT>(backDesc.Height);
+                                vp.MinDepth = 0.0f;
+                                vp.MaxDepth = 1.0f;
+                                pContext->RSSetViewports(1, &vp);
+
+                                // 4. Ráp Render Target & Tắt Depth-Stencil
+                                pContext->OMSetRenderTargets(1, &pRTV, nullptr);
+                                pContext->OMSetDepthStencilState(g_pOverlayDepthStencilState, 0);
+
+                                // 5. Cấu hình Hardware Alpha Blending
+                                const FLOAT blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+                                pContext->OMSetBlendState(g_pOverlayBlendState, blendFactor, 0xffffffff);
+
+                                // 6. Cấu hình Rasterizer
+                                pContext->RSSetState(g_pOverlayRasterizerState);
+
+                                // 7. Cấu hình Shaders & Bindings
+                                pContext->IASetInputLayout(nullptr);
+                                pContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+                                pContext->VSSetShader(g_pOverlayVS, nullptr, 0);
+                                pContext->VSSetConstantBuffers(0, 1, &g_pOverlayConstantBuffer);
+                                pContext->PSSetShader(g_pOverlayPS, nullptr, 0);
+                                pContext->PSSetShaderResources(0, 1, &pSRV);
+                                pContext->PSSetSamplers(0, 1, &g_pOverlaySamplerState);
+
+                                // 8. Thực hiện lệnh vẽ Quad 4 đỉnh nội suy tỷ lệ
+                                pContext->Draw(4, 0);
+
+                                // 9. Phục hồi nguyên trạng pipeline của trò chơi
+                                stateBackup.Restore(pContext);
+                            }
+
+                            if (pSRV) pSRV->Release();
+                            if (pRTV) pRTV->Release();
                             pSharedTexture->Release();
                         }
                     }
@@ -285,6 +556,7 @@ HRESULT STDMETHODCALLTYPE Hooked_Present(
     }
     return S_OK;
 }
+
 
 // Hook hàm SetFullscreenState trên SwapChain
 HRESULT STDMETHODCALLTYPE Hooked_SetFullscreenState(
@@ -1227,6 +1499,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
             break;
 
         case DLL_PROCESS_DETACH:
+            ReleaseOverlayRenderResources();
             if (g_isInitialized) {
                 MH_DisableHook(MH_ALL_HOOKS);
                 MH_Uninitialize();

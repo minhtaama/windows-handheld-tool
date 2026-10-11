@@ -18,7 +18,7 @@
         "keyboard_combo": ""
     },
     "system": {
-        "autostart": true
+        "autostart": false
     },
     "dxgi_hook": {
         "enabled": true,
@@ -56,7 +56,7 @@
             "current": 60
         },
         "rtss": {
-            "fps_limit": 50,
+            "fps_limit": 60,
             "osd_enabled": true,
             "osd_zoom": 1,
             "osd_show_fps": true,

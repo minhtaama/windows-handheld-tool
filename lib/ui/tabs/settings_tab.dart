@@ -246,6 +246,7 @@ class SettingsTab extends StatelessWidget {
         // 4. BẢNG TRẠNG THÁI KẾT NỐI (STATUS)
         const SectionLabel(label: "TRẠNG THÁI HỆ THỐNG"),
         StatusIndicatorCard(
+          key: getItemKey(10),
           icon: Icons.speed_rounded,
           title: "RivaTuner RTSS",
           statusText: isRtssRunning
@@ -254,20 +255,24 @@ class SettingsTab extends StatelessWidget {
                     : "Đang chạy (Sẵn sàng đo FPS)")
               : "Chưa kết nối RTSS",
           isActive: isRtssRunning,
+          isFocused: focusedIndex == 10,
         ),
         const SizedBox(height: 8),
 
         StatusIndicatorCard(
+          key: getItemKey(11),
           icon: Icons.memory_rounded,
           title: "RyzenAdj TDP Driver",
           statusText: isTdpHardwareActive
               ? "WinRing0 Ring 0 Driver Hoạt động"
               : "Chế độ mô phỏng an toàn",
           isActive: isTdpHardwareActive,
+          isFocused: focusedIndex == 11,
         ),
         const SizedBox(height: 8),
 
         StatusIndicatorCard(
+          key: getItemKey(12),
           icon: Icons.layers_rounded,
           title: "Chế độ Game Hook",
           statusText: isDxgiHookActive
@@ -276,10 +281,12 @@ class SettingsTab extends StatelessWidget {
                     : "DXGI Borderless Hook (iFlip Mode)")
               : "Chưa kích hoạt Hook",
           isActive: isDxgiHookActive,
+          isFocused: focusedIndex == 12,
         ),
         const SizedBox(height: 8),
 
         StatusIndicatorCard(
+          key: getItemKey(13),
           icon: Icons.sports_esports_rounded,
           title: "Tay cầm Gamepad",
           statusText: isGamepadConnected
@@ -288,16 +295,33 @@ class SettingsTab extends StatelessWidget {
                     : "Đã kết nối (Sẵn sàng)")
               : "Chưa phát hiện tay cầm XInput",
           isActive: isGamepadConnected,
+          isFocused: focusedIndex == 13,
         ),
 
         // 5. THÔNG TIN PHẦN MỀM
         const SizedBox(height: 18),
-        Container(
+        AnimatedContainer(
+          key: getItemKey(14),
+          duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
             color: AppTheme.info,
             borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-            border: Border.all(color: AppTheme.cardBorder, width: 1.0),
+            border: Border.all(
+              color: focusedIndex == 14
+                  ? AppTheme.accent.withValues(alpha: 0.35)
+                  : AppTheme.cardBorder,
+              width: 1.0,
+            ),
+            boxShadow: focusedIndex == 14
+                ? [
+                    BoxShadow(
+                      color: AppTheme.primary.withValues(alpha: 0.12),
+                      blurRadius: 8,
+                      spreadRadius: 0.5,
+                    ),
+                  ]
+                : null,
           ),
           child: Row(
             children: [

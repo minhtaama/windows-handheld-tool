@@ -362,6 +362,11 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           [7], // Phím tắt mở Bàn phím ảo (HotkeyTile)
           [8], // Tỷ lệ hiển thị UI Scale
           [9], // Độ rộng Side Panel
+          [10], // RivaTuner RTSS
+          [11], // RyzenAdj TDP Driver
+          [12], // Chế độ Game Hook
+          [13], // Tay cầm Gamepad
+          [14], // Thông tin phần mềm
         ];
       default:
         return [

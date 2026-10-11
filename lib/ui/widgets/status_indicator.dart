@@ -10,6 +10,7 @@ class StatusIndicatorCard extends StatelessWidget {
   final bool isActive;
   final Color? activeColor;
   final Color? inactiveColor;
+  final bool isFocused;
 
   const StatusIndicatorCard({
     super.key,
@@ -19,6 +20,7 @@ class StatusIndicatorCard extends StatelessWidget {
     required this.isActive,
     this.activeColor,
     this.inactiveColor,
+    this.isFocused = false,
   });
 
   @override
@@ -27,8 +29,28 @@ class StatusIndicatorCard extends StatelessWidget {
         ? (activeColor ?? AppTheme.active)
         : (inactiveColor ?? AppTheme.inactive);
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppTheme.cardBackground,
+        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+        border: Border.all(
+          color: isFocused
+              ? AppTheme.accent.withValues(alpha: 0.35)
+              : AppTheme.cardBorder,
+          width: 1.0,
+        ),
+        boxShadow: isFocused
+            ? [
+                BoxShadow(
+                  color: AppTheme.primary.withValues(alpha: 0.12),
+                  blurRadius: 8,
+                  spreadRadius: 0.5,
+                ),
+              ]
+            : null,
+      ),
       child: Row(
         children: [
           // Icon dịch vụ
