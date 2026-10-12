@@ -45,11 +45,19 @@ class OverlayController extends ChangeNotifier {
     notifyListeners();
   }
 
+  int _lastGameHwnd = 0;
+
   /// Mở Side Dock Panel: Ngắt gamepad trong game, bật cửa sổ Overlay và chạy hoạt cảnh trượt vào
   Future<void> showOverlay() async {
     try {
       _isVisible = true;
       notifyListeners();
+
+      // Lưu lại cửa sổ đang chơi game trước khi hiển thị overlay
+      final fg = NativeWindowService.getForegroundWindow();
+      if (fg != 0 && fg != NativeWindowService.getWindowHandle()) {
+        _lastGameHwnd = fg;
+      }
 
       // 1. Ngắt (Mute) tín hiệu Gamepad gửi đến game để tránh nhận nhầm thao tác
       DxgiHookService.instance.setOverlayActive(true);
@@ -82,6 +90,11 @@ class OverlayController extends ChangeNotifier {
 
       // 3. Rút hoàn toàn cửa sổ bằng SW_HIDE để mở khóa DWM iFlip cho Game
       NativeWindowService.hideOverlayWindow();
+
+      // 4. Trả lại Foreground Focus cho cửa sổ game để game không bị bóp FPS khi chạy nền
+      if (_lastGameHwnd != 0) {
+        NativeWindowService.setForegroundWindow(_lastGameHwnd);
+      }
 
       logger.info('Đã đóng Side Dock Panel (Gamepad restored in Game).');
     } catch (e) {

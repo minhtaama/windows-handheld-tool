@@ -68,6 +68,11 @@ typedef HRESULT(STDMETHODCALLTYPE* PFN_SetFullscreenState)(
     BOOL Fullscreen,
     IDXGIOutput* pTarget);
 
+typedef HRESULT(STDMETHODCALLTYPE* PFN_GetFullscreenState)(
+    IDXGISwapChain* pThis,
+    BOOL* pFullscreen,
+    IDXGIOutput** ppTarget);
+
 typedef HRESULT(STDMETHODCALLTYPE* PFN_ResizeTarget)(
     IDXGISwapChain* pThis,
     const DXGI_MODE_DESC* pNewTargetParameters);
@@ -96,9 +101,13 @@ PFN_D3D11CreateDeviceAndSwapChain g_origD3D11CreateDeviceAndSwapChain = nullptr;
 PFN_CreateSwapChain               g_origCreateSwapChain = nullptr;
 PFN_CreateSwapChainForHwnd        g_origCreateSwapChainForHwnd = nullptr;
 PFN_SetFullscreenState            g_origSetFullscreenState = nullptr;
+PFN_GetFullscreenState            g_origGetFullscreenState = nullptr;
 PFN_ResizeTarget                  g_origResizeTarget = nullptr;
 PFN_ResizeBuffers                 g_origResizeBuffers = nullptr;
 PFN_MakeWindowAssociation         g_origMakeWindowAssociation = nullptr;
+
+BOOL                              g_fakeFullscreenState = TRUE;
+HWND                              g_hGameWindow = nullptr;
 
 PFN_XInputGetState                g_origXInputGetState = nullptr;
 PFN_XInputGetStateEx              g_origXInputGetStateEx = nullptr;
@@ -197,13 +206,14 @@ DWORD WINAPI Hooked_XInputGetStateEx(DWORD dwUserIndex, void* pState) {
     return res;
 }
 
-// Hook hàm SetFullscreenState trên SwapChain
+// Hook hàm SetFullscreenState trên SwapChain (Slot 10)
 HRESULT STDMETHODCALLTYPE Hooked_SetFullscreenState(
     IDXGISwapChain* pThis,
     BOOL Fullscreen,
     IDXGIOutput* pTarget)
 {
     OutputDebugStringA("[DXGI-Hook] SetFullscreenState called\n");
+    g_fakeFullscreenState = Fullscreen;
 
     if (Fullscreen) {
         // Trò chơi cố gắng bật Fullscreen Exclusive -> Cưỡng bức đưa cửa sổ về Borderless Fullscreen
@@ -211,34 +221,38 @@ HRESULT STDMETHODCALLTYPE Hooked_SetFullscreenState(
         if (SUCCEEDED(pThis->GetDesc(&desc)) && desc.OutputWindow) {
             MakeWindowBorderless(desc.OutputWindow);
         }
-
-        // Gọi hàm gốc với Fullscreen = FALSE để DirectX không chuyển đổi phần cứng màn hình
-        if (g_origSetFullscreenState) {
-            g_origSetFullscreenState(pThis, FALSE, nullptr);
-        }
-
-        // Trả về S_OK để Game tin rằng đã chuyển sang Fullscreen thành công
-        return S_OK;
     }
 
-    if (g_origSetFullscreenState) {
-        return g_origSetFullscreenState(pThis, FALSE, pTarget);
+    // Luôn trả về S_OK để Game tin rằng đã chuyển trạng thái thành công
+    // Tuyệt đối không gọi g_origSetFullscreenState để tránh DirectX runtime chuyển mode hiển thị phần cứng
+    return S_OK;
+}
+
+// Hook hàm GetFullscreenState trên SwapChain (Slot 11)
+// Trả về trạng thái Fullscreen logic mà game mong muốn để bảo toàn state machine nội bộ của engine game
+HRESULT STDMETHODCALLTYPE Hooked_GetFullscreenState(
+    IDXGISwapChain* pThis,
+    BOOL* pFullscreen,
+    IDXGIOutput** ppTarget)
+{
+    if (pFullscreen) {
+        *pFullscreen = g_fakeFullscreenState;
+    }
+    if (ppTarget) {
+        *ppTarget = nullptr;
     }
     return S_OK;
 }
 
 // Hook hàm ResizeTarget trên SwapChain (Slot 14)
-// Bảo toàn độ phân giải render thực tế của game (720p, 800p, 1080p) mà không gửi thông điệp WM_SIZE làm sập engine game
+// Trong chế độ Borderless Fullscreen, kích thước cửa sổ vật lý luôn cố định bao phủ toàn màn hình (1080p).
+// Độ phân giải dựng hình thực tế của game (720p, 800p, 1080p) do ResizeBuffers quản lý.
+// Tuyệt đối không gọi g_origResizeTarget (vì nó sẽ phát SetWindowPos làm co nhỏ cửa sổ và gửi thông điệp WM_SIZE làm văng game)
 HRESULT STDMETHODCALLTYPE Hooked_ResizeTarget(
     IDXGISwapChain* pThis,
     const DXGI_MODE_DESC* pNewTargetParameters)
 {
-    OutputDebugStringA("[DXGI-Hook] ResizeTarget called (Preserving native render resolution)\n");
-
-    // Tuyệt đối không can thiệp SetWindowPos ở đây để tránh bắn thông điệp WM_SIZE đồng bộ làm gãy chuỗi tái cấp phát bộ đệm
-    if (g_origResizeTarget) {
-        return g_origResizeTarget(pThis, pNewTargetParameters);
-    }
+    OutputDebugStringA("[DXGI-Hook] ResizeTarget called (Ignored to preserve Borderless Fullscreen)\n");
     return S_OK;
 }
 
@@ -293,14 +307,21 @@ void HookSwapChain(IDXGISwapChain* pSwapChain) {
         OutputDebugStringA("[DXGI-Hook] IDXGISwapChain::SetFullscreenState VTable hooked!\n");
     }
 
-    // 2. Hook ResizeBuffers (Slot 13)
+    // 2. Hook GetFullscreenState (Slot 11) - Đảm bảo tính nhất quán state machine của engine game
+    if (vtable[11] != Hooked_GetFullscreenState) {
+        PatchVTable(vtable, 11, reinterpret_cast<void*>(Hooked_GetFullscreenState),
+                    reinterpret_cast<void**>(&g_origGetFullscreenState));
+        OutputDebugStringA("[DXGI-Hook] IDXGISwapChain::GetFullscreenState VTable hooked!\n");
+    }
+
+    // 3. Hook ResizeBuffers (Slot 13)
     if (vtable[13] != Hooked_ResizeBuffers) {
         PatchVTable(vtable, 13, reinterpret_cast<void*>(Hooked_ResizeBuffers),
                     reinterpret_cast<void**>(&g_origResizeBuffers));
         OutputDebugStringA("[DXGI-Hook] IDXGISwapChain::ResizeBuffers VTable hooked!\n");
     }
 
-    // 3. Hook ResizeTarget (Slot 14) - Tự động bảo toàn độ phân giải render
+    // 4. Hook ResizeTarget (Slot 14) - Tự động bảo toàn độ phân giải render
     if (vtable[14] != Hooked_ResizeTarget) {
         PatchVTable(vtable, 14, reinterpret_cast<void*>(Hooked_ResizeTarget),
                     reinterpret_cast<void**>(&g_origResizeTarget));
@@ -645,6 +666,11 @@ DXGI_HOOK_API void WINAPI SetOverlayActive(BOOL active) {
         OutputDebugStringA("[DXGI-Hook] SetOverlayActive(TRUE): Gamepad input muted in game\n");
     } else {
         OutputDebugStringA("[DXGI-Hook] SetOverlayActive(FALSE): Gamepad input restored in game\n");
+        // Khi đóng Overlay: Lập tức trả lại Foreground Focus cho cửa sổ game để mở khóa 100% FPS
+        if (g_hGameWindow && IsWindow(g_hGameWindow) && GetForegroundWindow() != g_hGameWindow) {
+            SetForegroundWindow(g_hGameWindow);
+            SetFocus(g_hGameWindow);
+        }
     }
 }
 
@@ -699,6 +725,7 @@ DXGI_HOOK_API BOOL WINAPI EjectDxgiHook(DWORD dwProcessId) {
 
 DXGI_HOOK_API BOOL WINAPI MakeWindowBorderless(HWND hWnd) {
     if (!hWnd || !IsWindow(hWnd)) return FALSE;
+    g_hGameWindow = hWnd;
 
     // Lấy thông tin Monitor chứa cửa sổ game
     HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
@@ -714,8 +741,26 @@ DXGI_HOOK_API BOOL WINAPI MakeWindowBorderless(HWND hWnd) {
         screenH = mi.rcMonitor.bottom - mi.rcMonitor.top;
     }
 
+    // Chặn gọi lặp (Idempotent Guard): Nếu cửa sổ đã là Borderless Fullscreen thì không phát lại SetWindowPos
+    // Tránh gửi các thông điệp WM_SIZE / WM_NCCALCSIZE gây gián đoạn pipeline khi game đang đổi độ phân giải
+    RECT curRect{};
+    GetWindowRect(hWnd, &curRect);
+    LONG_PTR curStyle = GetWindowLongPtr(hWnd, GWL_STYLE);
+    if ((curStyle & WS_POPUP) &&
+        curRect.left == screenX && curRect.top == screenY &&
+        (curRect.right - curRect.left) == screenW &&
+        (curRect.bottom - curRect.top) == screenH) {
+        // Cửa sổ đã chuẩn Borderless: Không gọi SetWindowPos để Far Cry 5 không crash,
+        // nhưng BẮT BUỘC đảm bảo nhận Foreground Focus để Metro Exodus không bị bóp FPS (15-20 FPS)
+        if (GetForegroundWindow() != hWnd) {
+            SetForegroundWindow(hWnd);
+            SetFocus(hWnd);
+        }
+        return TRUE;
+    }
+
     // 1. Xóa bỏ hoàn toàn thanh tiêu đề, khung kéo kích thước, viền cửa sổ
-    LONG_PTR style = GetWindowLongPtr(hWnd, GWL_STYLE);
+    LONG_PTR style = curStyle;
     style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER | WS_DLGFRAME);
     style |= WS_POPUP | WS_VISIBLE;
     SetWindowLongPtr(hWnd, GWL_STYLE, style);
