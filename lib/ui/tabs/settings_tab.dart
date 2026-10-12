@@ -305,7 +305,7 @@ class SettingsTab extends StatelessWidget {
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
-                  "Windows Handheld Tool v1.2.0 • Portable",
+                  "Windows Handheld Tool v1.2.0-oct12 • Portable",
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w500,
