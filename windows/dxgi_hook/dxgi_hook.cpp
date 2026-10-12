@@ -106,7 +106,7 @@ PFN_ResizeTarget                  g_origResizeTarget = nullptr;
 PFN_ResizeBuffers                 g_origResizeBuffers = nullptr;
 PFN_MakeWindowAssociation         g_origMakeWindowAssociation = nullptr;
 
-BOOL                              g_fakeFullscreenState = TRUE;
+BOOL                              g_fakeFullscreenState = FALSE;
 HWND                              g_hGameWindow = nullptr;
 
 PFN_XInputGetState                g_origXInputGetState = nullptr;
@@ -239,7 +239,14 @@ HRESULT STDMETHODCALLTYPE Hooked_GetFullscreenState(
         *pFullscreen = g_fakeFullscreenState;
     }
     if (ppTarget) {
-        *ppTarget = nullptr;
+        if (g_fakeFullscreenState && pThis) {
+            // Khi Fullscreen: Trả về con trỏ IDXGIOutput thực tế của màn hình chứa cửa sổ để engine (UE4/Unreal) không bị null pointer
+            if (FAILED(pThis->GetContainingOutput(ppTarget))) {
+                *ppTarget = nullptr;
+            }
+        } else {
+            *ppTarget = nullptr;
+        }
     }
     return S_OK;
 }
@@ -725,6 +732,13 @@ DXGI_HOOK_API BOOL WINAPI EjectDxgiHook(DWORD dwProcessId) {
 
 DXGI_HOOK_API BOOL WINAPI MakeWindowBorderless(HWND hWnd) {
     if (!hWnd || !IsWindow(hWnd)) return FALSE;
+
+    // Lấy cửa sổ gốc cấp cao nhất (Root Window) để tránh can thiệp nhầm vào child viewport của Unreal Engine
+    HWND hRoot = GetAncestor(hWnd, GA_ROOT);
+    if (hRoot && IsWindow(hRoot)) {
+        hWnd = hRoot;
+    }
+
     g_hGameWindow = hWnd;
 
     // Lấy thông tin Monitor chứa cửa sổ game
