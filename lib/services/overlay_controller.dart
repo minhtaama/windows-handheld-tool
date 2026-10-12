@@ -18,7 +18,6 @@ class OverlayController extends ChangeNotifier {
   bool get isVisible => _isVisible;
 
   DateTime _lastToggleTime = DateTime.fromMillisecondsSinceEpoch(0);
-  Timer? _sharedTextureTimer;
 
   ConfigManager? config;
 
@@ -55,68 +54,34 @@ class OverlayController extends ChangeNotifier {
       // 1. Ngắt (Mute) tín hiệu Gamepad gửi đến game để tránh nhận nhầm thao tác
       DxgiHookService.instance.setOverlayActive(true);
 
-      // Kích hoạt đồng bộ Direct3D Shared Texture liên tục (30fps) nếu đang ở chế độ sharedTexture
-      _sharedTextureTimer?.cancel();
-      if (DxgiHookService.instance.hookMode == OverlayHookMode.sharedTexture) {
-        final hwnd = NativeWindowService.getWindowHandle();
-        if (hwnd != 0) {
-          DxgiHookService.instance.updateSharedTextureFromHwnd(hwnd);
-          _sharedTextureTimer = Timer.periodic(
-            const Duration(milliseconds: 33),
-            (_) {
-              if (_isVisible) {
-                DxgiHookService.instance.updateSharedTextureFromHwnd(hwnd);
-              }
-            },
-          );
-        }
-      }
-
-      // 2. Hiển thị cửa sổ theo chế độ Hook tương ứng
-      if (DxgiHookService.instance.hookMode == OverlayHookMode.dxgiBorderless) {
-        // Chế độ Borderless: Hiển thị cửa sổ Fullscreen Transparent Overlay (SWP_NOACTIVATE & Always-on-Top)
-        NativeWindowService.showOverlayNoActivate();
-      } else {
-        // Chế độ Shared Texture: Chuẩn bị cửa sổ ngầm (HWND_BOTTOM, alpha = 0) để PrintWindow chụp hình,
-        // TUYỆT ĐỐI không đưa lên Topmost trên Desktop để bảo vệ quyền Fullscreen Exclusive của Game
-        NativeWindowService.prepareWindowForSharedTextureCapture();
-      }
+      // 2. Hiển thị cửa sổ Fullscreen Transparent Overlay (SWP_NOACTIVATE & Always-on-Top)
+      NativeWindowService.showOverlayNoActivate();
 
       // 3. Kích hoạt hoạt cảnh trượt từ mép phải vào
       onAnimateShow?.call();
 
-      logger.info('Đã mở Side Dock Panel (Mode: ${DxgiHookService.instance.hookMode.name}, Gamepad Muted in Game).');
+      logger.info('Đã mở Side Dock Panel (Gamepad Muted in Game).');
     } catch (e) {
       logger.error('Lỗi khi mở Overlay', e);
     }
   }
 
-  /// Đóng Side Dock Panel: Chạy hoạt cảnh trượt ra, khôi phục Gamepad cho game và bật cờ xuyên thấu
+  /// Đóng Side Dock Panel: Chạy hoạt cảnh trượt ra, khôi phục Gamepad cho game và ẩn cửa sổ
   Future<void> hideOverlay() async {
     try {
       _isVisible = false;
       notifyListeners();
 
-      // 1. Hủy ngay lập tức các timer để giải phóng 100% CPU
-      _sharedTextureTimer?.cancel();
-      _sharedTextureTimer = null;
-
-      // 2. Khôi phục tín hiệu Gamepad cho game ngay lập tức
+      // 1. Khôi phục tín hiệu Gamepad cho game ngay lập tức
       DxgiHookService.instance.setOverlayActive(false);
 
-      // 3. Chạy hoạt cảnh trượt ra mép phải
+      // 2. Chạy hoạt cảnh trượt ra mép phải
       if (onAnimateHide != null) {
         await onAnimateHide!();
       }
 
-      // 4. Xử lý cửa sổ theo chế độ Hook tương ứng
-      if (DxgiHookService.instance.hookMode == OverlayHookMode.dxgiBorderless) {
-        // Chế độ Borderless: Rút hoàn toàn cửa sổ bằng SW_HIDE để mở khóa DWM iFlip cho Game
-        NativeWindowService.hideOverlayWindow();
-      } else {
-        // Chế độ Shared Texture: Duy trì trạng thái ngầm ở đáy Z-order với alpha = 0
-        NativeWindowService.prepareWindowForSharedTextureCapture();
-      }
+      // 3. Rút hoàn toàn cửa sổ bằng SW_HIDE để mở khóa DWM iFlip cho Game
+      NativeWindowService.hideOverlayWindow();
 
       logger.info('Đã đóng Side Dock Panel (Gamepad restored in Game).');
     } catch (e) {

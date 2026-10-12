@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
-import '../../services/dxgi_hook_service.dart';
 import '../widgets/action_button.dart';
 import '../widgets/hotkey_tile.dart';
 import '../widgets/preset_selector.dart';
@@ -9,7 +8,7 @@ import '../widgets/section_label.dart';
 import '../widgets/status_indicator.dart';
 import '../widgets/toggle_card.dart';
 
-/// Tab Cài đặt & Tiện ích: Phím tắt công cụ Windows, Cấu hình khởi động, Chế độ Hook và Tùy chỉnh hiển thị Side Panel.
+/// Tab Cài đặt & Tiện ích: Phím tắt công cụ Windows, Cấu hình khởi động và Tùy chỉnh hiển thị Side Panel.
 class SettingsTab extends StatelessWidget {
   final ScrollController scrollController;
   final int focusedIndex;
@@ -17,10 +16,6 @@ class SettingsTab extends StatelessWidget {
   // Khởi động cùng Windows
   final bool autoStartEnabled;
   final ValueChanged<bool> onToggleAutoStart;
-
-  // Chế độ Overlay Hook (Phương án 2 Borderless vs Phương án 3 Shared Texture)
-  final OverlayHookMode hookMode;
-  final ValueChanged<OverlayHookMode> onHookModeChanged;
 
   // Callbacks công cụ hệ thống
   final VoidCallback onVirtualKeyboard;
@@ -58,8 +53,6 @@ class SettingsTab extends StatelessWidget {
     required this.focusedIndex,
     required this.autoStartEnabled,
     required this.onToggleAutoStart,
-    required this.hookMode,
-    required this.onHookModeChanged,
     required this.onVirtualKeyboard,
     required this.onTaskManager,
     required this.onDisplaySettings,
@@ -161,50 +154,28 @@ class SettingsTab extends StatelessWidget {
         ),
         const SizedBox(height: 12),
 
-        // Chế độ Overlay Hook: DXGI Borderless Hook vs Direct3D Shared Texture Injection
-        PresetSelector<OverlayHookMode>(
-          key: getItemKey(5),
-          title: "Chế độ tương thích Game (Hook)",
-          icon: Icons.layers_rounded,
-          currentValueText: hookMode == OverlayHookMode.sharedTexture
-              ? "Shared Texture"
-              : "DXGI Borderless",
-          presets: const [
-            OverlayHookMode.dxgiBorderless,
-            OverlayHookMode.sharedTexture,
-          ],
-          selectedValue: hookMode,
-          labelBuilder: (m) => m == OverlayHookMode.sharedTexture
-              ? "Shared Texture"
-              : "DXGI Borderless",
-          onSelected: onHookModeChanged,
-          isFocused: focusedIndex == 5,
-          helpText: "DXGI Borderless: Ép game toàn màn hình sang chế độ không viền (iFlip) để Quick Panel hiển thị đè mượt mà.\nShared Texture: Cơ chế OBS/Discord Overlay, nạp kết cấu GPU và vẽ đè trực tiếp lên bộ đệm BackBuffer tại hàm xuất hình Present.",
-        ),
-        const SizedBox(height: 12),
-
         // Phím tắt mở Quick Settings (Đơn nhất: Bàn phím PC HOẶC Gamepad)
         HotkeyTile(
-          key: getItemKey(6),
+          key: getItemKey(5),
           icon: Icons.dashboard_customize_rounded,
           title: "Phím tắt mở Quick Settings",
           device: overlayHotkeyDevice,
           hotkey: overlayHotkey,
           onHotkeyChanged: onOverlayHotkeyChanged,
-          isFocused: focusedIndex == 6,
+          isFocused: focusedIndex == 5,
           helpText: "Phím tắt duy nhất để bật hoặc ẩn bảng điều khiển Quick Settings (Bàn phím PC HOẶC Gamepad).",
         ),
         const SizedBox(height: 12),
 
         // Phím tắt mở Bàn phím ảo (Đơn nhất: Bàn phím PC HOẶC Gamepad)
         HotkeyTile(
-          key: getItemKey(7),
+          key: getItemKey(6),
           icon: Icons.keyboard_alt_rounded,
           title: "Phím tắt mở Bàn phím ảo",
           device: virtualKeyboardHotkeyDevice,
           hotkey: virtualKeyboardHotkey,
           onHotkeyChanged: onVirtualKeyboardHotkeyChanged,
-          isFocused: focusedIndex == 7,
+          isFocused: focusedIndex == 6,
           helpText: "Phím tắt duy nhất để kích hoạt nhanh bàn phím ảo Windows TabTip khi chơi game (Bàn phím PC HOẶC Gamepad).",
         ),
         const SizedBox(height: 16),
@@ -214,7 +185,7 @@ class SettingsTab extends StatelessWidget {
 
         // Tỷ lệ phóng đại UI Scale
         PresetSelector<double>(
-          key: getItemKey(8),
+          key: getItemKey(7),
           title: "Tỷ lệ hiển thị (UI Scale)",
           icon: Icons.format_size_rounded,
           currentValueText: "${(scale * 100).toInt()}%",
@@ -222,13 +193,13 @@ class SettingsTab extends StatelessWidget {
           selectedValue: scale,
           labelBuilder: (preset) => "${(preset * 100).toInt()}%",
           onSelected: onScaleChanged,
-          isFocused: focusedIndex == 8,
+          isFocused: focusedIndex == 7,
         ),
         const SizedBox(height: 12),
 
         // Độ rộng Side Panel
         PresetSelector<int>(
-          key: getItemKey(9),
+          key: getItemKey(8),
           title: "Độ rộng Side Panel",
           icon: Icons.aspect_ratio_rounded,
           currentValueText: "$widthPercent %",
@@ -236,13 +207,13 @@ class SettingsTab extends StatelessWidget {
           selectedValue: widthPercent,
           labelBuilder: (preset) => "$preset%",
           onSelected: onWidthPercentChanged,
-          isFocused: focusedIndex == 9,
+          isFocused: focusedIndex == 8,
         ),
 
         // 4. BẢNG TRẠNG THÁI KẾT NỐI (STATUS)
         const SectionLabel(label: "TRẠNG THÁI HỆ THỐNG"),
         StatusIndicatorCard(
-          key: getItemKey(10),
+          key: getItemKey(9),
           icon: Icons.speed_rounded,
           title: "RivaTuner RTSS",
           statusText: isRtssRunning
@@ -251,38 +222,36 @@ class SettingsTab extends StatelessWidget {
                     : "Đang chạy (Sẵn sàng đo FPS)")
               : "Chưa kết nối RTSS",
           isActive: isRtssRunning,
-          isFocused: focusedIndex == 10,
+          isFocused: focusedIndex == 9,
         ),
         const SizedBox(height: 8),
 
         StatusIndicatorCard(
-          key: getItemKey(11),
+          key: getItemKey(10),
           icon: Icons.memory_rounded,
           title: "RyzenAdj TDP Driver",
           statusText: isTdpHardwareActive
               ? "WinRing0 Ring 0 Driver Hoạt động"
               : "Chế độ mô phỏng an toàn",
           isActive: isTdpHardwareActive,
+          isFocused: focusedIndex == 10,
+        ),
+        const SizedBox(height: 8),
+
+        StatusIndicatorCard(
+          key: getItemKey(11),
+          icon: Icons.layers_rounded,
+          title: "DXGI Borderless Hook",
+          statusText: isDxgiHookActive
+              ? "Đang hoạt động (DWM iFlip Mode - 0% Overhead)"
+              : "Sẵn sàng (Tự động kích hoạt khi vào game)",
+          isActive: isDxgiHookActive,
           isFocused: focusedIndex == 11,
         ),
         const SizedBox(height: 8),
 
         StatusIndicatorCard(
           key: getItemKey(12),
-          icon: Icons.layers_rounded,
-          title: "Chế độ Game Hook",
-          statusText: isDxgiHookActive
-              ? (hookMode == OverlayHookMode.sharedTexture
-                    ? "Direct3D Shared Texture Injection (Present Hook)"
-                    : "DXGI Borderless Hook (iFlip Mode)")
-              : "Chưa kích hoạt Hook",
-          isActive: isDxgiHookActive,
-          isFocused: focusedIndex == 12,
-        ),
-        const SizedBox(height: 8),
-
-        StatusIndicatorCard(
-          key: getItemKey(13),
           icon: Icons.sports_esports_rounded,
           title: "Tay cầm Gamepad",
           statusText: isGamepadConnected
@@ -291,25 +260,25 @@ class SettingsTab extends StatelessWidget {
                     : "Đã kết nối (Sẵn sàng)")
               : "Chưa phát hiện tay cầm XInput",
           isActive: isGamepadConnected,
-          isFocused: focusedIndex == 13,
+          isFocused: focusedIndex == 12,
         ),
 
         // 5. THÔNG TIN PHẦN MỀM
         const SizedBox(height: 18),
         AnimatedContainer(
-          key: getItemKey(14),
+          key: getItemKey(13),
           duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
             color: AppTheme.info,
             borderRadius: BorderRadius.circular(AppTheme.cardRadius),
             border: Border.all(
-              color: focusedIndex == 14
+              color: focusedIndex == 13
                   ? AppTheme.accent.withValues(alpha: 0.35)
                   : AppTheme.cardBorder,
               width: 1.0,
             ),
-            boxShadow: focusedIndex == 14
+            boxShadow: focusedIndex == 13
                 ? [
                     BoxShadow(
                       color: AppTheme.primary.withValues(alpha: 0.12),
@@ -321,35 +290,33 @@ class SettingsTab extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Icon(
-                Icons.info_outline_rounded,
-                size: AppTheme.scaled(18),
-                color: AppTheme.background,
+              Container(
+                padding: const EdgeInsets.all(5),
+                decoration: BoxDecoration(
+                  color: AppTheme.accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Icon(
+                  Icons.info_outline_rounded,
+                  size: 14,
+                  color: AppTheme.accent,
+                ),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      "Windows Handheld Tool",
-                      style: AppTheme.title.copyWith(
-                        color: AppTheme.background,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      "v1.2.0-oct11 (Beta)",
-                      style: AppTheme.caption.copyWith(
-                        color: AppTheme.background,
-                      ),
-                    ),
-                  ],
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  "Windows Handheld Tool v1.2.0 • Portable",
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w500,
+                    color: AppTheme.textPrimary,
+                  ),
                 ),
               ),
             ],
           ),
         ),
+        const SizedBox(height: 12),
       ],
     );
   }

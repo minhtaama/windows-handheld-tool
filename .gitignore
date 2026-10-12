@@ -33,4 +33,6 @@ migrate_working_dir/
 # Windows specific
 windows/flutter/ephemeral/
 *.vcxproj.user
+windows/dxgi_hook/build/
+windows/bin/
 /dist/

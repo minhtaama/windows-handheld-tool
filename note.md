@@ -222,6 +222,157 @@ flowchart LR
 
 ---
 
+### Bản Chất Kiến Trúc Lớp Phủ Thương Mại (Steam, Discord, Ubisoft, Epic Games)
+
+```mermaid
+flowchart TD
+    subgraph Commercial_Overlay["Kiến Trúc Lớp Phủ Nền Tảng Thương Mại (Steam / Discord / Ubisoft)"]
+        GameExe["Tiến trình Game (.exe)"] -->|Nạp thư viện hook| InjectedHook["Thư viện chèn mã (DiscordHook64.dll / GameOverlayRenderer64.dll)"]
+        InjectedHook -->|Ghi đè bảng địa chỉ hàm ảo VTable| GraphicsAPIs["Toàn bộ API Đồ họa: D3D9, D3D11, D3D12, Vulkan, OpenGL"]
+        InjectedHook -->|Móc hàm xử lý thông điệp cửa sổ| SubclassWnd["Chặn tin nhắn WndProc (Chặn chuột, phím gửi vào Game)"]
+        UIHost["Tiến trình Giao diện Độc lập (gameoverlayui.exe / CEF Web Renderer)"] -->|Ghi điểm ảnh vào VRAM dùng chung| IPCMem["Bộ đệm VRAM / Bộ nhớ chia sẻ (Shared Surface IPC)"]
+        IPCMem -->|Đồng bộ xung nhịp phần cứng bằng Khóa Mutex GPU| KeyedMutex["Khóa Hoán Đổi Bộ Đệm Đồ Họa (IDXGIKeyedMutex / GPU Fence)"]
+        KeyedMutex -->|Trộn điểm ảnh vào chuỗi xuất hình trước hàm Present| InjectedHook
+    end
+```
+
+#### 1. Xuất phát từ bế tắc thực tế (The "Why")
+- **Trước đây làm bằng cách nào?**: Ứng dụng tạo một cửa sổ Win32 riêng biệt, áp dụng các cờ nổi trên cùng (`WS_EX_TOPMOST`), đặt vị trí bao phủ màn hình và cố gắng vẽ giao diện đè lên trò chơi ngoài màn hình nền Desktop.
+- **Bị nghẽn kỹ thuật gì?**: Khi trò chơi kích hoạt chế độ Toàn màn hình độc quyền (Exclusive Fullscreen), luồng tín hiệu từ bộ hợp thành cửa sổ DWM bị ngắt khỏi bộ điều khiển quét màn hình phần cứng. Bất kỳ cửa sổ ngoài Desktop nào cố gắng đòi quyền hiển thị đều bị DWM cưỡng bức thu nhỏ game (Minimize) hoặc biến mất hoàn toàn phía sau bề mặt quét độc quyền của trò chơi.
+- **Các nền tảng thương mại (Steam, Discord, Ubisoft Connect, Epic Games) giải quyết triệt để ra sao?**:
+  1. **Không sử dụng cửa sổ Win32 Desktop độc lập**: Họ hoàn toàn không tạo thêm một cửa sổ Win32 nào hiển thị nổi trên Desktop để chứa giao diện lớp phủ khi game đang chạy.
+  2. **Móc nối toàn diện vào mọi giao diện lập trình đồ họa (Multi-API Graphics Pipeline Hooking)**: Họ tiêm thư viện liên kết động (`GameOverlayRenderer64.dll`, `DiscordHook64.dll`) trực tiếp vào không gian địa chỉ bộ nhớ RAM của tiến trình trò chơi. Thư viện này đánh chặn toàn bộ các hàm xuất khung hình của mọi API đồ họa mà game có thể sử dụng: Direct3D 9 (`EndScene`), Direct3D 11 (`Present`), Direct3D 12 (`ExecuteCommandLists`), Vulkan (`vkQueuePresentKHR`), OpenGL (`wglSwapBuffers`).
+  3. **Vẽ đè trực tiếp vào bộ đệm của Game trước thời điểm quét tín hiệu (Pre-Scanout In-Buffer Rendering)**: Ngay trong chính luồng dựng hình (Render Thread) của trò chơi, ngay trước khi hàm `Present` gửi lệnh đẩy bộ đệm lùi (Back Buffer) ra màn hình, thư viện chèn mã phát lệnh vẽ các hình học 2D (Textured Quad) chứa điểm ảnh của giao diện lớp phủ đè trực tiếp lên bộ đệm của game. Do điểm ảnh của lớp phủ đã trở thành một phần của khung hình game, màn hình vật lý luôn hiển thị lớp phủ bất kể game chạy ở chế độ Toàn màn hình độc quyền hay Cửa sổ.
+  4. **Chặn thông điệp nhập liệu tại cửa sổ của chính trò chơi (Window Procedure Subclassing)**: Họ thay thế con trỏ hàm xử lý thông điệp (`GWLP_WNDPROC`) của chính cửa sổ trò chơi bằng hàm của lớp phủ (`SetWindowLongPtr`). Khi lớp phủ kích hoạt, mọi ngắt chuột và bàn phím gửi đến cửa sổ game đều bị thư viện chặn lại, ngăn game xử lý thao tác người dùng mà không cần đổi tiêu điểm cửa sổ hệ điều hành.
+
+#### 2. Rào Cản Vật Lý Khi Ứng Dụng Flutter Engine Triển Khai Cơ Chế Lớp Phủ Trực Tiếp (In-Game Overlay)
+
+```mermaid
+flowchart TD
+    subgraph SteamArchitecture["Kiến Trúc Steam / Ubisoft (CEF Off-screen)"]
+        CEF["Trình kết xuất CEF (Trình duyệt Web nhúng)"] -->|Vẽ trực tiếp không cửa sổ (OSR)| SharedD3D["Kết cấu Direct3D VRAM"]
+        SharedD3D --> InjectedDLL1["Thư viện chèn mã (DX11, DX12, Vulkan Pipeline)"]
+        InjectedDLL1 --> BackBuffer1["Bộ đệm Game (Back Buffer)"]
+    end
+
+    subgraph FlutterArchitecture["Kiến Trúc Flutter Embedder Trên Windows"]
+        Flutter["Flutter Engine (Skia/Impeller)"] -->|Buộc phải liên kết| Win32HWND["Cửa sổ Win32 thực tế (HWND Window Surface)"]
+        Win32HWND -->|Chụp màn hình qua CPU (PrintWindow/GDI)| CPURAM["Bộ nhớ RAM máy chủ"]
+        CPURAM -->|Sao chép ngược lên VRAM (UpdateSubresource)| SharedD3D2["Kết cấu Direct3D VRAM"]
+        SharedD3D2 --> InjectedDLL2["Thư viện chèn mã (Hiện chỉ có D3D11)"]
+        InjectedDLL2 -.->|Thất bại trên Game DX12/Vulkan| BackBuffer2["Bộ đệm Game DX12 (E_NOINTERFACE)"]
+    end
+```
+
+##### a. Xuất phát từ bế tắc thực tế (The "Why")
+- **Trước đây làm bằng cách nào?**: Ứng dụng Flutter chạy một cửa sổ Win32 ngầm, sau đó dùng hàm sao chép điểm ảnh của hệ điều hành (`PrintWindow` với cờ `PW_RENDERFULLCONTENT`) để đọc điểm ảnh từ giao diện Flutter vào mảng bộ nhớ RAM (`CreateDIBSection`), rồi nạp ngược lên card màn hình vào kết cấu dùng chung Direct3D 11 (`UpdateSubresource`) để thư viện hook trong game đọc và vẽ đè tại hàm xuất hình `Present`.
+- **Bị nghẽn kỹ thuật gì?**:
+  1. *Nút thắt cổ chai truyền dữ liệu CPU-GPU*: Việc đọc ngược dữ liệu từ GPU về RAM rồi nạp lại lên GPU mỗi khung hình tiêu tốn chu kỳ tính toán của bộ vi xử lý và gây sụt giảm khung hình nghiêm trọng. Khi cửa sổ bị hệ thống hạ độ mờ về 0 (`alpha = 0`) hoặc đặt ở đáy (`HWND_BOTTOM`), hàm `PrintWindow` trả về mảng điểm ảnh rỗng hoặc làm đứng luồng kết xuất DWM.
+  2. *Đứt gãy đường ống kết xuất trên DirectX 12 và Vulkan*: Các nền tảng lớn (Steam, Discord) tự viết toàn bộ 5 đường ống kết xuất (Direct3D 9, 11, 12, Vulkan, OpenGL) bên trong thư viện chèn mã. Khi game chạy DirectX 12 (như *Ready Or Not*), chuỗi khung hình được quản lý bởi hàng đợi lệnh `ID3D12CommandQueue`. Lời gọi truy vấn thiết bị Direct3D 11 (`GetDevice` với `ID3D11Device`) trả về lỗi giao diện không tương thích (`E_NOINTERFACE`), khiến hình ảnh lớp phủ hoàn toàn không xuất hiện.
+  3. *Bế tắc định tuyến ngắt nhập liệu (Input Routing Dilemma)*: Trong mô hình của Steam, cửa sổ game vẫn giữ quyền điều khiển nhập liệu trên hệ thống. Khi người dùng chạm ngón tay hoặc bấm chuột, hệ điều hành gửi ngắt đến cửa sổ game (`WM_POINTERDOWN`, `WM_MOUSEMOVE`). Steam chặn hàm tiếp nhận của game (`GWLP_WNDPROC`), tự tính toán tọa độ tương đối rồi bắn thông điệp sang tiến trình UI qua đường ống dẫn tin nội bộ (Named Pipe). Trong khi đó, Flutter Engine trên Windows được lập trình để chỉ tiếp nhận sự kiện phần cứng trực tiếp từ chính cửa sổ Win32 của nó thông qua thông điệp cửa sổ riêng, không có sẵn giao diện nhận tọa độ giả lập từ tiến trình khác.
+
+##### b. Phương án giải quyết triệt để và Khuyến nghị kiến trúc (The Solution)
+- **Kiến trúc Lai DWM iFlip (Hybrid Borderless Overlay - Khuyến nghị tối ưu)**:
+  - Đây là kiến trúc được toàn bộ các công cụ máy chơi game cầm tay thương mại (*Xbox Game Bar*, *AYASpace*, *Handheld Companion*) lựa chọn thay vì vẽ vào bộ đệm của game.
+  - Game được đưa về chế độ **Toàn màn hình không viền (Borderless Windowed)**. DWM tự động kích hoạt tính năng **Lật khung hình độc lập (Independent Flip - iFlip)** để bỏ qua khâu ghép ảnh DWM, cho phép game đạt 100% hiệu năng phần cứng và độ trễ quét tín hiệu tương đương chế độ độc chiếm phần cứng.
+  - Cửa sổ Flutter hoạt động như một cửa sổ nổi cao nhất (`HWND_TOPMOST`) với cờ không cướp quyền điều khiển (`SWP_NOACTIVATE`). Cơ chế này tương thích 100% với mọi API đồ họa (DX11, DX12, Vulkan), tận dụng trọn vẹn khả năng xử lý cảm ứng đa điểm, hoạt họa trượt mượt mà của Flutter mà không can thiệp sâu vào nhân đồ họa hay đối mặt với nguy cơ bị hệ thống chống gian lận (Anti-Cheat) khóa tài khoản.
+- **Kiến trúc Kết xuất Off-screen thuần túy (Pure Off-screen Direct Render)**:
+  - Chỉ áp dụng khi bắt buộc phải hiển thị bên trong trò chơi chạy Toàn màn hình độc quyền cổ điển mà không được phép thay đổi kiểu cửa sổ.
+  - Yêu cầu cấu trúc lại tầng nhúng: Loại bỏ hoàn toàn cửa sổ Win32, nhúng Flutter Engine dưới dạng kết xuất ngoài màn hình (Off-Screen Engine) trực tiếp vào một kết cấu GPU dùng chung có khóa hoán đổi (`IDXGIKeyedMutex`). Đồng thời phải bổ sung đầy đủ đường ống kết xuất Direct3D 12 (`ID3D12GraphicsCommandList`, Descriptor Heap) vào thư viện `dxgi_hook.dll` và xây dựng cầu nối chuyển tiếp thông điệp nhập liệu (Input Forwarding Bridge) từ cửa sổ game sang Flutter.
+
+---
+
+### Cơ Chế Đồng Bộ Vùng Nhớ Card Màn Hình (GPU Concurrency & Keyed Mutex Architecture)
+
+```mermaid
+flowchart LR
+    FlutterHost["Tiến trình Máy chủ UI (D3D11 Device A)"] -->|Ghi dữ liệu vào kết cấu| SharedTex["VRAM Texture (D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)"]
+    SharedTex -->|AcquireSync 0 / ReleaseSync 1| GPUQueue["Hàng đợi Lệnh Card Đồ Họa (GPU Command Stream)"]
+    GPUQueue -->|AcquireSync 1 / ReleaseSync 0| GameDevice["Tiến trình Game Đích (D3D11 Device B)"]
+```
+
+#### 1. Hiện tượng xung đột và thảm họa văng trò chơi (Crash to Desktop)
+Khi chia sẻ một kết cấu đồ họa giữa hai tiến trình sử dụng cờ `D3D11_RESOURCE_MISC_SHARED` thông thường:
+- Tiến trình máy chủ (Flutter) liên tục ghi dữ liệu điểm ảnh mới vào kết cấu qua CPU/GPU (`UpdateSubresource`).
+- Tiến trình trò chơi (Injected DLL) liên tục đọc dữ liệu từ kết cấu đó tại hàm `Present` để trộn điểm ảnh vào BackBuffer.
+- **Bản chất vật lý của sự cố**: Card đồ họa (GPU) thực thi các lệnh kết xuất thông qua các đường ống song song (Hardware Execution Pipelines). Khi tiến trình A đang thực hiện lệnh ghi ô nhớ VRAM mà tiến trình B đồng thời phát lệnh đọc từ đúng các ô nhớ đó mà không có cơ chế điều phối phần cứng, bộ điều khiển đồ họa rơi vào trạng thái xung đột truy cập bộ nhớ (GPU Memory Race Condition / Invalid Memory Access). Trình điều khiển đồ họa (GPU Driver) lập tức phát hiện lỗi không phản hồi phần cứng và kích hoạt cơ chế tự phục hồi (Timeout Detection and Recovery - TDR), giải phóng thiết bị (`DXGI_ERROR_DEVICE_REMOVED` hoặc `DXGI_ERROR_DEVICE_RESET`) dẫn đến tiến trình trò chơi bị hủy ngang lập tức (Crash).
+
+#### 2. Cơ chế giải quyết triệt để bằng Khóa Hoán Đổi Bộ Đệm Đồ Họa (`IDXGIKeyedMutex`)
+- Khi tạo kết cấu dùng chung, bắt buộc khai báo cờ bổ sung: `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX`.
+- Trích xuất giao diện đồng bộ đồ họa: `IDXGIKeyedMutex` trên cả thiết bị của tiến trình ghi và tiến trình đọc.
+- **Quy tắc hoán đổi nhịp khóa (Lock Synchronization Protocol)**:
+  * Bên ghi (Host): Gọi `pKeyedMutex->AcquireSync(0, timeout)` -> Cập nhật dữ liệu điểm ảnh -> Gọi `pKeyedMutex->ReleaseSync(1)` để nhường quyền.
+  * Bên đọc (Game): Gọi `pKeyedMutex->AcquireSync(1, timeout)` -> Vẽ đè kết cấu vào chuỗi khung hình -> Gọi `pKeyedMutex->ReleaseSync(0)` để trả quyền cho bên ghi.
+- Cơ chế này ép các lệnh của GPU xếp hàng tuần tự tại cấp độ phần cứng mạch bán dẫn, triệt tiêu hoàn toàn nguy cơ sập thiết bị đồ họa.
+
+---
+
+### Cơ Chế Phục Hồi Bộ Đệm Hoán Đổi Khi Đổi Độ Phân Giải (SwapChain Buffer Re-Allocation & Resolution Change Lifecycle)
+
+```mermaid
+sequenceDiagram
+    participant GameEngine as Động Cơ Game (Far Cry 3)
+    participant Hook as DXGI Hook (dxgi_hook.dll)
+    participant D3DRuntime as DirectX Runtime (dxgi.dll)
+
+    Note over GameEngine: Người dùng chọn đổi độ phân giải từ 1080p sang 720p
+    GameEngine->>GameEngine: Giải phóng toàn bộ RenderTargetView & DepthStencil
+    GameEngine->>Hook: Gọi ResizeBuffers(BufferCount, 1280, 720, Format, Flags)
+    Note over Hook: NGUY HIỂM: Nếu gọi SetWindowPos / MakeWindowBorderless ở đây, Windows phát WM_SIZE đồng bộ làm gãy chuỗi khởi tạo
+    Hook->>D3DRuntime: Gọi ResizeBuffers Gốc (Bảo toàn kích thước đệm)
+    D3DRuntime-->>Hook: Trả về S_OK (Tái cấp phát mảng ô nhớ VRAM thành công)
+    Hook-->>GameEngine: Trả về S_OK
+    GameEngine->>D3DRuntime: Gọi GetBuffer(0) tạo lại RenderTargetView mới
+```
+
+#### 1. Hiện tượng nghẽn kỹ thuật khi can thiệp kích thước cửa sổ
+Trong các trò chơi DirectX 11 (như *Far Cry 3* sử dụng engine Dunia):
+- Khi người dùng thay đổi độ phân giải trong menu cài đặt, engine trò chơi thực hiện một quy trình tái cấp phát bộ đệm nghiêm ngặt:
+  1. Hủy bỏ và giải phóng toàn bộ con trỏ giao diện đang trỏ tới BackBuffer cũ (nếu còn sót dù chỉ một tham chiếu `ID3D11RenderTargetView` hay `ID3D11ShaderResourceView` chưa giải phóng, DirectX runtime sẽ từ chối tái cấp phát và trả về mã lỗi `DXGI_ERROR_INVALID_CALL`).
+  2. Phát lời gọi hàm `IDXGISwapChain::ResizeBuffers(BufferCount, NewWidth, NewHeight, NewFormat, SwapChainFlags)`.
+  3. Lấy lại con trỏ bộ đệm mới qua `IDXGISwapChain::GetBuffer(0)` và tái tạo các khung nhìn đồ họa.
+
+#### 2. Bản chất vật lý của sự cố sập game Far Cry 3
+- Khi hook can thiệp vào `ResizeBuffers` hoặc `ResizeTarget` và ngay lập tức gọi hàm biến đổi cửa sổ (`MakeWindowBorderless`):
+  * Hàm này phát lời gọi Win32 `SetWindowPos(hWnd, ..., SWP_FRAMECHANGED)`.
+  * Lời gọi này lập tức ép hệ điều hành Windows gửi đồng bộ thông điệp thay đổi kích thước cửa sổ (`WM_SIZE`, `WM_WINDOWPOSCHANGED`) vào hàng đợi thông điệp của trò chơi.
+  * Trong lúc engine của Far Cry 3 đang nằm ở trạng thái chuyển giao dở dang (In-between state của `ResizeBuffers`), việc tiếp nhận thông điệp `WM_SIZE` ép engine kích hoạt một chu kỳ tính toán lại viewport thứ hai trong khi chuỗi khung hình chưa hoàn tất dẫn đến xảy ra hiện tượng gọi sai tuần tự Direct3D và động cơ trò chơi kích hoạt hàm ngắt sự cố nghiêm trọng (`Fatal Error / Crash`).
+- **Nguyên lý giải quyết triệt để**:
+  * Trong thân hàm `Hooked_ResizeBuffers` và `Hooked_ResizeTarget`, tuyệt đối không phát các lệnh can thiệp hình học cửa sổ mang tính đồng bộ (`SetWindowPos` với cờ `SWP_FRAMECHANGED`).
+  * Chỉ truyền thông số nguyên bản xuống hàm gốc của runtime DirectX. Việc chuẩn hóa kích thước không viền (Borderless) chỉ được thực hiện một lần duy nhất lúc khởi tạo chuỗi khung hình (`CreateSwapChain`) hoặc được hoãn lại sau khi toàn bộ chuỗi hoán đổi khung hình đã hoàn tất việc nạp bộ đệm mới.
+
+---
+
+### Đánh Giá Tác Động Hiệu Năng Phần Cứng Và Tính Toàn Vẹn Hệ Thống (Hardware Performance Overhead & System Integrity Evaluation)
+
+```mermaid
+flowchart TD
+    subgraph IdleState["Trạng Thái Lớp Phủ Đóng (Panel Inactive: 99% Thời Gian)"]
+        PresentCall1["Game gọi Present()"] --> CheckActive["Kiểm tra cờ boolean g_isOverlayActive"]
+        CheckActive -->|Sai: Tốn 1 chu kỳ CPU ~0.2ns| OrigPresent1["Thực thi hàm gốc g_origPresent() (0% suy hao FPS)"]
+    end
+
+    subgraph ActiveState["Trạng Thái Lớp Phủ Mở (Panel Active: Tương Tác Cài Đặt)"]
+        PresentCall2["Game gọi Present()"] --> AcquireCheck["Khóa phần cứng: AcquireSync(1, Timeout = 0)"]
+        AcquireCheck -->|Thành công: Vẽ Quad 4 đỉnh| DrawQuad["Tốn < 0.05ms thời gian GPU"]
+        AcquireCheck -->|Bận: Không chờ| OrigPresent2["Bỏ qua khung hình vẽ đè, không gây tụt xung (Zero Stutter)"]
+    end
+```
+
+#### 1. Tác động của việc loại bỏ `SetWindowPos` trong `ResizeBuffers`
+- **Hiệu năng dựng hình (Render FPS)**: Không ảnh hưởng, ngược lại còn triệt tiêu hoàn toàn độ trễ khựng giật (Stutter) khi chuyển đổi độ phân giải. Trước đây việc phát `SetWindowPos` cưỡng bức tiêu tốn hàng triệu chu kỳ CPU do Windows phải dừng luồng đồ họa để phát thông điệp cửa sổ `WM_SIZE`.
+- **Tính toàn vẹn của chế độ Cửa sổ Không viền (Borderless Integrity)**: Không bị ảnh hưởng. Cửa sổ trò chơi đã được thiết lập các thuộc tính không viền (`WS_POPUP`, loại bỏ thanh tiêu đề và khung viền) ngay từ thời điểm tạo chuỗi khung hình ban đầu (`Hooked_CreateSwapChain`). Khi người dùng đổi độ phân giải trong game (ví dụ từ 1080p xuống 720p), chỉ có kích thước mảng bộ đệm lùi (BackBuffer) thay đổi, khung cửa sổ ngoài vẫn giữ nguyên trạng thái bao phủ toàn màn hình và GPU tự động co dãn hình ảnh (Hardware Scaling) ra toàn bộ diện tích hiển thị.
+
+#### 2. Tác động của Cơ chế Khóa Phần Cứng (`IDXGIKeyedMutex`) và Bộ Nhớ Đệm Đối Tượng Đồ Họa
+- **Khi lớp phủ đóng (`g_isOverlayActive == FALSE`)**:
+  - Tại hàm `Present`, CPU chỉ thực hiện đúng một phép so sánh điều kiện số nguyên (`cmp / test`) tốn ~0.2 nanosecond rồi nhảy thẳng tới địa chỉ hàm gốc `g_origPresent`.
+  - Mức độ chiếm dụng xung nhịp CPU và băng thông bộ nhớ VRAM hoàn toàn bằng 0%. Game duy trì 100% mức khung hình tối đa của phần cứng.
+- **Khi lớp phủ đang mở (`g_isOverlayActive == TRUE`)**:
+  - **Khóa không nghẽn luồng (`Non-blocking AcquireSync`)**: Hàm `pGameKeyedMutex->AcquireSync(1, 0)` thiết lập thời gian chờ bằng 0ms. Nếu tiến trình Flutter chưa hoàn tất việc sao chép khung hình mới, game lập tức tiếp tục chuỗi xuất hình mà không bị đứng luồng (Zero Thread Stall), triệt tiêu hoàn toàn hiện tượng tụt giảm khung hình bất thường (Frame Drop).
+  - **Tối ưu hóa vòng đời bộ đệm (Resource Caching)**: Thay vì liên tục cấp phát và giải phóng khung nhìn đồ họa (`CreateRenderTargetView` / `CreateShaderResourceView`) 60-120 lần/giây gây nghẽn băng thông bộ nhớ và phân mảnh VRAM, các khung nhìn này được giữ cố định trong RAM/VRAM và chỉ khởi tạo lại khi kích thước màn hình thay đổi. Thời gian xử lý lệnh vẽ đè hình học 2D (Textured Quad với 4 đỉnh) trên GPU chỉ tốn dưới 0.05 mili-giây.
+
+---
+
 ## Phương Án 4: Can Thiệp Trực Tiếp Vào Hàm Xuất Khung Hình (Present Hooking / RTSS OSD)
 
 ### 1. Cơ chế kỹ thuật

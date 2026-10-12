@@ -55,7 +55,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   late int _fpsLimit;
   late bool _touchEnabled;
   late bool _autoStartEnabled;
-  late OverlayHookMode _hookMode;
   late int _widthPercent;
   late double _scale;
 
@@ -83,12 +82,12 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   GlobalKey _getItemKey(int index) {
     if (_selectedTabIndex == 3) {
-      if (index == 6) {
-        _itemKeys[6] = _overlayHotkeyKey;
+      if (index == 5) {
+        _itemKeys[5] = _overlayHotkeyKey;
         return _overlayHotkeyKey;
       }
-      if (index == 7) {
-        _itemKeys[7] = _virtualKeyboardHotkeyKey;
+      if (index == 6) {
+        _itemKeys[6] = _virtualKeyboardHotkeyKey;
         return _virtualKeyboardHotkeyKey;
       }
     }
@@ -184,7 +183,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _rtssOsdMetrics = RtssOsdMetricsConfig.fromConfig(widget.config);
     _touchEnabled = TouchscreenService.isEnabled;
     _autoStartEnabled = AutostartService.instance.isEnabled;
-    _hookMode = DxgiHookService.instance.hookMode;
     _widthPercent = widget.config.get("overlay.width_percent", 35);
     _scale = (widget.config.get("overlay.scale", 1.0) as num).toDouble();
     AppTheme.uiScale = _scale;
@@ -378,16 +376,15 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           [0, 1], // Mở bàn phím ảo, Mở Task Manager
           [2, 3], // Cài đặt màn hình, Dọn dẹp RAM
           [4], // Khởi động cùng Windows
-          [5], // Chế độ tương thích Game Hook
-          [6], // Phím tắt mở Quick Settings (HotkeyTile)
-          [7], // Phím tắt mở Bàn phím ảo (HotkeyTile)
-          [8], // Tỷ lệ hiển thị UI Scale
-          [9], // Độ rộng Side Panel
-          [10], // RivaTuner RTSS
-          [11], // RyzenAdj TDP Driver
-          [12], // Chế độ Game Hook
-          [13], // Tay cầm Gamepad
-          [14], // Thông tin phần mềm
+          [5], // Phím tắt mở Quick Settings (HotkeyTile)
+          [6], // Phím tắt mở Bàn phím ảo (HotkeyTile)
+          [7], // Tỷ lệ hiển thị UI Scale
+          [8], // Độ rộng Side Panel
+          [9], // RivaTuner RTSS
+          [10], // RyzenAdj TDP Driver
+          [11], // DXGI Borderless Hook
+          [12], // Tay cầm Gamepad
+          [13], // Thông tin phần mềm
         ];
       default:
         return [
@@ -414,8 +411,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         _focusedIndex = 0;
         _itemKeys.clear();
         if (newIndex == 3) {
-          _itemKeys[6] = _overlayHotkeyKey;
-          _itemKeys[7] = _virtualKeyboardHotkeyKey;
+          _itemKeys[5] = _overlayHotkeyKey;
+          _itemKeys[6] = _virtualKeyboardHotkeyKey;
         }
       });
       if (_scrollController.hasClients) {
@@ -694,14 +691,12 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         } else if (_focusedIndex == 4) {
           _toggleAutoStart(!_autoStartEnabled);
         } else if (_focusedIndex == 5) {
-          _cyclePreset(OverlayHookMode.values, _hookMode, 1, _updateHookMode);
-        } else if (_focusedIndex == 6) {
           _overlayHotkeyKey.currentState?.startRecording();
-        } else if (_focusedIndex == 7) {
+        } else if (_focusedIndex == 6) {
           _virtualKeyboardHotkeyKey.currentState?.startRecording();
-        } else if (_focusedIndex == 8) {
+        } else if (_focusedIndex == 7) {
           _cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
-        } else if (_focusedIndex == 9) {
+        } else if (_focusedIndex == 8) {
           _cyclePreset(
             const [30, 35, 40, 45],
             _widthPercent,
@@ -1003,10 +998,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     }
   }
 
-  void _updateHookMode(OverlayHookMode mode) {
-    setState(() => _hookMode = mode);
-    DxgiHookService.instance.setHookMode(mode);
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1142,8 +1133,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           focusedIndex: _focusedIndex,
           autoStartEnabled: _autoStartEnabled,
           onToggleAutoStart: _toggleAutoStart,
-          hookMode: _hookMode,
-          onHookModeChanged: _updateHookMode,
           onVirtualKeyboard: () {
             OverlayController.instance.hideOverlay();
             VirtualKeyboardService.toggleKeyboard();
@@ -1165,9 +1154,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           isRtssRunning: _isRtssRunning,
           activeGame: _activeGame,
           isTdpHardwareActive: _tdpCtrl.isAvailable(),
-          isDxgiHookActive:
-              DxgiHookService.instance.isHookActive ||
-              DxgiHookService.instance.isEnabled,
+          isDxgiHookActive: DxgiHookService.instance.isHookActive,
           isGamepadConnected: GamepadService.isConnected,
           overlayHotkeyDevice: _overlayHotkeyDevice,
           overlayHotkey: _overlayHotkey,

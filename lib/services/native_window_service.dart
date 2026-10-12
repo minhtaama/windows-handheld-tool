@@ -59,7 +59,6 @@ class NativeWindowService {
   static const _logger = AppLogger('NativeWindowService');
 
   static const int hwndTopMost = -1;
-  static const int hwndBottom = 1;
 
   static const int swpNoSize = 0x0001;
   static const int swpNoMove = 0x0002;
@@ -267,53 +266,6 @@ class NativeWindowService {
     _showWindow?.call(hwnd, swHide);
 
     _logger.info('Switched Overlay to hidden state (SW_HIDE, DWM iFlip unlocked for Game)');
-    return true;
-  }
-
-  /// Chuẩn bị cửa sổ Flutter cho chế độ Direct3D Shared Texture Injection:
-  /// Đặt ở đáy Z-order (HWND_BOTTOM), loại bỏ WS_EX_TOPMOST và giữ alpha = 0 (trong suốt 100%).
-  /// Giúp Flutter Engine tiếp tục render khung hình ngầm để PrintWindow chụp vào GPU Shared Texture,
-  /// đồng thời TUYỆT ĐỐI không làm mất quyền Fullscreen Exclusive của game hay văng game ra Desktop.
-  static bool prepareWindowForSharedTextureCapture({Size? size}) {
-    _ensureInitialized();
-    final hwnd = getWindowHandle();
-    if (hwnd == 0) return false;
-
-    final physicalSize = size ?? getPhysicalScreenSize();
-    final width = physicalSize.width.toInt();
-    final height = physicalSize.height.toInt();
-
-    // 0. Đưa cửa sổ vào trạng thái hiển thị ngầm
-    _showWindow?.call(hwnd, swShowNoActivate);
-
-    // 1. Cấu hình Extended Styles: LOẠI BỎ cờ WS_EX_TOPMOST để tuyệt đối không đè lên Game Fullscreen
-    if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
-      try {
-        final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
-        _setWindowLongPtrW!(
-          hwnd,
-          gwlExStyle,
-          (currentExStyle & ~wsExTopMost) | wsExLayered | wsExNoActivate | wsExTransparent | wsExToolWindow,
-        );
-      } catch (_) {}
-    }
-
-    // 2. Đặt alpha = 0 để hoàn toàn vô hình trên Windows Desktop
-    _setLayeredWindowAttributes?.call(hwnd, 0, 0, lwaAlpha);
-
-    // 3. Đặt cửa sổ xuống đáy Z-order (HWND_BOTTOM)
-    _setWindowPos?.call(
-      hwnd,
-      hwndBottom,
-      0,
-      0,
-      width,
-      height,
-      swpNoActivate | swpShowWindow | swpFrameChanged,
-    );
-
-    // 4. Buộc cập nhật frame cho Flutter
-    _invalidateRect?.call(hwnd, nullptr, 1);
     return true;
   }
 }
