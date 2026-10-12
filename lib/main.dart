@@ -75,7 +75,9 @@ void main() async {
 
   await HotkeyService.init(
     onToggleOverlay: () => OverlayController.instance.toggleOverlay(),
-    onToggleKeyboard: () => VirtualKeyboardService.toggleKeyboard(),
+    onToggleKeyboard: () => VirtualKeyboardService.toggleKeyboard(
+      actionVk: HotkeyService.keyboardBinding.vkCode,
+    ),
     initialOverlayHotkey: overlayKeyboard,
     initialKeyboardHotkey: keyboardKeyboard,
   );
@@ -85,7 +87,7 @@ void main() async {
     final pollMs = config.get("gamepad.poll_interval_ms", 50);
     GamepadService.start(
       onToggleOverlay: () => OverlayController.instance.toggleOverlay(),
-      onToggleKeyboard: () => VirtualKeyboardService.toggleKeyboard(),
+      onToggleKeyboard: () => VirtualKeyboardService.toggleKeyboard(fromGamepad: true),
       initialOverlayCombo: overlayGamepad,
       initialKeyboardCombo: keyboardGamepad,
       intervalMs: pollMs,

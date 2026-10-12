@@ -166,6 +166,9 @@ class HotkeyService {
   static HotkeyBinding _overlayBinding = HotkeyBinding.parse('Ctrl+Shift+Q');
   static HotkeyBinding _keyboardBinding = HotkeyBinding.parse('Ctrl+Shift+K');
 
+  static HotkeyBinding get keyboardBinding => _keyboardBinding;
+  static HotkeyBinding get overlayBinding => _overlayBinding;
+
   static VoidCallback? _onToggleOverlay;
   static VoidCallback? _onToggleKeyboard;
 
@@ -205,8 +208,14 @@ class HotkeyService {
     // Chạy hoàn toàn độc lập với Flutter UI thread, không bị DWM đóng băng khi Alpha = 0
     await _startBackgroundIsolate();
 
-    // 3. Luôn đăng ký qua hotkey_manager (Win32 RegisterHotKey) làm fallback dự phòng
-    await _registerFallbackHotkeys();
+    // 3. Chỉ đăng ký qua hotkey_manager (Win32 RegisterHotKey) làm fallback dự phòng khi Isolate lỗi.
+    // Tránh đăng ký đồng thời gây kích hoạt kép (Dual-trigger) và dội phím.
+    if (_workerIsolate == null) {
+      _logger.info('Background isolate not running, activating fallback hotkeys via hotkey_manager.');
+      await _registerFallbackHotkeys();
+    } else {
+      await hotKeyManager.unregisterAll();
+    }
   }
 
   static Future<void> _startBackgroundIsolate() async {
@@ -277,7 +286,11 @@ class HotkeyService {
       'keyboard': _keyboardBinding,
     });
 
-    await _registerFallbackHotkeys();
+    if (_workerIsolate == null) {
+      await _registerFallbackHotkeys();
+    } else {
+      await hotKeyManager.unregisterAll();
+    }
   }
 
   // --- QUẢN LÝ CHẾ ĐỘ GHI PHÍM BÀN PHÍM PC TRỰC TIẾP TỪ PHẦN CỨNG (GETASYNCKEYSTATE) ---
@@ -643,7 +656,7 @@ void _hotkeyWorkerIsolateEntryPoint(_HotkeyIsolateInitParams initParams) {
 
       if (keyboardBinding.matches(isCtrl, isWin, isShift, isAlt, isKeyDown)) {
         if (keyboardCombo.update(true)) {
-          cooldownUntil = DateTime.now().add(const Duration(milliseconds: 700));
+          cooldownUntil = DateTime.now().add(const Duration(milliseconds: 900));
           initParams.sendPort.send('toggle_keyboard');
         }
       } else {

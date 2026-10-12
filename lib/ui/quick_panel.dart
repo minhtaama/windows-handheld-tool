@@ -607,7 +607,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _adjustFocusedSlider(1);
   }
 
-  void _handleGamepadA() {
+  void _handleGamepadA() async {
     switch (_selectedTabIndex) {
       case 0:
         break;
@@ -676,8 +676,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         break;
       case 3:
         if (_focusedIndex == 0) {
-          OverlayController.instance.hideOverlay();
-          VirtualKeyboardService.toggleKeyboard();
+          await OverlayController.instance.hideOverlay();
+          VirtualKeyboardService.toggleKeyboard(fromGamepad: true);
         } else if (_focusedIndex == 1) {
           OverlayController.instance.hideOverlay();
           Process.start('taskmgr.exe', [], runInShell: true);
@@ -1133,8 +1133,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           focusedIndex: _focusedIndex,
           autoStartEnabled: _autoStartEnabled,
           onToggleAutoStart: _toggleAutoStart,
-          onVirtualKeyboard: () {
-            OverlayController.instance.hideOverlay();
+          onVirtualKeyboard: () async {
+            await OverlayController.instance.hideOverlay();
             VirtualKeyboardService.toggleKeyboard();
           },
           onTaskManager: () {
