@@ -16,10 +16,8 @@ class AutostartService extends ChangeNotifier {
 
   ConfigManager? _config;
   bool _isEnabled = false;
-  bool _isChecking = false;
 
   bool get isEnabled => _isEnabled;
-  bool get isChecking => _isChecking;
 
   /// Khởi tạo dịch vụ và đồng bộ trạng thái ban đầu
   void init(ConfigManager config) {
@@ -31,9 +29,6 @@ class AutostartService extends ChangeNotifier {
   /// Kiểm tra trạng thái thực tế của tác vụ trong Windows Task Scheduler
   Future<bool> checkStatus() async {
     if (!Platform.isWindows) return false;
-
-    _isChecking = true;
-    notifyListeners();
 
     try {
       final result = await Process.run('schtasks', [
@@ -48,7 +43,6 @@ class AutostartService extends ChangeNotifier {
     } catch (e) {
       _logger.error('Error checking Task Scheduler status', e);
     } finally {
-      _isChecking = false;
       notifyListeners();
     }
 

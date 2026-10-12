@@ -48,7 +48,7 @@ if exist "%OUT_DIR%\dxgi_hook.dll" (
 echo [*] Linking dxgi_hook.dll...
 link.exe /DLL /DEF:"%SRC_DIR%\dxgi.def" /OUT:"%OUT_DIR%\dxgi_hook.dll" ^
     dxgi_hook.obj buffer.obj hde64.obj hook.obj trampoline.obj ^
-    dxgi.lib d3d11.lib shlwapi.lib user32.lib kernel32.lib
+    dxgi.lib d3d11.lib shlwapi.lib user32.lib kernel32.lib gdi32.lib
 
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Linking failed!

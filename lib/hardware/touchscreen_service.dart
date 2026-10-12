@@ -7,11 +7,8 @@ class TouchscreenService {
   static const _logger = AppLogger('TouchscreenService');
   static String? _instanceId;
   static bool _isEnabled = true;
-  static bool _isDetected = false;
 
   static bool get isEnabled => _isEnabled;
-  static bool get isDetected => _isDetected;
-  static String? get instanceId => _instanceId;
 
   /// Quét tìm thiết bị màn hình cảm ứng trong hệ thống qua pnputil.
   static Future<void> init() async {
@@ -48,7 +45,6 @@ class TouchscreenService {
                   desc.toLowerCase().contains('touchscreen'))) {
             _instanceId = currentId;
             _isEnabled = status?.toLowerCase().contains('started') ?? true;
-            _isDetected = true;
             _logger.info(
               'Found touchscreen device: $_instanceId (Description: "$desc", Status: ${_isEnabled ? "Enabled" : "Disabled"})',
             );
@@ -61,9 +57,8 @@ class TouchscreenService {
     }
 
     // Fallback ID cho GPD Win 4 (chip Goodix) nếu không bắt được mô tả
-    if (!_isDetected) {
+    if (_instanceId == null) {
       _instanceId = r'HID\GDIX1002\4&231bac70&0&0000';
-      _isDetected = true;
       _logger.info('Using fallback touchscreen ID: $_instanceId');
     }
   }

@@ -37,12 +37,10 @@ class SettingsTab extends StatelessWidget {
   final bool isGamepadConnected;
 
   // Cấu hình Phím tắt Đơn nhất (Bàn phím PC HOẶC Gamepad)
-  final GlobalKey<HotkeyTileState>? overlayHotkeyTileKey;
   final String overlayHotkeyDevice;
   final String overlayHotkey;
   final void Function(String device, String hotkey) onOverlayHotkeyChanged;
 
-  final GlobalKey<HotkeyTileState>? virtualKeyboardHotkeyTileKey;
   final String virtualKeyboardHotkeyDevice;
   final String virtualKeyboardHotkey;
   final void Function(String device, String hotkey)
@@ -72,11 +70,9 @@ class SettingsTab extends StatelessWidget {
     required this.isTdpHardwareActive,
     required this.isDxgiHookActive,
     required this.isGamepadConnected,
-    this.overlayHotkeyTileKey,
     required this.overlayHotkeyDevice,
     required this.overlayHotkey,
     required this.onOverlayHotkeyChanged,
-    this.virtualKeyboardHotkeyTileKey,
     required this.virtualKeyboardHotkeyDevice,
     required this.virtualKeyboardHotkey,
     required this.onVirtualKeyboardHotkeyChanged,
@@ -189,7 +185,7 @@ class SettingsTab extends StatelessWidget {
 
         // Phím tắt mở Quick Settings (Đơn nhất: Bàn phím PC HOẶC Gamepad)
         HotkeyTile(
-          key: overlayHotkeyTileKey ?? getItemKey(6),
+          key: getItemKey(6),
           icon: Icons.dashboard_customize_rounded,
           title: "Phím tắt mở Quick Settings",
           device: overlayHotkeyDevice,
@@ -202,7 +198,7 @@ class SettingsTab extends StatelessWidget {
 
         // Phím tắt mở Bàn phím ảo (Đơn nhất: Bàn phím PC HOẶC Gamepad)
         HotkeyTile(
-          key: virtualKeyboardHotkeyTileKey ?? getItemKey(7),
+          key: getItemKey(7),
           icon: Icons.keyboard_alt_rounded,
           title: "Phím tắt mở Bàn phím ảo",
           device: virtualKeyboardHotkeyDevice,
@@ -246,6 +242,7 @@ class SettingsTab extends StatelessWidget {
         // 4. BẢNG TRẠNG THÁI KẾT NỐI (STATUS)
         const SectionLabel(label: "TRẠNG THÁI HỆ THỐNG"),
         StatusIndicatorCard(
+          key: getItemKey(10),
           icon: Icons.speed_rounded,
           title: "RivaTuner RTSS",
           statusText: isRtssRunning
@@ -254,20 +251,24 @@ class SettingsTab extends StatelessWidget {
                     : "Đang chạy (Sẵn sàng đo FPS)")
               : "Chưa kết nối RTSS",
           isActive: isRtssRunning,
+          isFocused: focusedIndex == 10,
         ),
         const SizedBox(height: 8),
 
         StatusIndicatorCard(
+          key: getItemKey(11),
           icon: Icons.memory_rounded,
           title: "RyzenAdj TDP Driver",
           statusText: isTdpHardwareActive
               ? "WinRing0 Ring 0 Driver Hoạt động"
               : "Chế độ mô phỏng an toàn",
           isActive: isTdpHardwareActive,
+          isFocused: focusedIndex == 11,
         ),
         const SizedBox(height: 8),
 
         StatusIndicatorCard(
+          key: getItemKey(12),
           icon: Icons.layers_rounded,
           title: "Chế độ Game Hook",
           statusText: isDxgiHookActive
@@ -276,10 +277,12 @@ class SettingsTab extends StatelessWidget {
                     : "DXGI Borderless Hook (iFlip Mode)")
               : "Chưa kích hoạt Hook",
           isActive: isDxgiHookActive,
+          isFocused: focusedIndex == 12,
         ),
         const SizedBox(height: 8),
 
         StatusIndicatorCard(
+          key: getItemKey(13),
           icon: Icons.sports_esports_rounded,
           title: "Tay cầm Gamepad",
           statusText: isGamepadConnected
@@ -288,16 +291,33 @@ class SettingsTab extends StatelessWidget {
                     : "Đã kết nối (Sẵn sàng)")
               : "Chưa phát hiện tay cầm XInput",
           isActive: isGamepadConnected,
+          isFocused: focusedIndex == 13,
         ),
 
         // 5. THÔNG TIN PHẦN MỀM
         const SizedBox(height: 18),
-        Container(
+        AnimatedContainer(
+          key: getItemKey(14),
+          duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
             color: AppTheme.info,
             borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-            border: Border.all(color: AppTheme.cardBorder, width: 1.0),
+            border: Border.all(
+              color: focusedIndex == 14
+                  ? AppTheme.accent.withValues(alpha: 0.35)
+                  : AppTheme.cardBorder,
+              width: 1.0,
+            ),
+            boxShadow: focusedIndex == 14
+                ? [
+                    BoxShadow(
+                      color: AppTheme.primary.withValues(alpha: 0.12),
+                      blurRadius: 8,
+                      spreadRadius: 0.5,
+                    ),
+                  ]
+                : null,
           ),
           child: Row(
             children: [
@@ -319,7 +339,7 @@ class SettingsTab extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      "v1.2.0 (Beta)",
+                      "v1.2.0-oct11 (Beta)",
                       style: AppTheme.caption.copyWith(
                         color: AppTheme.background,
                       ),

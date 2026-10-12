@@ -39,7 +39,6 @@ class BrightnessController extends HardwareController {
           _logger.warning('Lệnh đặt độ sáng PowerShell trả về mã lỗi ${result.exitCode}');
         }
       });
-      _logger.info('Đã cập nhật độ sáng: $target%');
       return true;
     } catch (e) {
       _logger.error('Lỗi khi thiết lập độ sáng', e);
