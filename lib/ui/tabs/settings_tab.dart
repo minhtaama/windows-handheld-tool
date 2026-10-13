@@ -28,7 +28,7 @@ class SettingsTab extends StatelessWidget {
   final bool isRtssRunning;
   final String? activeGame;
   final bool isTdpHardwareActive;
-  final bool isDxgiHookActive;
+  final bool isZBandActive;
   final bool isGamepadConnected;
 
   // Cấu hình Phím tắt Đơn nhất (Bàn phím PC HOẶC Gamepad)
@@ -61,7 +61,7 @@ class SettingsTab extends StatelessWidget {
     required this.isRtssRunning,
     required this.activeGame,
     required this.isTdpHardwareActive,
-    required this.isDxgiHookActive,
+    required this.isZBandActive,
     required this.isGamepadConnected,
     required this.overlayHotkeyDevice,
     required this.overlayHotkey,
@@ -241,11 +241,11 @@ class SettingsTab extends StatelessWidget {
         StatusIndicatorCard(
           key: getItemKey(11),
           icon: Icons.layers_rounded,
-          title: "DXGI Borderless Hook",
-          statusText: isDxgiHookActive
-              ? "Đang hoạt động (DWM iFlip Mode - 0% Overhead)"
-              : "Sẵn sàng (Tự động kích hoạt khi vào game)",
-          isActive: isDxgiHookActive,
+          title: "Windows System Z-Band",
+          statusText: isZBandActive
+              ? "Hoạt động (ZBID_SYSTEM_TOOLS - UIAccess)"
+              : "Chưa kích hoạt",
+          isActive: isZBandActive,
           isFocused: focusedIndex == 11,
         ),
         const SizedBox(height: 8),

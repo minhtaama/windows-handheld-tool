@@ -151,6 +151,19 @@ typedef HWND(WINAPI* fnCreateWindowInBand)(
 
 typedef BOOL(WINAPI* fnSetWindowBand)(HWND hWnd, HWND hwndInsertAfter, DWORD dwBand);
 
+#ifndef MSGFLT_ADD
+#define MSGFLT_ADD 1
+#endif
+#ifndef MSGFLT_ALLOW
+#define MSGFLT_ALLOW 1
+#endif
+
+typedef BOOL(WINAPI* fnChangeWindowMessageFilterEx)(
+    HWND hWnd,
+    UINT message,
+    DWORD action,
+    PCHANGEFILTERSTRUCT pChangeFilterStruct);
+
 bool Win32Window::Create(const std::wstring& title,
                          const Point& origin,
                          const Size& size) {
@@ -180,7 +193,7 @@ bool Win32Window::Create(const std::wstring& title,
     }
     if (pCreateWindowInBand) {
       window = pCreateWindowInBand(
-          WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+          WS_EX_TOPMOST | WS_EX_NOACTIVATE,
           window_class, title.c_str(), WS_POPUP,
           Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
           Scale(size.width, scale_factor), Scale(size.height, scale_factor),
@@ -191,7 +204,7 @@ bool Win32Window::Create(const std::wstring& title,
 
   if (!window) {
     window = CreateWindowEx(
-        WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+        WS_EX_TOPMOST | WS_EX_NOACTIVATE,
         window_class, title.c_str(), WS_POPUP,
         Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
         Scale(size.width, scale_factor), Scale(size.height, scale_factor),
@@ -202,10 +215,42 @@ bool Win32Window::Create(const std::wstring& title,
     return false;
   }
 
-  // Khởi tạo ở mức trong suốt tuyệt đối (Alpha = 0) để loại bỏ 100% hiện tượng chớp nháy trắng
-  SetLayeredWindowAttributes(window, 0, 0, LWA_ALPHA);
+  // Mở rộng DWM Frame để hỗ trợ DirectComposition Per-Pixel Alpha Blending trong suốt
+  // Loại bỏ hoàn toàn SetLayeredWindowAttributes(LWA_ALPHA) để triệt tiêu vĩnh viễn lỗi màn hình đen
+  MARGINS margins = {-1, -1, -1, -1};
+  DwmExtendFrameIntoClientArea(window, &margins);
 
-  UpdateTheme(window);
+  // Mở bộ lọc UIPI (User Interface Privilege Isolation)
+  // Cho phép Explorer.exe (Medium Integrity) gửi thông điệp System Tray và Command tới tiến trình UIAccess
+  const UINT kMsgTrayCallback = WM_USER + 1;
+  const UINT kMsgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+
+  ChangeWindowMessageFilter(kMsgTrayCallback, MSGFLT_ADD);
+  ChangeWindowMessageFilter(WM_COMMAND, MSGFLT_ADD);
+  if (kMsgTaskbarCreated != 0) {
+    ChangeWindowMessageFilter(kMsgTaskbarCreated, MSGFLT_ADD);
+  }
+
+  if (user32_module) {
+    auto pChangeFilterEx = reinterpret_cast<fnChangeWindowMessageFilterEx>(
+        GetProcAddress(user32_module, "ChangeWindowMessageFilterEx"));
+    if (pChangeFilterEx) {
+      pChangeFilterEx(window, kMsgTrayCallback, MSGFLT_ALLOW, nullptr);
+      pChangeFilterEx(window, WM_COMMAND, MSGFLT_ALLOW, nullptr);
+      if (kMsgTaskbarCreated != 0) {
+        pChangeFilterEx(window, kMsgTaskbarCreated, MSGFLT_ALLOW, nullptr);
+      }
+    }
+  }
+
+  // Khẳng định lại phân lớp ZBID_SYSTEM_TOOLS cho cửa sổ
+  if (user32_module) {
+    auto pSetWindowBand = reinterpret_cast<fnSetWindowBand>(
+        GetProcAddress(user32_module, "SetWindowBand"));
+    if (pSetWindowBand) {
+      pSetWindowBand(window, NULL, ZBID_SYSTEM_TOOLS);
+    }
+  }
 
   return OnCreate();
 }
@@ -214,11 +259,13 @@ bool Win32Window::Show() {
   HMONITOR monitor = MonitorFromWindow(window_handle_, MONITOR_DEFAULTTONEAREST);
   MONITORINFO monitor_info = {sizeof(MONITORINFO)};
   if (GetMonitorInfo(monitor, &monitor_info)) {
-    int width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+    int screenWidth = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
     int height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+    int defaultPanelWidth = static_cast<int>(screenWidth * 0.35);
+    // Khởi tạo ban đầu: Đặt cửa sổ ở vị trí ngoài màn hình (Off-screen) để tránh che màn hình khi khởi động
     SetWindowPos(window_handle_, HWND_TOPMOST,
-                 monitor_info.rcMonitor.left, monitor_info.rcMonitor.top,
-                 width, height,
+                 monitor_info.rcMonitor.right, monitor_info.rcMonitor.top,
+                 defaultPanelWidth, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
   } else {
     SetWindowPos(window_handle_, HWND_TOPMOST, 0, 0, 0, 0,
@@ -294,25 +341,8 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
     }
 
-    case WM_MOUSEACTIVATE:
-      SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-      return MA_NOACTIVATE;
-
-    case WM_POINTERDOWN:
-    case WM_LBUTTONDOWN:
-      SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-      break;
-
-    case WM_ACTIVATE:
-      return 0;
-
-    case WM_NCACTIVATE:
-      return TRUE;
-
-    case WM_SETFOCUS:
-      return 0;
+    case WM_ERASEBKGND:
+      return 1;
 
     case WM_DWMCOLORIZATIONCOLORCHANGED:
       UpdateTheme(hwnd);

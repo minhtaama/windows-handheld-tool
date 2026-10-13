@@ -14,7 +14,6 @@ import 'hardware/rtss_service.dart';
 import 'input/hotkey_service.dart';
 import 'input/gamepad_service.dart';
 import 'services/autostart_service.dart';
-import 'services/dxgi_hook_service.dart';
 import 'services/native_window_service.dart';
 import 'services/overlay_controller.dart';
 import 'services/virtual_keyboard_service.dart';
@@ -29,21 +28,21 @@ void main() async {
   await RtssService.instance.ensureRunning();
   final config = ConfigManager();
   OverlayController.instance.config = config;
-  DxgiHookService.instance.init(config);
   AutostartService.instance.init(config);
 
-  // 1. Cấu hình Cửa sổ Fullscreen Transparent Overlay (Chuẩn Handheld Gaming Overlay)
+  // 1. Cấu hình Cửa sổ Side Dock Panel (Chuẩn Handheld Gaming Dock)
   await windowManager.ensureInitialized();
 
   final physicalSize = NativeWindowService.getPhysicalScreenSize();
   final screenWidth = physicalSize.width;
   final screenHeight = physicalSize.height;
+  final initialPanelWidth = (screenWidth * (OverlayController.instance.widthPercent / 100.0)).clamp(320.0, 850.0);
 
-  _logger.info('Physical screen size initialized: $physicalSize');
+  _logger.info('Physical screen size: $physicalSize, Initial panel width: $initialPanelWidth');
 
   final windowOptions = WindowOptions(
     title: 'Windows Handheld Tool',
-    size: Size(screenWidth, screenHeight),
+    size: Size(initialPanelWidth, screenHeight),
     backgroundColor: AppTheme.transparent,
     skipTaskbar: true,
     alwaysOnTop: true,
@@ -53,11 +52,10 @@ void main() async {
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.setAsFrameless();
     await windowManager.setBackgroundColor(AppTheme.transparent);
-    await windowManager.setSize(Size(screenWidth, screenHeight));
-    await windowManager.setPosition(Offset.zero);
+    await windowManager.setSize(Size(initialPanelWidth, screenHeight));
     await windowManager.setAlwaysOnTop(true);
     await windowManager.show();
-    NativeWindowService.hideOverlayWindow();
+    NativeWindowService.hideDockWindow();
   });
 
   // Tự động đóng panel khi người dùng click ra ngoài (mất focus sang game/desktop)
@@ -143,6 +141,7 @@ class _TrayListener extends TrayListener {
 
   @override
   void onTrayIconRightMouseDown() {
+    NativeWindowService.prepareForContextMenu();
     trayManager.popUpContextMenu();
   }
 
@@ -159,7 +158,6 @@ class _TrayListener extends TrayListener {
         TouchscreenService.toggleTouchscreen();
         break;
       case 'exit_app':
-        DxgiHookService.instance.uninstallGlobalHook();
         GamepadService.stop();
         HotkeyService.dispose();
         exit(0);
@@ -183,7 +181,7 @@ class _HandheldAppState extends State<HandheldApp> {
     // Đợi frame đầu tiên vẽ xong hoàn toàn vào DirectX rồi dời off-screen chạy ngầm
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await Future.delayed(const Duration(milliseconds: 150));
-      NativeWindowService.hideOverlayWindow();
+      NativeWindowService.hideDockWindow();
     });
   }
 

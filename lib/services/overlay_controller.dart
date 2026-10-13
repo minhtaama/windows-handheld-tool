@@ -2,12 +2,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../core/config.dart';
 import '../core/logger.dart';
-import 'dxgi_hook_service.dart';
 import 'native_window_service.dart';
 
 /// Quản lý trạng thái và hoạt cảnh ẩn/hiện của Side Dock Panel trên Windows.
 /// Áp dụng mô hình True Fullscreen Transparent Overlay (chuẩn Gaming Overlay)
-/// kết hợp XInput Muting để ngăn chặn hoàn toàn việc game nhận nhầm thao tác tay cầm khi đang điều khiển Quick Panel.
+/// trên phân lớp hệ thống ZBID_SYSTEM_TOOLS.
 class OverlayController extends ChangeNotifier {
   static const logger = AppLogger('OverlayController');
   static final OverlayController instance = OverlayController._();
@@ -33,9 +32,14 @@ class OverlayController extends ChangeNotifier {
   /// Callback kích hoạt hoạt cảnh trượt đóng từ UI
   AsyncCallback? onAnimateHide;
 
-  /// Thay đổi bề rộng Side Dock Panel tại chỗ (Flutter tự động animate mượt mà 60fps/120fps)
+  /// Thay đổi bề rộng Side Dock Panel tại chỗ (co dãn cửa sổ Win32 tức thời)
   void updateWidthPercent(int percent) {
     config?.set("overlay.width_percent", percent);
+    final physicalSize = NativeWindowService.getPhysicalScreenSize();
+    final pWidth = (physicalSize.width * (percent / 100.0)).clamp(320.0, 850.0).toInt();
+    if (_isVisible) {
+      NativeWindowService.resizeDockWindow(panelWidth: pWidth);
+    }
     notifyListeners();
   }
 
@@ -47,7 +51,7 @@ class OverlayController extends ChangeNotifier {
 
   int _lastGameHwnd = 0;
 
-  /// Mở Side Dock Panel: Ngắt gamepad trong game, bật cửa sổ Overlay và chạy hoạt cảnh trượt vào
+  /// Mở Side Dock Panel: hiển thị cửa sổ Dock neo mép phải
   Future<void> showOverlay() async {
     try {
       _isVisible = true;
@@ -59,44 +63,40 @@ class OverlayController extends ChangeNotifier {
         _lastGameHwnd = fg;
       }
 
-      // 1. Ngắt (Mute) tín hiệu Gamepad gửi đến game để tránh nhận nhầm thao tác
-      DxgiHookService.instance.setOverlayActive(true);
+      // 1. Tính toán bề rộng panel vật lý và kích hoạt cửa sổ Side Dock (SWP_NOACTIVATE & Always-on-Top)
+      final physicalSize = NativeWindowService.getPhysicalScreenSize();
+      final pWidth = (physicalSize.width * (widthPercent / 100.0)).clamp(320.0, 850.0).toInt();
+      NativeWindowService.showDockWindow(panelWidth: pWidth);
 
-      // 2. Hiển thị cửa sổ Fullscreen Transparent Overlay (SWP_NOACTIVATE & Always-on-Top)
-      NativeWindowService.showOverlayNoActivate();
-
-      // 3. Kích hoạt hoạt cảnh trượt từ mép phải vào
+      // 2. Kích hoạt hoạt cảnh trượt từ mép phải vào
       onAnimateShow?.call();
 
-      logger.info('Đã mở Side Dock Panel (Gamepad Muted in Game).');
+      logger.info('Đã mở Side Dock Panel (width: $pWidth px).');
     } catch (e) {
       logger.error('Lỗi khi mở Overlay', e);
     }
   }
 
-  /// Đóng Side Dock Panel: Chạy hoạt cảnh trượt ra, khôi phục Gamepad cho game và ẩn cửa sổ
+  /// Đóng Side Dock Panel: Chạy hoạt cảnh trượt ra và dời cửa sổ ra ngoài màn hình (Off-screen)
   Future<void> hideOverlay() async {
     try {
       _isVisible = false;
       notifyListeners();
 
-      // 1. Khôi phục tín hiệu Gamepad cho game ngay lập tức
-      DxgiHookService.instance.setOverlayActive(false);
-
-      // 2. Chạy hoạt cảnh trượt ra mép phải
+      // 1. Chạy hoạt cảnh trượt ra mép phải
       if (onAnimateHide != null) {
         await onAnimateHide!();
       }
 
-      // 3. Rút hoàn toàn cửa sổ bằng SW_HIDE để mở khóa DWM iFlip cho Game
-      NativeWindowService.hideOverlayWindow();
+      // 2. Thu ẩn cửa sổ ra ngoài màn hình (Off-screen) nhưng giữ IsWindowVisible == true cho Windows 11 Taskbar
+      NativeWindowService.hideDockWindow();
 
-      // 4. Trả lại Foreground Focus cho cửa sổ game để game không bị bóp FPS khi chạy nền
+      // 3. Trả lại Foreground Focus cho cửa sổ game để game không bị bóp FPS khi chạy nền
       if (_lastGameHwnd != 0) {
         NativeWindowService.setForegroundWindow(_lastGameHwnd);
       }
 
-      logger.info('Đã đóng Side Dock Panel (Gamepad restored in Game).');
+      logger.info('Đã đóng Side Dock Panel.');
     } catch (e) {
       logger.error('Lỗi khi ẩn Overlay', e);
     }

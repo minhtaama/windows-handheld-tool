@@ -40,9 +40,6 @@ typedef _IsWindowDart = int Function(int hWnd);
 typedef _InvalidateRectC = Int32 Function(IntPtr hWnd, Pointer<Void> lpRect, Int32 bErase);
 typedef _InvalidateRectDart = int Function(int hWnd, Pointer<Void> lpRect, int bErase);
 
-typedef _SetLayeredWindowAttributesC = Int32 Function(IntPtr hWnd, Uint32 crKey, Uint8 bAlpha, Uint32 dwFlags);
-typedef _SetLayeredWindowAttributesDart = int Function(int hWnd, int crKey, int bAlpha, int dwFlags);
-
 typedef _GetForegroundWindowC = IntPtr Function();
 typedef _GetForegroundWindowDart = int Function();
 
@@ -52,12 +49,9 @@ typedef _SetForegroundWindowDart = int Function(int hWnd);
 typedef _GetWindowThreadProcessIdC = Uint32 Function(IntPtr hWnd, Pointer<Uint32> lpdwProcessId);
 typedef _GetWindowThreadProcessIdDart = int Function(int hWnd, Pointer<Uint32> lpdwProcessId);
 
-typedef _ShowWindowC = Int32 Function(IntPtr hWnd, Int32 nCmdShow);
-typedef _ShowWindowDart = int Function(int hWnd, int nCmdShow);
-
-/// Dịch vụ quản lý cửa sổ Native Win32 tối ưu cho Gaming Overlay chuẩn Fullscreen Transparent Overlay.
-/// Bao phủ toàn màn hình cố định và sử dụng SWP_NOACTIVATE
-/// để đảm bảo không cướp Focus của Game (chống văng/minimize game DirectX).
+/// Dịch vụ quản lý cửa sổ Native Win32 tối ưu cho Handheld Quick Settings Side Dock Window.
+/// Cửa sổ chỉ có kích thước đúng bằng bề rộng của Panel neo ở mép phải màn hình,
+/// không che khuất màn hình Desktop/Game và không cướp Focus (SWP_NOACTIVATE).
 class NativeWindowService {
   static const _logger = AppLogger('NativeWindowService');
 
@@ -69,17 +63,12 @@ class NativeWindowService {
   static const int swpFrameChanged = 0x0020;
   static const int swpShowWindow = 0x0040;
 
-  static const int swHide = 0;
-  static const int swShowNoActivate = 8;
-
   static const int gwlExStyle = -20;
   static const int wsExTransparent = 0x00000020;
   static const int wsExTopMost = 0x00000008;
   static const int wsExToolWindow = 0x00000080;
   static const int wsExNoActivate = 0x08000000;
   static const int wsExLayered = 0x00080000;
-
-  static const int lwaAlpha = 0x00000002;
 
   static const int smCxScreen = 0;
   static const int smCyScreen = 1;
@@ -91,11 +80,9 @@ class NativeWindowService {
   static _InvalidateRectDart? _invalidateRect;
   static _GetWindowLongPtrWDart? _getWindowLongPtrW;
   static _SetWindowLongPtrWDart? _setWindowLongPtrW;
-  static _SetLayeredWindowAttributesDart? _setLayeredWindowAttributes;
   static _GetForegroundWindowDart? _getForegroundWindow;
   static _SetForegroundWindowDart? _setForegroundWindow;
   static _GetWindowThreadProcessIdDart? _getWindowThreadProcessId;
-  static _ShowWindowDart? _showWindow;
 
   static int? _cachedHwnd;
 
@@ -108,11 +95,9 @@ class NativeWindowService {
       _getSystemMetrics = user32.lookupFunction<_GetSystemMetricsC, _GetSystemMetricsDart>('GetSystemMetrics');
       _isWindow = user32.lookupFunction<_IsWindowC, _IsWindowDart>('IsWindow');
       _invalidateRect = user32.lookupFunction<_InvalidateRectC, _InvalidateRectDart>('InvalidateRect');
-      _setLayeredWindowAttributes = user32.lookupFunction<_SetLayeredWindowAttributesC, _SetLayeredWindowAttributesDart>('SetLayeredWindowAttributes');
       _getForegroundWindow = user32.lookupFunction<_GetForegroundWindowC, _GetForegroundWindowDart>('GetForegroundWindow');
       _setForegroundWindow = user32.lookupFunction<_SetForegroundWindowC, _SetForegroundWindowDart>('SetForegroundWindow');
       _getWindowThreadProcessId = user32.lookupFunction<_GetWindowThreadProcessIdC, _GetWindowThreadProcessIdDart>('GetWindowThreadProcessId');
-      _showWindow = user32.lookupFunction<_ShowWindowC, _ShowWindowDart>('ShowWindow');
 
       try {
         _getWindowLongPtrW = user32.lookupFunction<_GetWindowLongPtrWC, _GetWindowLongPtrWDart>('GetWindowLongPtrW');
@@ -202,8 +187,8 @@ class NativeWindowService {
     return Size(width.toDouble(), height.toDouble());
   }
 
-  /// Hiển thị cửa sổ Fullscreen Transparent Overlay mà KHÔNG cướp Focus của Game
-  static bool showOverlayNoActivate({Size? size}) {
+  /// Hiển thị Side Dock Panel neo sát mép phải màn hình mà KHÔNG cướp Focus của Game
+  static bool showDockWindow({required int panelWidth}) {
     _ensureInitialized();
     final hwnd = getWindowHandle();
     if (hwnd == 0) {
@@ -211,74 +196,100 @@ class NativeWindowService {
       return false;
     }
 
-    final physicalSize = size ?? getPhysicalScreenSize();
-    final width = physicalSize.width.toInt();
-    final height = physicalSize.height.toInt();
+    final physicalSize = getPhysicalScreenSize();
+    final screenWidth = physicalSize.width.toInt();
+    final screenHeight = physicalSize.height.toInt();
+    final posX = screenWidth - panelWidth;
 
-    // 0. Đưa cửa sổ trở lại cây hiển thị của Windows bằng SW_SHOWNOACTIVATE (không cướp Focus của Game)
-    _showWindow?.call(hwnd, swShowNoActivate);
-
-    // 1. Cấu hình Extended Styles: Bỏ cờ WS_EX_TRANSPARENT để nhận cảm ứng/chuột,
-    // duy trì WS_EX_TOOLWINDOW và WS_EX_NOACTIVATE để tuyệt đối không cướp Focus của Game
-    // (ngăn chặn triệt để Game Engine bóp FPS xuống 15 và tránh lỗi DXGI_STATUS_OCCLUDED)
+    // 1. Cấu hình Extended Styles: Duy trì WS_EX_TOOLWINDOW và WS_EX_NOACTIVATE, gỡ bỏ WS_EX_TRANSPARENT
     if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
       try {
         final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
         _setWindowLongPtrW!(
           hwnd,
           gwlExStyle,
-          (currentExStyle & ~wsExTransparent) | wsExLayered | wsExNoActivate | wsExTopMost | wsExToolWindow,
+          (currentExStyle & ~wsExTransparent & ~wsExLayered) | wsExNoActivate | wsExTopMost | wsExToolWindow,
         );
       } catch (_) {}
     }
 
-    // Đặt độ mờ alpha = 255 để hiển thị hoàn toàn nội dung giao diện
-    _setLayeredWindowAttributes?.call(hwnd, 0, 255, lwaAlpha);
-
-    // 2. Đặt vị trí bao phủ toàn màn hình cố định (0, 0, width, height) ở chế độ Topmost
+    // 2. Định vị cửa sổ neo sát mép phải (posX, 0, panelWidth, screenHeight) với SWP_NOACTIVATE
     _setWindowPos?.call(
       hwnd,
       hwndTopMost,
+      posX,
       0,
-      0,
-      width,
-      height,
+      panelWidth,
+      screenHeight,
       swpNoActivate | swpShowWindow | swpFrameChanged,
     );
 
     // 3. Yêu cầu vẽ lại frame ngay lập tức
     _invalidateRect?.call(hwnd, nullptr, 1);
 
-    _logger.info('Displayed Fullscreen Transparent Overlay (${width}x$height)');
+    _logger.info('Hiển thị Side Dock Window tại X: $posX, Width: $panelWidth, Height: $screenHeight');
     return true;
   }
 
-  /// Ẩn tương tác Overlay: Rút cửa sổ khỏi cây DWM bằng SW_HIDE để kích hoạt Independent Flip (iFlip) cho game
-  static bool hideOverlayWindow() {
+  /// Thay đổi bề rộng Side Dock Window khi người dùng kéo thanh trượt Cài đặt
+  static bool resizeDockWindow({required int panelWidth}) {
     _ensureInitialized();
     final hwnd = getWindowHandle();
     if (hwnd == 0) return false;
 
-    // 1. Đặt alpha = 0 (trong suốt 100%) để tránh chớp nháy hoặc để sót bất kỳ frame nào trên màn hình
-    _setLayeredWindowAttributes?.call(hwnd, 0, 0, lwaAlpha);
+    final physicalSize = getPhysicalScreenSize();
+    final screenWidth = physicalSize.width.toInt();
+    final screenHeight = physicalSize.height.toInt();
+    final posX = screenWidth - panelWidth;
 
-    // 2. Gắn cờ WS_EX_TRANSPARENT (Click-Through) để chuột/cảm ứng không bị cản trở
-    if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
-      try {
-        final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
-        _setWindowLongPtrW!(
-          hwnd,
-          gwlExStyle,
-          currentExStyle | wsExTransparent | wsExNoActivate | wsExToolWindow,
-        );
-      } catch (_) {}
-    }
+    _setWindowPos?.call(
+      hwnd,
+      hwndTopMost,
+      posX,
+      0,
+      panelWidth,
+      screenHeight,
+      swpNoActivate | swpFrameChanged,
+    );
 
-    // 3. Rút hoàn toàn cửa sổ khỏi cây hợp thành DWM để mở khóa cơ chế Independent Flip (iFlip) cho Game
-    _showWindow?.call(hwnd, swHide);
-
-    _logger.info('Switched Overlay to hidden state (SW_HIDE, DWM iFlip unlocked for Game)');
+    _invalidateRect?.call(hwnd, nullptr, 1);
+    _logger.info('Co dãn Side Dock Window tới Width: $panelWidth, X: $posX');
     return true;
+  }
+
+  /// Ẩn Side Dock Panel: Dời cửa sổ ra ngoài màn hình vật lý (Off-Screen)
+  /// TUYỆT ĐỐI KHÔNG dùng SW_HIDE để duy trì IsWindowVisible == TRUE cho Windows 11 Taskbar
+  static bool hideDockWindow() {
+    _ensureInitialized();
+    final hwnd = getWindowHandle();
+    if (hwnd == 0) return false;
+
+    final physicalSize = getPhysicalScreenSize();
+    final screenWidth = physicalSize.width.toInt();
+    final screenHeight = physicalSize.height.toInt();
+
+    // Dời tọa độ ra ngoài mép phải màn hình (X = screenWidth) với kích thước tối thiểu
+    _setWindowPos?.call(
+      hwnd,
+      hwndTopMost,
+      screenWidth,
+      0,
+      1,
+      screenHeight,
+      swpNoActivate,
+    );
+
+    _logger.info('Đã thu ẩn Side Dock Window ra ngoài màn hình (Off-screen, giữ IsWindowVisible cho Taskbar)');
+    return true;
+  }
+
+  /// Chuẩn bị cửa sổ để hiển thị menu ngữ cảnh chuột phải trên Khay hệ thống (System Tray)
+  /// Win32 TrackPopupMenu yêu cầu cửa sổ hợp lệ để tiếp nhận thông điệp menu
+  static void prepareForContextMenu() {
+    _ensureInitialized();
+    final hwnd = getWindowHandle();
+    if (hwnd == 0) return;
+    _setForegroundWindow?.call(hwnd);
   }
 }
 

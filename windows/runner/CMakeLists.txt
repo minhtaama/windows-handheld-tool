@@ -36,9 +36,9 @@ target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
-# Yêu cầu đặc quyền Administrator (UAC) để truy cập MSR/WinRing0, RTSS Shared Memory và Global Hook
+# Khai báo UIAccess cho Windows System Z-Band (bắt buộc level='asInvoker' và uiAccess='true')
 set_target_properties(${BINARY_NAME} PROPERTIES
-  LINK_FLAGS "/MANIFESTUAC:\"level='requireAdministrator' uiAccess='false'\""
+  LINK_FLAGS "/MANIFESTUAC:\"level='asInvoker' uiAccess='true'\""
 )
 
 # Run the Flutter tool portions of the build. This must not be removed.

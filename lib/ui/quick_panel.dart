@@ -18,7 +18,6 @@ import '../input/hotkey_service.dart';
 import '../services/system_optimizer.dart';
 import '../services/virtual_keyboard_service.dart';
 import '../services/autostart_service.dart';
-import '../services/dxgi_hook_service.dart';
 import '../services/overlay_controller.dart';
 import '../services/rtss_installer_service.dart';
 import '../services/system_telemetry_service.dart';
@@ -1154,7 +1153,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           isRtssRunning: _isRtssRunning,
           activeGame: _activeGame,
           isTdpHardwareActive: _tdpCtrl.isAvailable(),
-          isDxgiHookActive: DxgiHookService.instance.isHookActive,
+          isZBandActive: true,
           isGamepadConnected: GamepadService.isConnected,
           overlayHotkeyDevice: _overlayHotkeyDevice,
           overlayHotkey: _overlayHotkey,
