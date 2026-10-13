@@ -22,7 +22,6 @@
     },
     "dxgi_hook": {
         "enabled": true,
-        "mode": "dxgiBorderless",
         "auto_borderless": true
     },
     "hardware": {

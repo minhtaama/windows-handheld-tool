@@ -46,6 +46,9 @@ typedef _SetLayeredWindowAttributesDart = int Function(int hWnd, int crKey, int 
 typedef _GetForegroundWindowC = IntPtr Function();
 typedef _GetForegroundWindowDart = int Function();
 
+typedef _SetForegroundWindowC = Int32 Function(IntPtr hWnd);
+typedef _SetForegroundWindowDart = int Function(int hWnd);
+
 typedef _GetWindowThreadProcessIdC = Uint32 Function(IntPtr hWnd, Pointer<Uint32> lpdwProcessId);
 typedef _GetWindowThreadProcessIdDart = int Function(int hWnd, Pointer<Uint32> lpdwProcessId);
 
@@ -59,7 +62,6 @@ class NativeWindowService {
   static const _logger = AppLogger('NativeWindowService');
 
   static const int hwndTopMost = -1;
-  static const int hwndBottom = 1;
 
   static const int swpNoSize = 0x0001;
   static const int swpNoMove = 0x0002;
@@ -91,6 +93,7 @@ class NativeWindowService {
   static _SetWindowLongPtrWDart? _setWindowLongPtrW;
   static _SetLayeredWindowAttributesDart? _setLayeredWindowAttributes;
   static _GetForegroundWindowDart? _getForegroundWindow;
+  static _SetForegroundWindowDart? _setForegroundWindow;
   static _GetWindowThreadProcessIdDart? _getWindowThreadProcessId;
   static _ShowWindowDart? _showWindow;
 
@@ -107,6 +110,7 @@ class NativeWindowService {
       _invalidateRect = user32.lookupFunction<_InvalidateRectC, _InvalidateRectDart>('InvalidateRect');
       _setLayeredWindowAttributes = user32.lookupFunction<_SetLayeredWindowAttributesC, _SetLayeredWindowAttributesDart>('SetLayeredWindowAttributes');
       _getForegroundWindow = user32.lookupFunction<_GetForegroundWindowC, _GetForegroundWindowDart>('GetForegroundWindow');
+      _setForegroundWindow = user32.lookupFunction<_SetForegroundWindowC, _SetForegroundWindowDart>('SetForegroundWindow');
       _getWindowThreadProcessId = user32.lookupFunction<_GetWindowThreadProcessIdC, _GetWindowThreadProcessIdDart>('GetWindowThreadProcessId');
       _showWindow = user32.lookupFunction<_ShowWindowC, _ShowWindowDart>('ShowWindow');
 
@@ -126,6 +130,13 @@ class NativeWindowService {
   static int getForegroundWindow() {
     _ensureInitialized();
     return _getForegroundWindow != null ? _getForegroundWindow!() : 0;
+  }
+
+  /// Chuyển tiêu điểm hệ điều hành lên cửa sổ chỉ định (Foreground Window)
+  static bool setForegroundWindow(int hwnd) {
+    if (hwnd == 0) return false;
+    _ensureInitialized();
+    return (_setForegroundWindow?.call(hwnd) ?? 0) != 0;
   }
 
   /// Lấy Process ID (PID) của tiến trình sở hữu cửa sổ kích hoạt trên cùng
@@ -267,53 +278,6 @@ class NativeWindowService {
     _showWindow?.call(hwnd, swHide);
 
     _logger.info('Switched Overlay to hidden state (SW_HIDE, DWM iFlip unlocked for Game)');
-    return true;
-  }
-
-  /// Chuẩn bị cửa sổ Flutter cho chế độ Direct3D Shared Texture Injection:
-  /// Đặt ở đáy Z-order (HWND_BOTTOM), loại bỏ WS_EX_TOPMOST và giữ alpha = 0 (trong suốt 100%).
-  /// Giúp Flutter Engine tiếp tục render khung hình ngầm để PrintWindow chụp vào GPU Shared Texture,
-  /// đồng thời TUYỆT ĐỐI không làm mất quyền Fullscreen Exclusive của game hay văng game ra Desktop.
-  static bool prepareWindowForSharedTextureCapture({Size? size}) {
-    _ensureInitialized();
-    final hwnd = getWindowHandle();
-    if (hwnd == 0) return false;
-
-    final physicalSize = size ?? getPhysicalScreenSize();
-    final width = physicalSize.width.toInt();
-    final height = physicalSize.height.toInt();
-
-    // 0. Đưa cửa sổ vào trạng thái hiển thị ngầm
-    _showWindow?.call(hwnd, swShowNoActivate);
-
-    // 1. Cấu hình Extended Styles: LOẠI BỎ cờ WS_EX_TOPMOST để tuyệt đối không đè lên Game Fullscreen
-    if (_getWindowLongPtrW != null && _setWindowLongPtrW != null) {
-      try {
-        final currentExStyle = _getWindowLongPtrW!(hwnd, gwlExStyle);
-        _setWindowLongPtrW!(
-          hwnd,
-          gwlExStyle,
-          (currentExStyle & ~wsExTopMost) | wsExLayered | wsExNoActivate | wsExTransparent | wsExToolWindow,
-        );
-      } catch (_) {}
-    }
-
-    // 2. Đặt alpha = 0 để hoàn toàn vô hình trên Windows Desktop
-    _setLayeredWindowAttributes?.call(hwnd, 0, 0, lwaAlpha);
-
-    // 3. Đặt cửa sổ xuống đáy Z-order (HWND_BOTTOM)
-    _setWindowPos?.call(
-      hwnd,
-      hwndBottom,
-      0,
-      0,
-      width,
-      height,
-      swpNoActivate | swpShowWindow | swpFrameChanged,
-    );
-
-    // 4. Buộc cập nhật frame cho Flutter
-    _invalidateRect?.call(hwnd, nullptr, 1);
     return true;
   }
 }
