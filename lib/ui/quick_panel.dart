@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -21,6 +20,7 @@ import '../services/autostart_service.dart';
 import '../services/overlay_controller.dart';
 import '../services/rtss_installer_service.dart';
 import '../services/system_telemetry_service.dart';
+import '../services/bridge_service.dart';
 import 'tabs/home_tab.dart';
 import 'tabs/performance_tab.dart';
 import 'tabs/device_tab.dart';
@@ -186,32 +186,32 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     _scale = (widget.config.get("overlay.scale", 1.0) as num).toDouble();
     AppTheme.uiScale = _scale;
 
-    // Khởi tạo phím tắt duy nhất cho Quick Settings (Mutual Exclusion)
-    final gpOverlay = widget.config.get("gamepad.overlay_combo", "BACK + RB");
-    final kbOverlay = widget.config.get("hotkey.toggle_overlay", "");
-    if (gpOverlay.isNotEmpty) {
-      _overlayHotkeyDevice = 'gamepad';
-      _overlayHotkey = gpOverlay;
-    } else if (kbOverlay.isNotEmpty) {
+    // Khởi tạo phím tắt duy nhất cho Quick Settings (Ưu tiên Keyboard)
+    final kbOverlay = widget.config.get("hotkey.toggle_overlay", "Ctrl+Shift+Q");
+    final gpOverlay = widget.config.get("gamepad.overlay_combo", "");
+    if (kbOverlay.isNotEmpty) {
       _overlayHotkeyDevice = 'keyboard';
       _overlayHotkey = kbOverlay;
+    } else if (gpOverlay.isNotEmpty) {
+      _overlayHotkeyDevice = 'gamepad';
+      _overlayHotkey = gpOverlay;
     } else {
-      _overlayHotkeyDevice = '';
-      _overlayHotkey = '';
+      _overlayHotkeyDevice = 'keyboard';
+      _overlayHotkey = 'Ctrl+Shift+Q';
     }
 
-    // Khởi tạo phím tắt duy nhất cho Virtual Keyboard (Mutual Exclusion)
-    final gpKb = widget.config.get("gamepad.keyboard_combo", "BACK + LB");
-    final kbKb = widget.config.get("hotkey.toggle_keyboard", "");
-    if (gpKb.isNotEmpty) {
-      _virtualKeyboardHotkeyDevice = 'gamepad';
-      _virtualKeyboardHotkey = gpKb;
-    } else if (kbKb.isNotEmpty) {
+    // Khởi tạo phím tắt duy nhất cho Virtual Keyboard (Ưu tiên Keyboard)
+    final kbKb = widget.config.get("hotkey.toggle_keyboard", "Ctrl+Alt+K");
+    final gpKb = widget.config.get("gamepad.keyboard_combo", "");
+    if (kbKb.isNotEmpty) {
       _virtualKeyboardHotkeyDevice = 'keyboard';
       _virtualKeyboardHotkey = kbKb;
+    } else if (gpKb.isNotEmpty) {
+      _virtualKeyboardHotkeyDevice = 'gamepad';
+      _virtualKeyboardHotkey = gpKb;
     } else {
-      _virtualKeyboardHotkeyDevice = '';
-      _virtualKeyboardHotkey = '';
+      _virtualKeyboardHotkeyDevice = 'keyboard';
+      _virtualKeyboardHotkey = 'Ctrl+Alt+K';
     }
 
     _liveTdp = _tdp;
@@ -228,9 +228,44 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     // Lắng nghe sự kiện đóng/mở panel để cập nhật số liệu ngay lập tức khi mở
     OverlayController.instance.addListener(_onOverlayVisibilityChanged);
 
+    // Lắng nghe đồng bộ cấu hình từ Python WebSocket Server
+    BridgeService.instance.config.addListener(_onConfigUpdated);
+
     // Kích hoạt Timer quét cảm biến phần cứng định kỳ 1s
     _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
       _updateTelemetry();
+    });
+  }
+
+  void _onConfigUpdated() {
+    if (!mounted) return;
+    final cfg = BridgeService.instance.config.value;
+    if (cfg.isEmpty) return;
+
+    setState(() {
+      final kbOverlay = widget.config.get("hotkey.toggle_overlay", "Ctrl+Shift+Q");
+      final gpOverlay = widget.config.get("gamepad.overlay_combo", "");
+      if (kbOverlay.isNotEmpty) {
+        _overlayHotkeyDevice = 'keyboard';
+        _overlayHotkey = kbOverlay;
+      } else if (gpOverlay.isNotEmpty) {
+        _overlayHotkeyDevice = 'gamepad';
+        _overlayHotkey = gpOverlay;
+      }
+
+      final kbKb = widget.config.get("hotkey.toggle_keyboard", "Ctrl+Alt+K");
+      final gpKb = widget.config.get("gamepad.keyboard_combo", "");
+      if (kbKb.isNotEmpty) {
+        _virtualKeyboardHotkeyDevice = 'keyboard';
+        _virtualKeyboardHotkey = kbKb;
+      } else if (gpKb.isNotEmpty) {
+        _virtualKeyboardHotkeyDevice = 'gamepad';
+        _virtualKeyboardHotkey = gpKb;
+      }
+
+      _widthPercent = widget.config.get("overlay.width_percent", 35);
+      _scale = (widget.config.get("overlay.scale", 1.0) as num).toDouble();
+      AppTheme.uiScale = _scale;
     });
   }
 
@@ -328,6 +363,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
   @override
   void dispose() {
+    BridgeService.instance.config.removeListener(_onConfigUpdated);
     OverlayController.instance.removeListener(_onOverlayVisibilityChanged);
     _gamepadSub?.cancel();
     _telemetryTimer?.cancel();
@@ -679,12 +715,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           VirtualKeyboardService.toggleKeyboard(fromGamepad: true);
         } else if (_focusedIndex == 1) {
           OverlayController.instance.hideOverlay();
-          Process.start('taskmgr.exe', [], runInShell: true);
         } else if (_focusedIndex == 2) {
           OverlayController.instance.hideOverlay();
-          Process.start('explorer.exe', [
-            'ms-settings:display',
-          ], runInShell: true);
         } else if (_focusedIndex == 3) {
           SystemOptimizer.trimMemory();
         } else if (_focusedIndex == 4) {
@@ -902,6 +934,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       widget.config.set("gamepad.overlay_combo", "");
       HotkeyService.updateHotkeys(overlayHotkey: hotkey);
       GamepadService.updateCombos(overlayCombo: "");
+      BridgeService.instance.setHotkey('overlay', hotkey);
     } else if (device == 'gamepad') {
       widget.config.set("gamepad.overlay_combo", hotkey);
       widget.config.set("hotkey.toggle_overlay", "");
@@ -912,6 +945,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       widget.config.set("gamepad.overlay_combo", "");
       HotkeyService.updateHotkeys(overlayHotkey: "");
       GamepadService.updateCombos(overlayCombo: "");
+      BridgeService.instance.setHotkey('overlay', "");
     }
   }
 
@@ -926,6 +960,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       widget.config.set("gamepad.keyboard_combo", "");
       HotkeyService.updateHotkeys(keyboardHotkey: hotkey);
       GamepadService.updateCombos(keyboardCombo: "");
+      BridgeService.instance.setHotkey('keyboard', hotkey);
     } else if (device == 'gamepad') {
       widget.config.set("gamepad.keyboard_combo", hotkey);
       widget.config.set("hotkey.toggle_keyboard", "");
@@ -936,6 +971,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       widget.config.set("gamepad.keyboard_combo", "");
       HotkeyService.updateHotkeys(keyboardHotkey: "");
       GamepadService.updateCombos(keyboardCombo: "");
+      BridgeService.instance.setHotkey('keyboard', "");
     }
   }
 
@@ -1138,13 +1174,9 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           },
           onTaskManager: () {
             OverlayController.instance.hideOverlay();
-            Process.start('taskmgr.exe', [], runInShell: true);
           },
           onDisplaySettings: () {
             OverlayController.instance.hideOverlay();
-            Process.start('explorer.exe', [
-              'ms-settings:display',
-            ], runInShell: true);
           },
           onTrimMemory: () {
             SystemOptimizer.trimMemory();

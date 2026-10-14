@@ -1,8 +1,8 @@
-import 'dart:io';
 import '../core/logger.dart';
+import '../services/bridge_service.dart';
 import 'hardware_base.dart';
 
-/// Bộ điều khiển độ sáng màn hình cho máy Handheld (WMI / PowerShell).
+/// Bộ điều khiển độ sáng màn hình cho máy Handheld thông qua BridgeService.
 class BrightnessController extends HardwareController {
   static const _logger = AppLogger('BrightnessControl');
   int _currentBrightness = 70;
@@ -16,7 +16,12 @@ class BrightnessController extends HardwareController {
         super(
           name: "Độ sáng",
           unit: "%",
-        );
+        ) {
+    _currentBrightness = BridgeService.instance.brightness.value;
+    BridgeService.instance.brightness.addListener(() {
+      _currentBrightness = BridgeService.instance.brightness.value;
+    });
+  }
 
   @override
   bool isAvailable() => true;
@@ -28,21 +33,8 @@ class BrightnessController extends HardwareController {
   bool setValue(int value) {
     final target = clamp(value);
     _currentBrightness = target;
-
-    try {
-      final cmd =
-          '(Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorBrightnessMethods) | '
-          'Invoke-CimMethod -MethodName WmiSetBrightness -Arguments @{Timeout=1; Brightness=$target}';
-
-      Process.run('powershell', ['-NoProfile', '-Command', cmd]).then((result) {
-        if (result.exitCode != 0) {
-          _logger.warning('Lệnh đặt độ sáng PowerShell trả về mã lỗi ${result.exitCode}');
-        }
-      });
-      return true;
-    } catch (e) {
-      _logger.error('Lỗi khi thiết lập độ sáng', e);
-      return false;
-    }
+    BridgeService.instance.setBrightness(target);
+    _logger.info('Đã thiết lập độ sáng: $target%');
+    return true;
   }
 }

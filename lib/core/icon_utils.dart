@@ -1,7 +1,5 @@
-import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 
 /// Module tiện ích chuyển đổi Flutter IconData sang định dạng tệp .ico của Windows
@@ -70,21 +68,5 @@ class IconUtils {
     builder.add(pngBytes);
 
     return builder.toBytes();
-  }
-
-  /// Sinh file .ico từ [IconData] và ghi ra ổ đĩa
-  static Future<String> ensureIcoFile(
-    IconData icon, {
-    String? targetPath,
-    Color color = Colors.white,
-    double size = 42.0,
-  }) async {
-    final path =
-        targetPath ?? '${Directory.systemTemp.path}/gamepad_tray_icon.ico';
-    final file = File(path);
-    final bytes = await createIcoBytes(icon, color: color, size: size);
-    await file.parent.create(recursive: true);
-    await file.writeAsBytes(bytes, flush: true);
-    return file.absolute.path;
   }
 }

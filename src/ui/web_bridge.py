@@ -128,13 +128,30 @@ class WebBridge(QObject):
 
     @Slot(int)
     def setPanelWidth(self, width: int):
-        self.config.set(width, "overlay", "width")
+        if width <= 100:
+            self.config.set(width, "overlay", "width_percent")
+        else:
+            self.config.set(width, "overlay", "width")
         self.requestWidthChange.emit(width)
 
     @Slot(float)
     def setPanelScale(self, scale: float):
         self.config.set(scale, "overlay", "scale")
         self.requestScaleChange.emit(scale)
+
+    @Slot(str, str)
+    def setHotkey(self, target: str, hotkey: str):
+        """target: 'overlay' hoặc 'keyboard'"""
+        from src.input.hotkey_service import HotkeyService
+        hotkey_svc = HotkeyService()
+        if target == "overlay":
+            self.config.set(hotkey, "hotkey", "toggle_overlay")
+            hotkey_svc.update_hotkeys(overlay_hk=hotkey)
+            logger.info(f"Đã cập nhật phím tắt Overlay: {hotkey}")
+        elif target == "keyboard":
+            self.config.set(hotkey, "hotkey", "toggle_keyboard")
+            hotkey_svc.update_hotkeys(keyboard_hk=hotkey)
+            logger.info(f"Đã cập nhật phím tắt Bàn phím ảo: {hotkey}")
 
     @Slot(bool)
     def setAutostart(self, enabled: bool):

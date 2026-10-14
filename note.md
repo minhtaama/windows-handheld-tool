@@ -1,343 +1,515 @@
-# Kiến Trúc Lớp Phủ Hệ Thống (Windows System Z-Band) Và Lọc Nhập Liệu Cấp Nhân (Kernel Input Filter)
+# Chuyển Đổi Tư Duy Kiến Trúc Từ Flutter Sang ReactJS Và Quy Trình Gỡ Lỗi Bề Mặt Giao Diện (Flutter to React Architecture & Debugging Engine)
 
-Tài liệu này đúc kết toàn bộ cơ sở khoa học, bản chất vật lý của hệ điều hành Windows và lộ trình kỹ thuật triển khai hệ thống lớp phủ bảng điều khiển (Gaming Overlay) cho thiết bị máy tính cầm tay, phân tách triệt để thành 2 công đoạn độc lập theo nguyên lý phân ly bài toán (Separation of Concerns).
+Tài liệu này đúc kết toàn bộ cơ sở khoa học, bản chất vận hành ở tầng bộ nhớ và lộ trình chuyển đổi tư duy kiến trúc từ khung kết xuất đồ họa Flutter sang thư viện xây dựng giao diện khai báo ReactJS, cùng quy trình gỡ lỗi bề mặt thông qua động cơ trình duyệt nhúng.
 
 ---
 
-## 1. Nguyên Lý Phân Tách Hai Trục Vật Lý Trong Hệ Điều Hành
+## 1. Nguyên Lý Vật Lý Của Hai Động Cơ Kết Xuất Giao Diện (Rendering Engine Physics)
 
-Một hệ thống lớp phủ chơi game (Gaming Overlay) trên Windows chịu sự chi phối của hai trục vật lý hoàn toàn độc lập:
+Một hệ thống hiển thị đồ họa ứng dụng trên hệ điều hành chịu sự chi phối của hai mô hình vật lý kết xuất điểm ảnh hoàn toàn khác biệt:
 
-1. **Trục hiển thị bề mặt và thứ tự lớp cửa sổ (Surface Composition & Window Z-Order)**:
-   - Do Bộ quản lý Cửa sổ Máy tính (Desktop Window Manager - DWM) và chuỗi xuất hình của card đồ họa (GPU Scanout Pipeline) điều phối.
-   - Bản chất: Đảm bảo điểm ảnh của bảng điều khiển vẽ đè lên điểm ảnh của trò chơi mà không làm gián đoạn chu kỳ xuất hình của trò chơi ra màn hình vật lý.
-2. **Trục thu thập và phân phối tín hiệu điều khiển (Peripheral Input Polling & Dispatching)**:
-   - Do hệ thống con nhập liệu (XInput / Raw Input Subsystem) và trình điều khiển thiết bị nhân (Kernel Device Driver) điều phối.
-   - Bản chất: Đảm bảo khi người dùng thao tác phím bấm hoặc cần điều khiển trên bảng điều khiển, trò chơi không tiếp tục tiếp nhận các tín hiệu đó để tránh kích hoạt hành động không mong muốn trong không gian ảo (Ghost Input / Input Leakage).
+1. **Mô hình động cơ đồ họa tự quản (Self-Contained Graphics Pipeline - Mô hình của Flutter)**:
+   - Bản chất: Ứng dụng mang theo một cỗ máy vẽ hoàn chỉnh ([[Động Cơ Đồ Họa Độc Lập (Self-Contained Graphics Engine)]] - Skia hoặc Impeller).
+   - Cơ chế: Dart chuyển đổi toàn bộ mã khai báo thành một cây cấu trúc đối tượng hình học (Render Object Tree), sau đó tự động tính toán tọa độ từng điểm ảnh và gửi trực tiếp các tập lệnh vẽ tới card đồ họa qua API tầng thấp (Direct3D 11 / Vulkan).
+   - Đặc điểm: Không tồn tại khái niệm trang web hay mã HTML; toàn bộ khung hiển thị là một chuỗi hoán đổi bề mặt đồ họa (Swapchain) duy nhất trong không gian bộ nhớ video (VRAM).
+
+2. **Mô hình cây tài liệu ảo và động cơ ghép nối trình duyệt (Virtual DOM & Browser Compositor - Mô hình của React)**:
+   - Bản chất: React không tự tính toán điểm ảnh để vẽ trực tiếp lên GPU. React vận hành như một bộ máy tính toán sự sai lệch cấu trúc dữ liệu trong bộ nhớ RAM ([[Cây Mô Hình Tài Liệu Ảo (Virtual DOM)]]).
+   - Cơ chế: Khi trạng thái dữ liệu thay đổi, React chạy thuật toán so khớp phân nhánh (Reconciliation Algorithm) trên cây đối tượng JavaScript để tìm ra số lượng nút thay đổi tối thiểu, sau đó ủy thác việc tạo hình điểm ảnh cho Bộ quản lý Bố cục và Ghép nối Bề mặt của trình duyệt ([[Động Cơ Bố Cục Trình Duyệt (Browser Layout Engine)]] - Blink / Chromium).
+   - Đặc điểm: Tách rời tuyệt đối giữa logic giao diện và phần cứng hiển thị, tận dụng khả năng tăng tốc phần cứng của trình duyệt nhúng (Edge WebView2) thông qua giao diện lập trình nội bộ.
 
 ---
 
 ## 2. Xuất Phát Từ Bế Tắc Thực Tế (The "Why")
 
 - **Trước đây làm bằng cách nào?**:
-  - Dồn toàn bộ hai trục vật lý vào một điểm can thiệp duy nhất: Tiêm tập tin nhị phân chèn mã ([[Móc Đồ Họa DXGI (DXGI Hook)]] - phương pháp can thiệp trực tiếp vào bảng địa chỉ hàm ảo trong không gian nhớ của trò chơi) để vừa cưỡng bức cửa sổ chuyển sang chế độ không viền (Borderless Windowed), vừa chặn đứng hàm đọc tay cầm (`XInputGetState`).
+  - Dùng Flutter Desktop để lập trình giao diện công cụ hệ thống, cố gắng tùy biến mã nguồn C++ Runner để nhúng thanh điều khiển nổi lên trên màn hình.
 - **Bị nghẽn kỹ thuật gì?**:
-  1. Khi gặp trò chơi tích hợp cơ chế bảo vệ cấp nhân (Kernel Anti-Cheat như BattlEye, Vanguard) hoặc sử dụng API đồ họa khác (Vulkan, OpenGL), việc tiêm mã bị chặn đứng hoàn toàn $\rightarrow$ Lớp phủ không thể hiển thị trên trò chơi độc quyền, gây biến mất hoặc làm sập tiến trình.
-  2. Việc móc chuỗi khung hình đồ họa phụ thuộc nặng nề vào cấu trúc engine (như Far Cry 5 văng do bão thông điệp `WM_SIZE` tại `ResizeTarget`, Dead Island 2 lỗi con trỏ rỗng tại `GetFullscreenState`, Metro Exodus bị bóp nghẽn FPS do tiêu điểm cửa sổ).
-  3. Vi phạm nguyên lý phân ly trách nhiệm khi bắt một mô-đun đồ họa phải gánh thêm việc lọc tín hiệu tay cầm.
+  1. **Khép kín và khó gỡ lỗi (Debugging Opacity)**: Động cơ đồ họa Flutter là một hộp đen nhị phân khép kín. Khi giao diện bị lỗi kẹt va chạm chuột, lỗi mất tiêu điểm hoặc lệch kích thước, lập trình viên không thể bấm chọn trực tiếp vào phần tử trên màn hình để xem thông số CSS hay sửa đổi trực tiếp (Live Editing). Việc theo dõi trạng thái phải phụ thuộc vào công cụ gỡ lỗi chuyên biệt đòi hỏi kết nối luồng máy ảo Dart (Dart VM Service), vốn thường xuyên bị nghẽn khi ứng dụng chạy đè lên game.
+  2. **Tranh chấp tiêu điểm cửa sổ (Window Focus Contention)**: Động cơ Flutter Engine luôn cưỡng bức chiếm quyền kích hoạt cửa sổ hệ điều hành (`WM_ACTIVATE`), xung đột trực tiếp với cờ không chiếm tiêu điểm (`WS_EX_NOACTIVATE`) cần thiết cho một Gaming Overlay.
 - **Công nghệ mới giải quyết triệt để ra sao?**:
-  - **Trục hiển thị (Công đoạn 1)**: Đưa cửa sổ lên thẳng Phân lớp Công cụ Hệ thống (`ZBID_SYSTEM_TOOLS = 2`) với cờ đặc quyền `TokenUIAccess`. DWM tự động ghép nối bề mặt hiển thị ở tầng bộ trộn màn hình, cho phép vẽ đè tự nhiên lên mọi trò chơi mà không cần chạm vào một byte bộ nhớ của trò chơi.
-  - **Trục nhập liệu (Công đoạn 2)**: Sử dụng trình điều khiển lọc thiết bị ở tầng nhân ([[Trình Điều Khiển Lọc HidHide (HidHide Filter Driver)]]), ngắt quyền đọc thiết bị của trò chơi từ bên ngoài, xóa bỏ vĩnh viễn sự tồn tại của kỹ thuật tiêm mã DLL.
+  - Chuyển toàn bộ giao diện sang [[Thư Viện Giao Diện Khai Báo ReactJS (React Declarative UI Library)]] chạy trên khung nhìn Edge WebView2.
+  - Sử dụng giao thức gỡ lỗi tiêu chuẩn công nghiệp ([[Giao Thức Gỡ Lỗi Chrome (Chrome DevTools Protocol - CDP)]]): Cho phép nhấn `F12` mở trực tiếp bộ công cụ DevTools để trỏ chuột kiểm tra phần tử (Inspect Element), sửa trực tiếp lớp kiểu dáng CSS trong tích tắc, và theo dõi thông điệp thực thi trong bảng Console.
+  - Cơ chế cập nhật nóng ([[Thay Thế Mô-đun Nóng (Hot Module Replacement - HMR)]]): Sửa đổi tập tin React được phản chiếu lên màn hình trong 0.1 giây qua kết nối truyền tin cục bộ (WebSocket) mà không cần biên dịch lại mã nguồn hay tắt tiến trình hệ thống.
 
 ---
 
-## 3. Lộ Trình Kỹ Thuật Hai Công Đoạn (Two-Stage Execution Roadmap)
+## 3. Bản Đồ Ánh Xạ Khái Niệm Giữa Flutter Và ReactJS (Mental Model Mapping)
+
+| Khái niệm kiến trúc | Khung kết xuất Flutter | Thư viện giao diện ReactJS | Bản chất vật lý bên dưới bộ nhớ |
+| :--- | :--- | :--- | :--- |
+| **Đơn vị giao diện cơ sở** | `Widget` (`StatelessWidget`) | `Component` (Hàm nhận Props trả về JSX) | Hàm thuần túy biến đổi trạng thái thành cấu trúc cây đối tượng trừu tượng trong RAM. |
+| **Thành phần có trạng thái** | `StatefulWidget` + `State` | `Component` kết hợp Hook `useState` | Vùng nhớ lưu trữ dữ liệu cá thể được duy trì qua các chu kỳ thực thi hàm (Fiber Node). |
+| **Kích hoạt vẽ lại giao diện** | `setState(() { value = x; })` | `const [value, setValue] = useState(); setValue(x);` | Gửi tín hiệu thông báo cho bộ lên lịch (Scheduler) đặt cờ yêu cầu tính toán lại cây giao diện. |
+| **Vòng đời khởi tạo** | `void initState()` | `useEffect(() => { ... }, [])` | Khối lệnh thực thi một lần duy nhất sau khi nút DOM đầu tiên được chèn vào cây tài liệu. |
+| **Vòng đời hủy bỏ** | `void dispose()` | `useEffect(() => { return () => { ... }; }, [])` | Hàm dọn dẹp giải phóng con trỏ lắng nghe sự kiện khi nút bị gỡ khỏi bộ nhớ. |
+| **Vòng đời cập nhật** | `void didUpdateWidget()` | `useEffect(() => { ... }, [dependency])` | Khối lệnh chỉ chạy lại khi giá trị của biến phụ thuộc trong bộ nhớ bị biến đổi. |
+| **Bố cục hàng dọc** | `Column(children: [...])` | `<div className="flex flex-col">...</div>` | Thiết lập thuộc tính dàn trang CSS Flexbox theo trục dọc trong mô hình hộp (Box Model). |
+| **Bố cục hàng ngang** | `Row(children: [...])` | `<div className="flex flex-row">...</div>` | Thiết lập thuộc tính dàn trang CSS Flexbox theo trục ngang trong mô hình hộp. |
+| **Danh sách phần tử động** | `ListView.builder(...)` | `items.map((item) => <Item key={item.id} />)` | Duyệt mảng dữ liệu và ánh xạ thành danh sách nút VDOM kèm mã định danh khóa (`key`) để so khớp diffing. |
+| **Khoảng cách / Lề** | `Padding(...)` / `SizedBox(height: x)` | Tailwind classes: `p-4`, `m-2`, `gap-3`, `h-4` | Khai báo các thuộc tính vùng đệm (Padding) và vùng lề (Margin) trực tiếp trong CSS. |
+| **Truyền dữ liệu từ cha xuống** | Constructor arguments | `props` (Tham số đầu vào của hàm Component) | Truyền con trỏ đối tượng từ ngữ cảnh hàm cha xuống không gian thực thi của hàm con. |
+| **Phát sự kiện lên cha** | `ValueChanged<T> onAction` | Callback function: `onAction: (val: T) => void` | Thực thi hàm bao đóng (Closure) của cha được truyền xuống con để biến đổi trạng thái cha. |
+
+### Các Đoạn Mã Đối Chiếu Trực Quan Giữa Hai Nền Tảng (Concrete Code Comparison)
+
+#### 1. Khởi tạo khối hiển thị cơ sở và truyền dữ liệu (StatelessWidget vs React Component)
+- **Bản chất vật lý**: Trong Flutter, một đối tượng `StatelessWidget` là một cấu trúc dữ liệu bất biến (Immutable Object) chứa hàm `build`. Trong React, Component đơn thuần là **một hàm JavaScript** nhận một đối tượng chứa các thuộc tính (`props`) và trả về cấu trúc cây đối tượng trừu tượng Virtual DOM trong bộ nhớ heap.
+
+- Mã nguồn Flutter:
+```dart
+class MetricCard extends StatelessWidget {
+  final String label;
+  final String value;
+  const MetricCard({super.key, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF18181B),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+          const SizedBox(height: 4),
+          Text(value, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+}
+```
+
+- Mã nguồn ReactJS (TypeScript + Tailwind CSS):
+```tsx
+interface MetricCardProps {
+  label: string;
+  value: string;
+}
+
+export function MetricCard({ label, value }: MetricCardProps) {
+  return (
+    <div className="p-3 bg-zinc-900 rounded-lg flex flex-col gap-1 border border-white/5">
+      <span className="text-xs text-zinc-400">{label}</span>
+      <span className="text-base font-bold text-white font-mono">{value}</span>
+    </div>
+  );
+}
+```
+
+#### 2. Quản lý trạng thái nội tại và kích hoạt vẽ lại (StatefulWidget vs `useState`)
+- **Bản chất vật lý**: Flutter tách rời widget bất biến và đối tượng `State` có vòng đời dài hơn. React giữ component là hàm thuần túy, nhưng móc nối (Hook) vào mảng con trỏ lưu trữ trạng thái nằm ngoài hàm trong cấu trúc [[Nút Cấu Trúc Sợi (Fiber Node)]].
+
+- Mã nguồn Flutter:
+```dart
+class TdpCounter extends StatefulWidget {
+  const TdpCounter({super.key});
+  @override
+  State<TdpCounter> createState() => _TdpCounterState();
+}
+
+class _TdpCounterState extends State<TdpCounter> {
+  int tdp = 15;
+
+  void _increase() {
+    setState(() {
+      tdp += 1;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Text('$tdp W'),
+        IconButton(icon: const Icon(Icons.add), onPressed: _increase),
+      ],
+    );
+  }
+}
+```
+
+- Mã nguồn ReactJS:
+```tsx
+import { useState } from 'react';
+import { Plus } from 'lucide-react';
+
+export function TdpCounter() {
+  const [tdp, setTdp] = useState<number>(15);
+
+  const increase = () => {
+    setTdp(prev => prev + 1);
+  };
+
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-sm font-mono text-white">{tdp} W</span>
+      <button 
+        onClick={increase}
+        className="p-1.5 bg-zinc-800 rounded hover:bg-zinc-700 text-white"
+      >
+        <Plus size={16} />
+      </button>
+    </div>
+  );
+}
+```
+
+#### 3. Vòng đời khởi tạo, hủy bỏ và lắng nghe luồng sự kiện (`initState` / `dispose` vs `useEffect`)
+- **Bản chất vật lý**: Flutter yêu cầu ghi đè (Override) hai phương thức vòng đời ở hai thời điểm tách biệt. React gom cơ chế đăng ký và hủy bỏ thành một cặp hàm trong [[Hook Tác Vụ Ngoại Vi (useEffect)]], hàm trả về (Return Callback) sẽ đóng vai trò giải phóng con trỏ khi nút bị gỡ khỏi bộ nhớ.
+
+- Mã nguồn Flutter:
+```dart
+class TelemetryListener extends StatefulWidget {
+  const TelemetryListener({super.key});
+  @override
+  State<TelemetryListener> createState() => _TelemetryListenerState();
+}
+
+class _TelemetryListenerState extends State<TelemetryListener> {
+  StreamSubscription? _sub;
+  int temp = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = hardwareStream.listen((data) {
+      setState(() => temp = data.cpuTemp);
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text('Nhiệt độ CPU: $temp°C');
+  }
+}
+```
+
+- Mã nguồn ReactJS:
+```tsx
+import { useState, useEffect } from 'react';
+
+export function TelemetryListener() {
+  const [temp, setTemp] = useState<number>(0);
+
+  useEffect(() => {
+    // Đăng ký con trỏ lắng nghe khi Component được chèn vào DOM (Tương đương initState)
+    const handleUpdate = (data: { cpuTemp: number }) => {
+      setTemp(data.cpuTemp);
+    };
+    window.backend?.telemetryUpdated.connect(handleUpdate);
+
+    // Trả về hàm dọn dẹp khi Component bị gỡ khỏi cây DOM (Tương đương dispose)
+    return () => {
+      window.backend?.telemetryUpdated.disconnect(handleUpdate);
+    };
+  }, []); // Danh sách phụ thuộc rỗng [] đảm bảo việc đăng ký chỉ thực hiện một lần
+
+  return <span className="text-sm text-zinc-200">Nhiệt độ CPU: {temp}°C</span>;
+}
+```
+
+#### 4. Thẻ bọc con linh hoạt và danh sách lặp mảng (Slot Pattern & Array Mapping)
+- **Bản chất vật lý**: Flutter cần truyền đối tượng con qua tham số `child` / `children` và duyệt danh sách bằng bộ dựng chỉ số `ListView.builder`. React sử dụng con trỏ đối tượng ngầm định `props.children` và phép biến đổi mảng thuần túy `map()`.
+
+- Mã nguồn Flutter:
+```dart
+// Khung bọc con
+class SectionWrapper extends StatelessWidget {
+  final String title;
+  final Widget child;
+  const SectionWrapper({super.key, required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+// Danh sách lặp
+ListView.builder(
+  itemCount: items.length,
+  itemBuilder: (context, index) => ListTile(
+    title: Text(items[index].name),
+    onTap: () => onSelect(items[index].id),
+  ),
+)
+```
+
+- Mã nguồn ReactJS:
+```tsx
+import React from 'react';
+
+// Khung bọc con thông qua thuộc tính ngầm định children
+export function SectionWrapper({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="p-3 bg-black/30 rounded-lg border border-white/5 flex flex-col gap-2">
+      <span className="font-semibold text-sm text-white">{title}</span>
+      {children}
+    </div>
+  );
+}
+
+// Danh sách lặp bằng hàm biến đổi mảng gốc map()
+export function ItemList({ items, onSelect }: { items: Array<{ id: string; name: string }>; onSelect: (id: string) => void }) {
+  return (
+    <div className="flex flex-col gap-1">
+      {items.map((item) => (
+        <button
+          key={item.id} // Bắt buộc: Cung cấp mã định danh duy nhất cho thuật toán Reconciliation
+          onClick={() => onSelect(item.id)}
+          className="px-3 py-2 text-left rounded hover:bg-zinc-800 text-sm text-zinc-300"
+        >
+          {item.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+```
+
+### Cấu Trúc Cây Thành Phần (Component Tree Hierarchy) So Với Cây Tiện Ích (Widget Tree)
+
+#### 1. Sự khác biệt cốt lõi về bản chất kết xuất
+- **Trong Flutter (Kim tự tháp lồng ghép lớp - Nesting Pyramid)**:
+  - Mọi thuộc tính hình học (lề đệm `Padding`, căn chỉnh `Center`, giới hạn kích thước `SizedBox`, bắt cử chỉ `GestureDetector`, hiển thị có điều kiện `Visibility`) đều là các đối tượng `Widget` độc lập.
+  - Mỗi khi thêm một thuộc tính, lập trình viên buộc phải lồng thêm một lớp thẻ con (`child`), khiến cây tiện ích phình to theo chiều sâu (Widget Tree Bloat).
+- **Trong React (Cây thành phần phẳng kết hợp thuộc tính - Flat Semantic Tree)**:
+  - Các thuộc tính hiển thị, kích thước, hiệu ứng và sự kiện được gộp chung trực tiếp vào thuộc tính của nút (Props và CSS Classes).
+  - Một thẻ `<button className="p-3 bg-violet-600 rounded-xl" onClick={handleClick}>` trong React đảm nhiệm cùng lúc chức năng của 5 Widget Flutter: `Container` + `Padding` + `DecoratedBox` + `InkWell` + `GestureDetector`.
 
 ```mermaid
 flowchart TD
-    subgraph Stage_1["Công Đoạn 1: Tối Ưu Hiển Thị Tuyệt Đối (Production UI Foundation)"]
-        S1_Manifest["Thiết lập cờ uiAccess trong Manifest"]
-        S1_Cert["Tạo và nạp chứng chỉ số Authenticode nội bộ"]
-        S1_ZBand["Gán phân lớp ZBID_SYSTEM_TOOLS trong C++ Runner"]
-        S1_Cleanup["Xóa sạch 100% mã nguồn DXGI Hook và Input Muting cũ"]
-        S1_Manifest --> S1_Cert --> S1_ZBand --> S1_Cleanup
+    subgraph Flutter_Widget_Tree["Cây Tiện Ích Flutter (Kim Tự Tháp Lồng Nhau)"]
+        F_Container["Container (Khai báo kích thước & màu)"]
+        F_Padding["Padding (Khoảng đệm mép)"]
+        F_Center["Center (Căn giữa nội dung)"]
+        F_InkWell["InkWell / GestureDetector (Lắng nghe chạm)"]
+        F_Row["Row (Dàn hàng ngang)"]
+        F_Text["Text (Hiển thị nhãn)"]
+        F_Icon["Icon (Hiển thị biểu tượng)"]
+
+        F_Container --> F_Padding --> F_Center --> F_InkWell --> F_Row
+        F_Row --> F_Text
+        F_Row --> F_Icon
     end
 
-    subgraph Stage_1_State["Trạng Thái Vận Hành Sau Công Đoạn 1"]
-        S1_UI["Lớp phủ hiển thị ổn định trên mọi game (DX11, DX12, Vulkan, Anti-Cheat)"]
-        S1_Input["Tạm thời chấp nhận cả game và lớp phủ cùng nhận tín hiệu Gamepad"]
+    subgraph React_Component_Tree["Cây Thành Phần React (Cấu Trúc Tinh Gọn)"]
+        R_Button["button (Mang các class CSS: p-3, flex, items-center, rounded-xl)"]
+        R_Span["span (Nhãn văn bản)"]
+        R_Lucide["IconComponent (Biểu tượng SVG)"]
+
+        R_Button --> R_Span
+        R_Button --> R_Lucide
+    end
+```
+
+#### 2. Các mô hình dựng cây kinh điển (Classic Tree Composition Patterns)
+
+##### Mô hình bọc thành phần con (Slot / Children Pattern)
+- *Flutter*: Nhận tham số `final Widget child;` hoặc `final List<Widget> children;` và đặt vào vị trí tương ứng trong hàm `build`.
+- *React*: Tự động nhận thuộc tính ngầm định `children` trong `props`. Khi một component bọc các phần tử con giữa cặp thẻ mở/đóng `<Card><ItemA /><ItemB /></Card>`, toàn bộ các phần tử đó được truyền vào component dưới dạng `props.children` để kết xuất linh hoạt.
+
+##### Mô hình kết xuất có điều kiện (Conditional Rendering Tree)
+- *Flutter*: Dùng câu lệnh điều kiện `if (condition) WidgetA() else WidgetB()` trong mảng con, hoặc dùng widget `Visibility(visible: condition, child: ...)`.
+- *React*: Sử dụng trực tiếp biểu thức logic của JavaScript ngay trong JSX:
+  - Điều kiện hiển thị đơn: `{isVisible && <QuickSettings />}` (nếu đúng thì chèn vào cây VDOM, nếu sai React bỏ qua không sinh nút).
+  - Điều kiện rẽ nhánh hai phương án: `{isCharging ? <BatteryChargingIcon /> : <BatteryIcon />}`.
+
+##### Mô hình sinh cây từ mảng dữ liệu (Dynamic Collection Mapping)
+- *Flutter*: Sử dụng hàm khởi tạo `ListView.builder(itemCount: items.length, itemBuilder: (ctx, i) => ...)` để cấp phát widget theo chỉ số.
+- *React*: Sử dụng hàm biến đổi mảng gốc `items.map((item) => <ItemTile key={item.id} data={item} />)`. Thuộc tính `key` là bắt buộc để thuật toán so khớp [[Reconciliation]] nhận diện chính xác phần tử nào bị thêm, sửa, xóa mà không phải kết xuất lại toàn bộ danh sách.
+
+#### 3. Phân Tích Thực Tiễn Chuyển Đổi Các Cụm Giao Diện Kinh Điển (Real-World Tree Conversion Scenarios)
+
+Nhằm làm sáng tỏ sự khác biệt trong việc cấp phát bộ nhớ và tổ chức phân cấp, bảng sau phân rã 4 kịch bản dựng giao diện phổ biến từ cây tiện ích Flutter sang cây thành phần React:
+
+| Kịch bản dựng hình | Cây tiện ích Flutter (Mô hình lồng ghép sâu) | Cây thành phần React (Mô hình phần tử phẳng) | Bản chất chuyển dịch cấu trúc |
+| :--- | :--- | :--- | :--- |
+| **1. Khối chứa thông số có tiêu đề và giá trị** | `Container` $\rightarrow$ `Padding` $\rightarrow$ `Column` $\rightarrow$ [`Text` (tiêu đề), `SizedBox`, `Text` (giá trị)] | `<div className="p-3 bg-zinc-900 rounded-lg flex flex-col gap-1">` $\rightarrow$ [`<span>` (tiêu đề), `<span>` (giá trị)] | Loại bỏ 2 tầng lồng rỗng (`Padding`, `SizedBox`). Bố cục khoảng cách trục dọc được giải quyết bằng thuộc tính CSS `gap-1` trong cùng một nút khối (Block Node). |
+| **2. Nút bấm tương tác có icon và hiệu ứng chạm** | `Material` $\rightarrow$ `InkWell` $\rightarrow$ `Padding` $\rightarrow$ `Row` $\rightarrow$ [`Icon`, `SizedBox`, `Text`] | `<button className="flex items-center gap-2 px-4 py-2 hover:bg-zinc-800" onClick={handler}>` $\rightarrow$ [`<Icon />`, `<span>Nhãn</span>`] | Gom toàn bộ chức năng nhận diện cử chỉ, bề mặt hiệu ứng và đệm lề vào duy nhất thẻ ngữ nghĩa HTML `<button>`. Giảm độ sâu của cây từ 5 cấp xuống còn 2 cấp. |
+| **3. Thanh trượt điều khiển chỉ số kèm nhãn động** | `Column` $\rightarrow$ [`Row` (`Text`, `Spacer`, `Text`), `Slider`] | `<div className="space-y-2">` $\rightarrow$ [`<div className="flex justify-between">` (`<span>`, `<span>`), `<input type="range" />`] | Thay thế đối tượng `Spacer` trừu tượng bằng cơ chế dồn biên Flexbox `justify-between` của trình duyệt. Thanh trượt là phần tử nhập liệu bản địa `<input type="range">`. |
+| **4. Danh sách chọn đa mục có trạng thái tích cực** | `ListView.separated` $\rightarrow$ Duyệt mảng $\rightarrow$ `ListTile` hoặc `InkWell` lồng `Container` | `items.map(item => <button key={item.id} className={item.id === activeId ? "bg-violet-600" : "bg-zinc-800"}>)` | Không cần cấu trúc cấp phát phân tách (Separator Builder). Biến đổi mảng trực tiếp bằng hàm ánh xạ `map()`, sử dụng toán tử ba ngôi để tính toán chuỗi lớp CSS trực tiếp trong bộ nhớ. |
+
+---
+
+## 4. Vòng Đời Và Cơ Chế Phản Ứng Dữ Liệu Trong React (Lifecycle & Reactive Flow)
+
+### 1. Hook Quản lý Trạng thái (`useState`)
+- **Bản chất**: Trong Flutter, một `StatefulWidget` tạo ra một đối tượng `State` riêng biệt sống độc lập. Trong React, Component thực chất chỉ là **một hàm JavaScript thông thường** được gọi lại mỗi khi có dữ liệu mới.
+- **Cơ chế lưu trữ**: Để dữ liệu không bị biến mất sau khi hàm chạy xong, React lưu giá trị của `useState` vào một danh sách liên kết nằm ngoài Component (gọi là [[Nút Cấu Trúc Sợi (Fiber Node)]] trong bộ nhớ heap).
+- **Cú pháp đối chiếu**:
+  - Flutter: Khai báo biến `int count = 0;` và gọi `setState(() => count = 1);`.
+  - React: Khai báo `const [count, setCount] = useState(0);` và gọi `setCount(1);`.
+
+### 2. Hook Tác vụ Ngoại vi và Vòng đời (`useEffect`)
+- **Bản chất**: Gom toàn bộ các phương thức vòng đời rời rạc của Flutter (`initState`, `didUpdateWidget`, `dispose`) vào một cơ chế đồng bộ duy nhất dựa trên danh sách phụ thuộc (Dependency Array).
+- **Cơ chế 3 trạng thái**:
+  1. *Chạy duy nhất một lần khi khởi tạo (`initState`)*: Đặt mảng phụ thuộc rỗng `[]`.
+  2. *Chạy khi một biến dữ liệu thay đổi (`didUpdateWidget`)*: Liệt kê biến vào mảng `[tdp, volume]`. Mỗi khi biến này đổi địa chỉ bộ nhớ, hàm sẽ được kích hoạt lại.
+  3. *Dọn dẹp bộ nhớ khi hủy bỏ (`dispose`)*: Trả về một hàm dọn dẹp bên trong `useEffect`.
+
+```mermaid
+flowchart TD
+    subgraph Mount_Phase["Giai Đoạn Khởi Tạo (Mounting)"]
+        Component_Call["Thực thi hàm Component (Render JSX)"]
+        Insert_DOM["Chèn phần tử vào cây DOM thật"]
+        Run_Effect["Thực thi hàm trong useEffect([], [])"]
+        Component_Call --> Insert_DOM --> Run_Effect
     end
 
-    subgraph Stage_2["Công Đoạn 2: Chặn Nhập Liệu Tầng Nhân (Kernel-Level Input Muting)"]
-        S2_HidHide["Giao tiếp trình điều khiển lọc tầng nhân hidhide.sys qua IOCTL"]
-        S2_PID["Tạm thời ẩn Gamepad vật lý đối với PID của game khi mở panel"]
-        S2_Restore["Khôi phục quyền truy cập Gamepad cho game khi đóng panel"]
-        S2_HidHide --> S2_PID --> S2_Restore
+    subgraph Update_Phase["Giai Đoạn Cập Nhật (Updating)"]
+        Trigger_Set["Gọi hàm setValue(...)"]
+        Diff_VDOM["So khớp Virtual DOM tìm điểm khác biệt"]
+        Patch_DOM["Chắp vá đúng nút DOM thật bị thay đổi"]
+        Cleanup_Prev["Chạy hàm dọn dẹp cũ (nếu có)"]
+        Run_New_Effect["Chạy lại hàm trong useEffect([dep])"]
+        Trigger_Set --> Diff_VDOM --> Patch_DOM --> Cleanup_Prev --> Run_New_Effect
     end
 
-    Stage_1 --> Stage_1_State
-    Stage_1_State -->|Kiểm thử ổn định đạt chuẩn Production| Stage_2
+    subgraph Unmount_Phase["Giai Đoạn Hủy Bỏ (Unmounting)"]
+        Remove_DOM["Gỡ bỏ phần tử khỏi màn hình"]
+        Run_Cleanup["Thực thi hàm Cleanup trả về từ useEffect"]
+        Remove_DOM --> Run_Cleanup
+    end
 ```
 
 ---
 
-## 4. Công Đoạn 1: Triển Khai Windows System Z-Band & Dọn Dẹp Toàn Bộ DXGI Hook
+## 5. Quy Trình Gỡ Lỗi Bề Mặt Và Cập Nhật Nóng (Debugging & Hot Reload Workflow)
 
-### Bản chất vật lý của cơ chế bảo vệ UIAccess
-Để ngăn chặn mã độc lợi dụng việc vẽ đè lên các màn hình đăng nhập bảo mật (như UAC Prompt), nhân hệ điều hành Windows (`ntoskrnl.exe`) chỉ cấp cờ đặc quyền `TokenUIAccess` vào thẻ định danh tiến trình khi thỏa mãn đồng thời **3 điều kiện vật lý**:
-1. Tập tin nhị phân khai báo thuộc tính `uiAccess="true"` trong tài nguyên Manifest.
-2. Tập tin nhị phân được gắn chữ ký số Authenticode bắt nguồn từ một Nhà cấp chứng chỉ tin cậy nằm trong kho máy tính cục bộ (`LocalMachine\Root` và `LocalMachine\TrustedPublisher`).
-3. Tập tin nhị phân nằm trong thư mục được bảo vệ của hệ điều hành (`C:\Program Files` hoặc `C:\Windows\System32`).
+Hệ thống cung cấp ba phương thức gỡ lỗi linh hoạt cho từng công đoạn phát triển:
 
-### Các bước kỹ thuật thực hiện chi tiết
+### 1. Gỡ Lỗi Trực Quan Bằng Flutter DevTools (Widget Inspector)
+- **Phương thức khởi chạy**: Chọn menu `[3]` trong [scripts/run.bat](file:///d:/dev-projects/windows-handheld-tool/scripts/run.bat).
+- **Soi cây tiện ích (Widget Tree Inspector)**: Nhấp vào liên kết Dart VM Service URL được in trong cửa sổ dòng lệnh để mở bộ công cụ **Flutter DevTools** trên trình duyệt. Bạn có thể bấm chọn từng Widget trên màn hình để kiểm tra thông số kích thước, khoảng đệm (`padding`), giới hạn co dãn (`constraints`) và cây phân cấp giao diện thực tế.
+- **Dữ liệu giả lập tự động (Mock Telemetry)**: Khi chạy độc lập trên Chrome không có tiến trình Python chạy kèm, `BridgeService` tự động kích hoạt bộ đếm giả lập đẩy thông số pin, nhiệt độ và CPU mỗi giây, giúp lập trình viên thiết kế giao diện độc lập với tốc độ cao nhất.
 
-#### Bước 1: Khai báo đặc quyền trong Manifest ứng dụng
-- Mở tập tin cấu hình manifest: `windows/runner/runner.exe.manifest`.
-- Tìm thẻ `requestedExecutionLevel` trong nhánh `trustInfo` -> `security` -> `requestedPrivileges`.
-- Thiết lập cú pháp: `<requestedExecutionLevel level="asInvoker" uiAccess="true"/>`.
+### 2. Cập Nhật Nóng Trên Gaming Overlay Thật (Hot Reload Workflow)
+- **Quy trình vận hành song song**:
+  - Chọn menu `[2]` trong [scripts/run.bat](file:///d:/dev-projects/windows-handheld-tool/scripts/run.bat). Kịch bản tự động mở máy chủ phát triển cục bộ tại cổng 5173 và khởi chạy Overlay kết nối trực tiếp.
+- **Phản chiếu tức thời**: Khi bạn sửa đổi bất kỳ tệp mã nguồn Dart nào trong thư mục `lib/`, chỉ cần nhấn phím `r` (Hot Reload) hoặc `R` (Hot Restart) trong cửa sổ terminal của máy chủ Flutter Web. Bảng điều khiển Gaming Overlay sẽ được vẽ lại trong vòng 0.5 giây mà không làm gián đoạn trò chơi hay tắt tiến trình hệ thống.
 
-#### Bước 2: Tạo chứng chỉ số ký mã nội bộ (Self-Signed Code Signing Certificate)
-- Khởi chạy PowerShell với quyền Quản trị viên (Run as Administrator).
-- Tạo chứng chỉ ký mã thời hạn 10 năm lưu vào kho cá nhân của máy cục bộ bằng lệnh:
-  `New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=HandheldToolsSigner" -CertStoreLocation "Cert:\LocalMachine\My" -KeySpec Signature -NotAfter (Get-Date).AddYears(10)`
-- Trích xuất con trỏ chứng chỉ vừa tạo:
-  `$cert = (Get-ChildItem Cert:\LocalMachine\My -CodeSigningCert | Where-Object Subject -match "HandheldToolsSigner")[0]`
-- Nạp chứng chỉ vào kho Chứng chỉ Gốc Tin cậy (Trusted Root Certification Authorities):
-  `$rootStore = Get-Item Cert:\LocalMachine\Root; $rootStore.Open("ReadWrite"); $rootStore.Add($cert); $rootStore.Close()`
-- Nạp chứng chỉ vào kho Nhà phát hành Tin cậy (Trusted Publishers):
-  `$pubStore = Get-Item Cert:\LocalMachine\TrustedPublisher; $pubStore.Open("ReadWrite"); $pubStore.Add($cert); $pubStore.Close()`
-
-#### Bước 3: Đưa cửa sổ vào Z-Band trong mã nguồn C++ Runner
-- Trong tập tin điều khiển cửa sổ Win32 (`windows/runner/win32_window.cpp`):
-  - Định nghĩa chỉ số phân lớp công cụ hệ thống: `#define ZBID_SYSTEM_TOOLS 2`.
-  - Khai báo kiểu con trỏ hàm nội bộ của Windows:
-    `typedef BOOL (WINAPI *pfnSetWindowBand)(HWND hWnd, HWND hwndInsertAfter, DWORD dwBand);`.
-  - Trong phương thức khởi tạo cửa sổ (sau khi hàm tạo cửa sổ hoàn tất tạo ra `m_hwnd`):
-    `pfnSetWindowBand SetWindowBand = (pfnSetWindowBand)GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetWindowBand");`
-    `if (SetWindowBand) SetWindowBand(m_hwnd, NULL, ZBID_SYSTEM_TOOLS);`.
-
-#### Bước 4: Dọn dẹp triệt để toàn bộ mã nguồn DXGI Hook (Tuân thủ nguyên tắc không tương thích ngược)
-- **Tầng mã nguồn C++**:
-  - Xóa bỏ hoàn toàn thư mục `windows/dxgi_hook/` gồm các tập tin `dxgi_hook.cpp`, `dxgi_hook.h`, `dxgi.def`, thư viện MinHook đi kèm.
-  - Xóa bỏ lệnh nạp thư mục con `add_subdirectory("dxgi_hook")` trong `windows/CMakeLists.txt`.
-  - Xóa bỏ tập tin script biên dịch `build_dxgi_hook.bat`.
-  - Xóa bỏ tập tin script đóng gói cũ `package_release.bat`.
-- **Tầng dịch vụ Dart / Flutter**:
-  - Xóa bỏ hoàn toàn tập tin `lib/services/dxgi_hook_service.dart`.
-  - Trong `lib/services/overlay_controller.dart`:
-    - Xóa bỏ việc nhập thư viện `dxgi_hook_service.dart`.
-    - Xóa bỏ toàn bộ các lệnh gọi `DxgiHookService.instance.setOverlayActive(true)` tại phương thức `showOverlay()` và `setOverlayActive(false)` tại phương thức `hideOverlay()`.
-  - Trong `lib/main.dart`:
-    - Xóa bỏ đoạn mã khởi tạo `DxgiHookService.instance.init(config)`.
-
-#### Bước 4.1: Đồng bộ cơ chế hòa trộn khung hình DWM và vượt rào cản cách ly đặc quyền UIPI
-
-##### 1. Bản chất vật lý của sự cố màn hình đen khi mở lớp phủ
-- **Trước đây làm bằng cách nào?**: Ứng dụng gọi hàm gán thuộc tính cửa sổ phân tầng (`SetLayeredWindowAttributes`) với cờ chỉ định độ mờ (`LWA_ALPHA`) và tham số 255 nhằm mục đích yêu cầu cửa sổ hiển thị rõ nét 100%.
-- **Bị nghẽn/thảm họa kỹ thuật gì?**: Bộ dựng hình Flutter trên Windows kết xuất khung hình bằng Direct3D 11 và DirectComposition swapchain với 4 kênh màu ARGB độc lập (Per-Pixel Alpha). Khi gọi hàm `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)`, bộ ghép hình DWM (Desktop Window Manager) lập tức ngắt bỏ cơ chế hòa trộn độ mờ từng điểm ảnh (Per-Pixel Alpha Blending) và ép toàn bộ bề mặt cửa sổ nhận một hệ số mờ đồng nhất (Constant Alpha = 255). Do vùng không gian bên trái bảng điều khiển có giá trị màu là 0 nhưng độ mờ bị ép thành 255, DWM hiển thị vùng này thành màu đen đặc (Black Opaque), biến toàn bộ màn hình thành một tấm màn đen sì che khuất trò chơi bên dưới.
-- **Giải quyết triệt để ra sao?**:
-  - Loại bỏ hoàn toàn 100% các lệnh gọi hàm `SetLayeredWindowAttributes` trong cả tầng C++ (`win32_window.cpp`) và tầng Dart (`native_window_service.dart`).
-  - Mở rộng khung viền DWM vào toàn bộ vùng thao tác của cửa sổ bằng hàm `DwmExtendFrameIntoClientArea(window, &margins)` với lề âm `MARGINS{-1, -1, -1, -1}`. Thao tác này trao toàn quyền hòa trộn độ trong suốt cho kênh Alpha của DirectComposition, giúp vùng trống hoàn toàn trong suốt nhìn xuyên thấu xuống màn hình trò chơi.
-  - Bắt thông điệp xóa nền `WM_ERASEBKGND` và trả về giá trị 1 để ngăn chặn thư viện đồ họa GDI tự ý quét cọ màu đen/trắng lên khung hình.
-
-##### 2. Bản chất vật lý của sự cố khay hệ thống (System Tray) không phản hồi
-- **Trước đây làm bằng cách nào?**: Thư viện quản lý khay hệ thống (`tray_manager`) sử dụng hàm API Windows `Shell_NotifyIcon` để tạo biểu tượng và đăng ký mã thông điệp phản hồi là `WM_USER + 1` (giá trị số `0x0401`).
-- **Bị nghẽn/thảm họa kỹ thuật gì?**: Khi ứng dụng được cấu hình đặc quyền `uiAccess="true"`, tiến trình của ứng dụng được hệ điều hành nâng cấp mức toàn vẹn bảo mật (Integrity Level) lên mức rất cao (`UIAccess`). Trong khi đó, tiến trình quản lý thanh tác vụ Windows (`explorer.exe`) chạy ở mức toàn vẹn bình thường (`Medium Integrity`). Khi người dùng click chuột vào biểu tượng khay hệ thống, `explorer.exe` gửi gói thông điệp `0x0401` tới cửa sổ ứng dụng. Tường lửa hạt nhân của hệ điều hành Windows (`win32k.sys`) kích hoạt cơ chế cách ly đặc quyền giao diện (User Interface Privilege Isolation - UIPI) và lập tức chặn đứng, tiêu hủy (drop) gói thông điệp này ngay tại hàng đợi (Message Queue) vì người gửi có mức đặc quyền thấp hơn người nhận. Hậu quả là ứng dụng hoàn toàn không nhận được tín hiệu nhấp chuột lẫn lệnh hiển thị menu ngữ cảnh (`TrackPopupMenu`).
-- **Giải quyết triệt để ra sao?**:
-  - Khai báo mở bộ lọc thông điệp toàn cục và theo từng cửa sổ thông qua các hàm Win32 API: `ChangeWindowMessageFilter` và `ChangeWindowMessageFilterEx`.
-  - Cấp phép xuyên qua tường lửa UIPI cho 3 thông điệp thiết yếu:
-    - Thông điệp phản hồi khay hệ thống: `WM_USER + 1` (cờ `MSGFLT_ALLOW = 1`).
-    - Thông điệp chọn mục trên trình đơn: `WM_COMMAND`.
-    - Thông điệp tái tạo khay hệ thống khi Explorer khởi động lại: chuỗi định danh đã đăng ký `RegisterWindowMessageW(L"TaskbarCreated")`.
-
-##### 3. Bản chất vật lý của sự cố nuốt chuột và Phân tích tối ưu: Right Dock Window vs. Fullscreen Overlay
-- **Trước đây làm bằng cách nào?**: Ứng dụng tạo một cửa sổ toàn màn hình bao phủ 100% diện tích hiển thị (`1920x1080`), dự định bắt thông điệp `WM_NCHITTEST` trên cửa sổ cha (`FLUTTER_RUNNER_WIN32_WINDOW`) để trả về `HTTRANSPARENT` cho vùng bên trái và `HTCLIENT` cho Side Panel bên phải.
-- **Bị nghẽn/thảm họa kỹ thuật gì?**:
-  1. *Cửa sổ con nuốt chuột*: Kiến trúc Flutter Windows Runner chia làm 2 tầng: Cửa sổ cha (`FLUTTER_RUNNER_WIN32_WINDOW`) và Cửa sổ con chứa khung vẽ đồ họa DirectX (`FLUTTER_VIEW_WINDOW`). Khi chuột tương tác, Windows gửi `WM_NCHITTEST` tới cửa sổ con nằm sâu nhất dưới tọa độ con trỏ. Thủ tục cửa sổ của `FLUTTER_VIEW_WINDOW` (bên trong `flutter_windows.dll`) mặc định luôn trả về `HTCLIENT` cho toàn bộ tọa độ trên màn hình. Do đó, mã lọc `WM_NCHITTEST` ở cửa sổ cha bị bỏ qua hoàn toàn, khiến toàn màn hình bị nuốt trọn chuột.
-  2. *Thanh tác vụ Windows 11 ngắt kết nối khay hệ thống khi ẩn*: Khi dùng lệnh `ShowWindow(hwnd, SW_HIDE)` để ẩn cửa sổ, tiến trình `explorer.exe` của Windows 11 kiểm tra `IsWindowVisible(hwnd) == FALSE` và tự động hủy bỏ (drop) mọi thông điệp click chuột `WM_USER + 1`, làm icon khay hệ thống bị tê liệt hoàn toàn.
-- **So sánh tối ưu giữa hai phương án giải quyết triệt để**:
-
-```mermaid
-flowchart TD
-    subgraph PA_A["Phương Án A: Right Dock Window (Tối ưu tuyệt đối)"]
-        A1["Cửa sổ Win32 chỉ có kích thước đúng bằng Panel: Width = 35% màn hình, Height = 100%"]
-        A2["VRAM Swapchain chỉ cấp phát ~1.9 MB (giảm 70% VRAM so với Fullscreen)"]
-        A3["65% màn hình bên trái trống rỗng vật lý -> Chuột tương tác Desktop/Game 100% tự nhiên không cần Hit-Test"]
-        A4["Khi đóng: Dời tọa độ ra ngoài màn hình (Off-screen) giữ IsWindowVisible=TRUE -> System Tray hoạt động vĩnh viễn"]
-    end
-    subgraph PA_B["Phương Án B: Fullscreen Transparent Overlay (Nặng & Phức tạp)"]
-        B1["Cửa sổ bao phủ toàn màn hình 1920x1080 (hoặc 2560x1600 trên máy Handheld 2K)"]
-        B2["VRAM Swapchain tiêu tốn 16-50 MB cho 65% vùng trống vô hình"]
-        B3["Phải gán WS_EX_TRANSPARENT vào cửa sổ con FLUTTER_VIEW_WINDOW để luồn lách thông điệp WM_NCHITTEST"]
-        B4["DWM phải gánh tải phối trộn Alpha Blending toàn màn hình ở mọi chu kỳ quét 60Hz/120Hz"]
-    end
-```
-
-| Tiêu chí kỹ thuật | Phương án A: Right Dock Window (Khuyến nghị) | Phương án B: Fullscreen + Hit-Test Hack |
-| :--- | :--- | :--- |
-| **Tiêu tốn bộ nhớ VRAM** | **Rất thấp**: Bộ đệm tráo đổi (Swapchain) chỉ cấp phát dải 450x1080 (~1.9 MB/buffer), tiết kiệm tới ~70% VRAM. | **Rất cao**: Cấp phát toàn màn hình 1920x1080 (hoặc 2560x1600), lãng phí 16 - 50 MB VRAM cho khoảng trống vô hình. |
-| **Gánh nặng GPU & DWM** | **Tối ưu**: DWM chỉ phối trộn dải mép phải. Vùng bên trái trống hoàn toàn, game kích hoạt cơ chế độc chiếm phần cứng (Independent Flip). | **Nặng nề**: DWM phải phối trộn kênh Alpha toàn màn hình liên tục ở từng chu kỳ quét 60Hz/120Hz. |
-| **Cơ chế chuột & Cảm ứng** | **Vật lý tự nhiên**: Vùng bên trái không có cửa sổ che chắn, chuột rơi thẳng xuống Desktop/Game. Vùng Panel nhận chuột tự nhiên. | **Luồn lách thông điệp**: Phải gán `WS_EX_TRANSPARENT` vào cửa sổ con để chuyển tiếp `WM_NCHITTEST` lên cha, tiềm ẩn xung đột gesture. |
-| **Độ ổn định System Tray** | **Tuyệt đối**: Cửa sổ thu nhỏ 1x1 hoặc đưa Off-screen khi đóng, duy trì `IsWindowVisible = TRUE` cho Windows 11 Taskbar. | **Tương tự**: Phải đưa Off-screen khi đóng để tránh `SW_HIDE` làm chết kết nối khay hệ thống. |
-| **Điều chỉnh độ rộng Panel** | **Trực tiếp**: Dart gọi `SetWindowPos` co dãn kích thước vật lý tức thời khi kéo slider Cài đặt. | **Gián tiếp**: Phải đồng bộ thuộc tính `SetPropW` xuống Win32 để tính lại ranh giới `boundaryX`. |
-
-- **Kết luận giải pháp triệt để**:
-  - **Phương án A (Right Dock Window)** tối ưu và vượt trội hơn toàn diện về hiệu năng phần cứng, mức tiêu thụ VRAM, độ mượt mà của Game và sự trong sáng của mã nguồn Win32.
-  - Khi triển khai: Cửa sổ Win32 khởi tạo neo sát mép phải với chiều rộng `panelWidth`. Khi đóng, dời cửa sổ ra tọa độ ngoài màn hình (`X = screenWidth, Y = 0`) mà không dùng `SW_HIDE` để giữ kết nối khay hệ thống. Khi mở, dịch chuyển về `X = screenWidth - panelWidth` và hiển thị bằng `SWP_NOACTIVATE`. Khi người dùng kéo thanh trượt độ rộng, gọi `SetWindowPos` cập nhật trực tiếp kích thước cửa sổ.
-
-#### Bước 5: Ký số tập tin thực thi sau khi biên dịch
-- Sau khi đóng gói ứng dụng bản Release (`flutter build windows --release`), định vị công cụ `signtool.exe` trong Windows SDK (thường tại `C:\Program Files (x86)\Windows Kits\10\bin\<version>\x64\signtool.exe`).
-- Thực thi lệnh ký số nhị phân:
-  `signtool.exe sign /sm /s My /n "HandheldToolsSigner" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "build\windows\x64\runner\Release\windows_handheld_tools.exe"`.
-
-#### Bước 6: Cài đặt và nghiệm thu trong thư mục bảo mật
-
-##### Cấu trúc tập tin bắt buộc khi chép vào thư mục an toàn
-- Do ứng dụng Flutter trên Windows vận hành theo mô hình đóng gói thư mục liên kết động (Application Bundle), nhân Windows (`ntoskrnl.exe`) chỉ cấp quyền `TokenUIAccess` khi tập tin `.exe` có cờ `uiAccess="true"` cư ngụ tại thư mục an toàn của hệ điều hành (`C:\Program Files\`), đồng thời bộ nạp liên kết động (Dynamic Linker) yêu cầu các thư viện dùng chung phải nằm cạnh tập tin thực thi để nạp vào cùng một không gian địa chỉ ảo.
-- Bắt buộc phải sao chép **toàn bộ thư mục đóng gói Release**, bao gồm:
-  - Tập tin thực thi chính: `windows_handheld_tool.exe` (đã ký số Authenticode).
-  - Toàn bộ các thư viện liên kết động: `flutter_windows.dll`, các `.dll` của plugin (`window_manager_plugin.dll`, `tray_manager_plugin.dll`, `screen_retriever_windows_plugin.dll`), và các thư viện điều khiển phần cứng (`ryzenadj.dll`, `libryzenadj.dll`, `WinRing0x64.dll`, `WinRing0x64.sys`, `inpoutx64.dll`).
-  - Toàn bộ thư mục dữ liệu: `data/` (chứa `icudtl.dat` và thư mục con `flutter_assets/` lưu trữ bytecode Dart, hình ảnh, phông chữ).
-  - Tập tin cấu hình: `config.json`.
-
-##### Phương thức phân phối: Kịch bản thử nghiệm nội bộ và Bộ cài đặt phát hành
-- **Giai đoạn phát triển và kiểm thử nội bộ**:
-  - Không xây dựng gói cài đặt `.msi` để tránh tốn thời gian cài đặt và gỡ bỏ liên tục trong vòng lặp thử nghiệm.
-  - Sử dụng hai tập tin kịch bản chuyên biệt chạy với quyền Quản trị viên:
-    - `deploy_test.bat`: Tự động ngắt tiến trình `windows_handheld_tool.exe` đang chạy, tạo thư mục an toàn `C:\Program Files\WindowsHandheldTools\`, đồng bộ toàn bộ nội dung thư mục Release sang đó và tự động khởi chạy ứng dụng để kiểm thử.
-    - `uninstall_test.bat`: Cưỡng bức đóng tiến trình và xóa sạch toàn bộ thư mục `C:\Program Files\WindowsHandheldTools\` để đưa môi trường về trạng thái ban đầu trước mỗi lần triển khai mới.
-- **Giai đoạn phát hành hoàn chỉnh cho người dùng cuối (Production Release)**:
-  - Sau khi hoàn thành cả Công đoạn 1 và Công đoạn 2, đóng gói toàn bộ thành một trình cài đặt tự động duy nhất (sử dụng Inno Setup tạo `setup.exe` hoặc WiX Toolset tạo `.msi`).
-  - Trình cài đặt tự động thực hiện 3 tác vụ có quyền Quản trị viên:
-    1. Nạp chứng chỉ ký số nội bộ vào kho `LocalMachine\Root` và `LocalMachine\TrustedPublisher`.
-    2. Giải nén toàn bộ thư mục ứng dụng vào `C:\Program Files\WindowsHandheldTools\`.
-    3. Thiết lập lối tắt khởi chạy cùng hệ thống (Startup Shortcut).
-
-##### Tiêu chí nghiệm thu Công đoạn 1
-1. Cửa sổ lớp phủ hiển thị đè mượt mà lên các trò chơi Direct3D 11, Direct3D 12, Vulkan, OpenGL ở cả chế độ Toàn màn hình độc quyền (Exclusive Fullscreen) và Cửa sổ không viền.
-2. Không xảy ra hiện tượng sập tiến trình (Crash) khi thay đổi độ phân giải màn hình hoặc khi mở/đóng bảng điều khiển.
-3. Dự án hoàn toàn không còn bất kỳ tập tin nhị phân chèn mã DLL nào chạy ngầm.
-4. Chấp nhận đặc tính tạm thời: Nút bấm trên tay cầm điều khiển song song cả bảng điều khiển và hành động nhân vật trong trò chơi.
-5. Bảo toàn và duy trì hoạt động 100% của toàn bộ hệ thống tính năng phần cứng:
-   - Lớp phủ thông số hiệu năng RTSS OSD Overlay (FPS, CPU, GPU, RAM, Frametime) qua bộ nhớ chia sẻ RTSS Shared Memory.
-   - Điều khiển công suất vi xử lý APU TDP (5W - 35W) qua `RyzenAdj` và kernel driver `WinRing0`.
-   - Điều khiển tốc độ quạt tản nhiệt (Fan Control) qua WMI/EC.
-   - Điều khiển độ sáng màn hình (WMI Brightness), âm lượng hệ thống (Core Audio), bàn phím cảm ứng (TabTip), và lắng nghe phím tắt toàn cục (Gamepad Combo `BACK + RB`, hotkey `Ctrl+Shift+Q`).
-
-##### Hiện trạng triển khai thực tế và Lộ trình nghiệm thu (Current Implementation Status)
-
-- **Hoàn tất chuyển đổi toàn diện sang Môi trường Thực thi Python (Python Native Runtime)**:
-  - Đã xóa sạch 100% mã nguồn và tài nguyên phụ thuộc Flutter (`lib/`, `windows/`, `build/`, `.dart_tool`, `pubspec.yaml`, `analysis_options.yaml`), tuân thủ nghiêm ngặt nguyên tắc loại bỏ tương thích ngược.
-  - Tái cấu trúc dự án theo nguyên lý phân ly trách nhiệm (Separation of Concerns) vào không gian mã nguồn `src/` với các mô-đun độc lập: `core/`, `hardware/`, `services/`, `input/`, `overlay/`, `ui/`.
-- **Giải quyết triệt để sự cố tiêu điểm và khay hệ thống (Focus Loss & System Tray Resolution)**:
-  - Khung giao diện PySide6 quản lý trực tiếp tay cầm cửa sổ Win32 (`HWND`), gắn trực tiếp cờ mở rộng `WS_EX_NOACTIVATE` (`0x08000000`) và `WS_EX_TOOLWINDOW` (`0x00000080`).
-  - Khi thao tác chạm cảm ứng hoặc click chuột trên thanh bên, nhân Windows không chuyển tiêu điểm ra khỏi trò chơi tiền cảnh, đảm bảo trò chơi không bị tạm dừng hoặc tụt FPS.
-  - Vùng cửa sổ thực tế chỉ chiếm đúng chiều rộng Side Panel (`panelWidth x screenHeight`) neo mép phải; phần còn lại hoàn toàn không có cửa sổ che chắn, cho phép chuột tương tác tự do 100% với Desktop và Game.
-  - Biểu tượng khay hệ thống (`QSystemTrayIcon`) và phím tắt toàn cục (`Ctrl+Shift+Q` qua `RegisterHotKey`) nhận sự kiện tức thì trên luồng thông điệp Windows mà không bị nghẽn luồng.
-- **Hoạt động của các dịch vụ hệ thống & phần cứng**:
-  - `TdpService`: Nạp trực tiếp `libryzenadj.dll` và driver `WinRing0x64.sys` bằng `ctypes`.
-  - `FanService`: Điều khiển cổng I/O vật lý của Embedded Controller qua `inpoutx64.dll`.
-  - `AudioService`: Tương tác trực tiếp giao diện COM của Windows Core Audio API qua `pycaw`.
-  - `BrightnessService`: Điều khiển độ sáng màn hình trực tiếp qua không gian tên `root/wmi`.
-  - `TouchscreenService`: Dò tìm và bật/tắt thiết bị HID Touchscreen qua `pnputil`.
-  - `GamepadService`: Luồng quét trạng thái cần điều khiển và tổ hợp `BACK + RB` từ `xinput1_4.dll`.
-  - `RtssService`: Giao tiếp tệp bộ nhớ chia sẻ `RTSSSharedMemoryV2` để hiển thị OSD.
-- **Quy trình triển khai**:
-  - Kịch bản chạy phát triển: [run_dev.bat](file:///d:/dev-projects/windows-handheld-tool/run_dev.bat) khởi chạy trực tiếp với Python.
-  - Kịch bản đóng gói và phân phối: [deploy_test.bat](file:///d:/dev-projects/windows-handheld-tool/deploy_test.bat) tự động đóng gói qua PyInstaller với `app.manifest` (`uiAccess="true"`), ký chứng chỉ số Authenticode nội bộ `HandheldToolsSigner`, đồng bộ vào `C:\Program Files\WindowsHandheldTools\` và kích hoạt trên phân lớp `ZBID_SYSTEM_TOOLS`.
+### 3. Kiểm Tra Giao Thức Mạng Bằng Chromium DevTools (F12)
+- **Phím tắt F12**: Khi bảng điều khiển nổi đang hiển thị, nhấn phím `F12` trên bàn phím để bật cửa sổ **Chromium DevTools**.
+- **Theo dõi gói tin WebSocket**: Chuyển sang tab **Network** $\rightarrow$ chọn bộ lọc **WS** (WebSockets) $\rightarrow$ nhấp vào đường truyền `ws://127.0.0.1:8765` để xem toàn bộ các thông điệp JSON gửi/nhận thời gian thực (`setTdp`, `setFan`, `telemetry`, `init`).
+- **Theo dõi lỗi console**: Tab **Console** in ra các thông điệp kết nối, cảnh báo và lỗi kết xuất nếu có phát sinh trong quá trình chạy.
 
 ---
 
-## 5. Công Đoạn 2: Chặn Nhập Liệu Tầng Nhân Thông Qua Trình Điều Khiển Lọc HidHide
-
-Sau khi Công đoạn 1 đã được kiểm thử ổn định và đạt chuẩn xuất bản (Production Ready), hệ thống sẽ tiến hành bổ sung khả năng ngắt nhập liệu tay cầm thông qua trình điều khiển lọc thiết bị ở tầng nhân mà không làm biến đổi bất kỳ byte nhớ nào của trò chơi.
-
-### Bản chất vật lý của cơ chế lọc HidHide
-- **Vị trí trong ngăn xếp thiết bị**: `hidhide.sys` hoạt động như một trình điều khiển lọc tầng trên (Upper Filter Driver) được chèn trực tiếp vào ngăn xếp thiết bị USB/Bluetooth Human Interface Device (HID).
-- **Cơ chế ngăn chặn luồng I/O**:
-  - Khi một ứng dụng cố gắng mở thiết bị (thông qua hàm API Win32 `CreateFile` tới đường dẫn giao diện thiết bị `\\?\HID#...`), nhân Windows sẽ chuyển tiếp gói yêu cầu I/O (IRP - I/O Request Packet) qua ngăn xếp driver.
-  - Driver `hidhide.sys` chặn gói IRP, đối chiếu mã định danh tiến trình yêu cầu (Caller Process ID) với bảng danh sách đen (Blacklist) được lưu trong bộ nhớ nhân:
-    - Nếu trùng khớp PID của trò chơi: Driver lập tức trả về mã lỗi `STATUS_ACCESS_DENIED`. Trò chơi hoàn toàn không nhận được dữ liệu trạng thái tay cầm.
-    - Nếu là PID của ứng dụng lớp phủ (Handheld Tools): Driver cho phép gói IRP đi qua bình thường.
-
-### Quy trình kỹ thuật dự kiến của Công đoạn 2
+## 6. Kiến Trúc Lai Giữa Giao Diện Khai Báo Flutter Web Và Động Cơ Hệ Thống Python (Flutter Web & Python WebEngine Hybrid Architecture)
 
 ```mermaid
 flowchart TD
-    subgraph User_Action["Thao Tác Người Dùng"]
-        Open_Panel["Mở Bảng Điều Khiển (Overlay Show)"]
-        Close_Panel["Đóng Bảng Điều Khiển (Overlay Hide)"]
+    subgraph Frontend_App["Tầng Giao Diện Khai Báo (lib/ - 100% Dart & Flutter)"]
+        Flutter_Main["Điểm Khởi Chạy (main.dart - Khởi tạo Bridge)"]
+        Overlay_Screen["Màn Hình Nền (ui/overlay_screen.dart)"]
+        Quick_Panel["Bảng Điều Khiển Chính (ui/quick_panel.dart)"]
+        Tab_Home["Trang Chủ (tabs/home_tab.dart)"]
+        Tab_Perf["Hiệu Năng (tabs/performance_tab.dart)"]
+        Tab_Device["Thiết Bị (tabs/device_tab.dart)"]
+        Tab_Settings["Cài Đặt (tabs/settings_tab.dart)"]
+        Bridge_Client["Cầu Nối WebSocket Client (services/bridge_service.dart)"]
+
+        Flutter_Main --> Overlay_Screen
+        Overlay_Screen --> Quick_Panel
+        Quick_Panel --> Tab_Home
+        Quick_Panel --> Tab_Perf
+        Quick_Panel --> Tab_Device
+        Quick_Panel --> Tab_Settings
+        Quick_Panel <--> Bridge_Client
     end
 
-    subgraph Service_Logic["Dịch Vụ Điều Khiển Nhập Liệu (HidHideService)"]
-        Get_PID["Lấy PID Trò Chơi Đang Chạy: GetWindowThreadProcessId"]
-        Send_Block_IOCTL["Gửi Gói Tin IOCTL_SET_BLACKLIST Chặn PID Của Game"]
-        Send_Unblock_IOCTL["Gửi Gói Tin IOCTL_CLEAR_BLACKLIST Mở Lại Quyền Cho Game"]
+    subgraph Native_Process["Tầng Dịch Vụ Hệ Thống (src/ - Python PySide6)"]
+        WebEngine_View["Khung Nhìn Trình Duyệt Nhúng (src/ui/quick_panel.py)"]
+        Ws_Server["Máy Chủ Truyền Tin (src/ui/ws_server.py - QWebSocketServer)"]
+        WebBridge_Server["Bộ Điều Phối Phần Cứng (src/ui/web_bridge.py)"]
+        Window_Manager["Quản Lý Cửa Sổ Overlay (src/overlay/window_manager.py)"]
+        Hardware_Services["Dịch Vụ Phần Cứng (TDP, Quạt, Âm Lượng, WMI, RTSS)"]
+
+        WebEngine_View --> Window_Manager
+        WebEngine_View --> Ws_Server
+        Ws_Server <--> WebBridge_Server
+        WebBridge_Server <--> Hardware_Services
     end
 
-    subgraph Kernel_Driver["Trình Điều Khiển Nhân (hidhide.sys)"]
-        Drop_IRP["Hủy Bỏ Gói Tin IRP Đọc Dữ Liệu Của Game (Access Denied)"]
-        Pass_IRP["Chuyển Tiếp Bình Thường Gói Tin IRP Cho Game"]
-    end
-
-    Open_Panel --> Get_PID --> Send_Block_IOCTL --> Drop_IRP
-    Close_Panel --> Send_Unblock_IOCTL --> Pass_IRP
+    Bridge_Client <===>|Kênh Truyền Tin WebSocket (ws://127.0.0.1:8765)| Ws_Server
 ```
 
-- **Bước 1**: Thiết lập kênh liên lạc với driver `hidhide.sys` bằng cách mở tay cầm thiết bị điều khiển thông qua hàm `CreateFileW(L"\\\\.\\HidHide", GENERIC_READ | GENERIC_WRITE, ...)` trong dịch vụ mới `HidHideService`.
-- **Bước 2**: Đăng ký mã định danh phần cứng (Hardware ID) của tay cầm tích hợp trên máy vào danh sách quản lý của driver.
-- **Bước 3**: Khi mở lớp phủ (`OverlayController.showOverlay`):
-  - Xác định cửa sổ trò chơi tiền cảnh thông qua `GetForegroundWindow`.
-  - Trích xuất Process ID bằng `GetWindowThreadProcessId`.
-  - Gửi mã điều khiển thiết bị (DeviceIoControl với mã IOCTL của HidHide) để thêm PID trò chơi vào danh sách chặn.
-- **Bước 4**: Khi đóng lớp phủ (`OverlayController.hideOverlay`):
-  - Gửi mã điều khiển thiết bị để xóa PID trò chơi khỏi danh sách chặn, hoàn trả luồng dữ liệu tay cầm cho trò chơi ngay lập tức.
+### Nguyên tắc vận hành vật lý của kiến trúc:
+1. **Bảo tồn toàn vẹn tư duy Widget Tree**: 100% tầng hiển thị được viết bằng ngôn ngữ Dart và hệ sinh thái Widget của Flutter. Không có bất kỳ dòng mã nào sử dụng JavaScript, TypeScript hay JSX.
+2. **Loại bỏ hoàn toàn rào cản FFI trên Web**: Tầng Flutter Web không tương tác trực tiếp với các thư viện nhị phân Win32 (`.dll`) mà ủy thác toàn bộ cho tiến trình Python thông qua giao thức truyền tin WebSocket siêu nhẹ (`ws://127.0.0.1:8765`), loại bỏ mọi xung đột cấp phát bộ nhớ tầng thấp.
+3. **Phân tách trách nhiệm cửa sổ (Window Management Decoupling)**: Tầng cửa sổ Win32, phân lớp công cụ `ZBID_SYSTEM_TOOLS`, cờ không cướp tiêu điểm `WS_EX_NOACTIVATE`, phím nóng toàn cục (`Ctrl+Shift+Q`) và tay cầm Gamepad (`BACK+RB`) do Python quản lý 100%, bảo đảm không xung đột với bất kỳ trò chơi DirectX/Vulkan nào.
+4. **Hỗ trợ gỡ lỗi kép (Dual Debugging Channels)**:
+   - Khi chọn menu `[3]` trong [scripts/run.bat](file:///d:/dev-projects/windows-handheld-tool/scripts/run.bat): Lập trình viên sử dụng bộ công cụ **Flutter DevTools (Widget Inspector)** để soi từng Widget và căn chỉnh giao diện độc lập với mock data.
+   - Khi chọn menu `[2]` trong [scripts/run.bat](file:///d:/dev-projects/windows-handheld-tool/scripts/run.bat): Hỗ trợ **Hot Reload (phím r)** trực tiếp ngay bên trong Gaming Overlay khi đang chạy game thật.
+
+### 6.1. Triệt Tiêu Lỗi Màn Hình Trắng: Cơ Chế Máy Chủ Tĩnh Nhúng (Embedded Static HTTP Server)
+- **Trước đây làm bằng cách nào?**: `QWebEngineView` nạp tệp giao diện qua đường dẫn hệ thống tệp `file:///build/web/index.html` thông qua `QUrl.fromLocalFile`.
+- **Bị nghẽn / thảm họa kỹ thuật gì?**:
+  - Flutter Web không phải HTML tĩnh đơn thuần mà khởi động bằng WebAssembly và JavaScript bất đồng bộ. Khi chạy từ giao thức `file://`, nhân Chromium tự động gán nhãn nguồn gốc xuất xứ (`origin`) là `null`.
+  - Mọi lời gọi nạp tệp nhị phân (`flutter_bootstrap.js`, `main.dart.js`, `canvaskit.wasm`, phông chữ) bị cơ chế kiểm soát tài nguyên nguồn gốc chéo (CORS) của Chromium ngắt chặn ngay lập tức.
+  - Đồng thời thẻ `<base href="/">` trỏ về gốc ổ đĩa `file:///` thay vì thư mục con `build/web/`. Động cơ kết xuất của Flutter không nạp được vào RAM, dẫn đến việc khung nhìn chỉ hiển thị nền trắng rỗng mặc định.
+- **Công nghệ giải quyết triệt để**:
+  - Nhúng mô-đun máy chủ HTTP tĩnh siêu nhẹ [src/ui/static_server.py](file:///d:/dev-projects/windows-handheld-tool/src/ui/static_server.py) (`ThreadingHTTPServer`) chạy trên một luồng nền nội bộ của tiến trình Python, chỉ lắng nghe trên giao diện mạng lặp `127.0.0.1:8766`.
+  - `QWebEngineView` nạp giao diện qua URL `http://127.0.0.1:8766`. Giao thức HTTP chuẩn xóa bỏ hoàn toàn rào cản CORS, cho phép nạp 100% tài nguyên Wasm, Canvas và Dart vào bộ nhớ trong tích tắc, đồng thời đặt màu nền mặc định `0b0d14` cho trang để chống nháy sáng.
 
 ---
 
-## 6. Bản Chất Vật Lý Của Môi Trường Thực Thi Tiến Trình Chủ (Host Runtime Architecture)
-
-### Xuất phát từ bế tắc thực tế giữa tầng giao diện đồ họa và dịch vụ hệ thống (The "Why")
-
-- **Trước đây làm bằng cách nào?**:
-  - Sử dụng khung giao diện đồ họa đa nền tảng ([[Khung Giao Diện Đồ Họa Đa Nền Tảng (Cross-Platform UI Framework)]] - điển hình là Flutter Engine) nhúng trong tiến trình thực thi C++ Win32 Runner để quản lý cả giao diện bảng điều khiển lẫn các dịch vụ can thiệp phần cứng.
-- **Bị nghẽn kỹ thuật gì?**:
-  1. **Xung đột quyền kiểm soát cửa sổ và tiêu điểm (Window Focus Conflict)**: Động cơ đồ họa Flutter Engine đòi hỏi độc quyền chuỗi hoán đổi điểm ảnh (Swapchain) và liên tục tranh chấp tiêu điểm cửa sổ (`WM_ACTIVATE`). Khi người dùng chạm hoặc click vào bảng điều khiển, Flutter cưỡng bức kích hoạt cửa sổ, khiến trò chơi tiền cảnh bị mất tiêu điểm (Focus Loss), gây thu nhỏ cửa sổ game hoặc tụt tốc độ khung hình.
-  2. **Vô hiệu hóa cờ mở rộng hệ thống (`WS_EX_NOACTIVATE`)**: Thuộc tính cho phép chuột/cảm ứng tương tác với cửa sổ mà không cướp tiêu điểm của ứng dụng nền bị xung đột trực tiếp với cơ chế nhận sự kiện bàn phím/chuột của Flutter Engine.
-  3. **Lớp trừu tượng cồng kềnh (Abstraction Overhead)**: Việc giao tiếp giữa luồng thực thi giao diện (Dart Isolate) và luồng xử lý thông điệp Windows (Win32 Message Loop) phải thông qua kênh nhị phân tuần tự (Platform Channels / Dart FFI), gây tắc nghẽn thông điệp hệ thống khay (System Tray `WM_USER + 1`) và lỗi bộ lọc hit-test chuột (`WM_NCHITTEST`).
-- **Môi trường thực thi trực tiếp giải quyết triệt để ra sao?**:
-  - Chuyển đổi sang [[Môi Trường Tương Tác Hệ Thống Python (Python System Runtime)]] kết hợp giao diện tăng tốc phần cứng (PySide6 / QML) và API Win32 nguyên thủy.
-  - Loại bỏ hoàn toàn tầng bao bọc động cơ đồ họa trung gian; cho phép tiến trình can thiệp trực tiếp vào từng bit thuộc tính của tay cầm cửa sổ (`HWND`), thiết lập đồng thời cờ `WS_EX_NOACTIVATE` (`0x08000000`) và `WS_EX_TOOLWINDOW` (`0x00000080`).
-  - Giao tiếp trực tiếp với cổng phần cứng vật lý và trình điều khiển nhân (`libryzenadj.dll`, `WinRing0x64.sys`) qua giao diện gọi hàm ngoại vi nhị phân (`ctypes`) với 0% độ trễ phụ trội.
-
-### Sơ đồ đối chiếu kiến trúc thực thi
+## 7. Cơ Chế Nạp Thư Viện Nhị Phân Và Quản Lý Driver Nhân (Binary & Kernel Driver Loading Mechanism)
 
 ```mermaid
 flowchart TD
-    subgraph Engine_Model["Mô Hình Động Cơ Đa Nền Tảng (Flutter Engine)"]
-        UI_Dart["Mã Giao Diện (Dart Isolate)"]
-        Channel["Kênh Cầu Nối (Platform Channel / FFI)"]
-        Engine_Core["Hộp Đen Động Cơ (Flutter Engine - Đòi Tiêu Điểm WM_ACTIVATE)"]
-        Win32_HWND1["Tay Cầm Cửa Sổ (HWND Bị Khóa Swapchain)"]
-        UI_Dart --> Channel --> Engine_Core --> Win32_HWND1
+    subgraph Storage["Thư Mục Dự Án"]
+        Bin_Dir["Thư Mục Nhị Phân Tập Trung (bin/)"]
+        subgraph Bin_Files["Tệp Nhị Phân"]
+            WinRing0_DLL["WinRing0x64.dll"]
+            WinRing0_SYS["WinRing0x64.sys (Driver Ring 0)"]
+            RyzenAdj_DLL["libryzenadj.dll"]
+            InpOut_DLL["inpoutx64.dll"]
+        end
+        Bin_Dir --> Bin_Files
     end
 
-    subgraph Direct_Model["Mô Hình Thực Thi Trực Tiếp (Python Native + QML/Win32)"]
-        UI_QML["Bề Mặt Giao Diện Tăng Tốc Phần Cứng (QML / PySide6)"]
-        Direct_Call["Gọi Trực Tiếp Không Gian Tầng Thấp (ctypes / Win32 API)"]
-        Win32_HWND2["Tay Cầm Cửa Sổ Hệ Thống (HWND với cờ WS_EX_NOACTIVATE)"]
-        Direct_Hardware["Trình Điều Khiển Phần Cứng (WinRing0 / RyzenAdj / WMI)"]
-        UI_QML --> Win32_HWND2
-        Direct_Call --> Win32_HWND2
-        Direct_Call --> Direct_Hardware
+    subgraph Memory_Process["Tiến Trình Hệ Thống (Python Memory Space)"]
+        Os_AddDll["Đăng Ký Bảng Tìm Kiếm Nhị Phân (os.add_dll_directory)"]
+        Ctypes_Load["Tải Thư Viện Động (ctypes.cdll.LoadLibrary)"]
+        Win32_SCM["Bộ Điều Phối Dịch Vụ Hệ Thống (Service Control Manager)"]
+        Kernel_Space["Không Gian Nhân Windows (Ring 0 Kernel Driver)"]
+
+        Os_AddDll --> Ctypes_Load
+        Ctypes_Load --> WinRing0_DLL
+        WinRing0_DLL --> Win32_SCM
+        Win32_SCM -->|Nạp Đường Dẫn Tuyệt Đối| WinRing0_SYS
+        WinRing0_SYS --> Kernel_Space
     end
 ```
 
-### Đánh giá khả thi 3 trụ cột kỹ thuật khi chuyển dịch sang Python
-
-1. **Bảo toàn bề mặt giao diện Tab Bar và khả năng tùy biến hình học (UI Geometry & Pixel Scaling)**:
-   - **Cơ chế vật lý**: Khung giao diện Qt Quick (QML) trong PySide6 sử dụng kiến trúc biểu đồ cảnh tăng tốc phần cứng (Hardware-Accelerated Scene Graph) biên dịch trực tiếp sang tập lệnh Direct3D 11 trên Windows.
-   - **Tái hiện Tab Bar**: Sử dụng các thành phần gốc `TabBar`, `TabButton` và `StackLayout` để phân tách 4 không gian điều khiển (`Home`, `Performance`, `Device`, `Settings`), hỗ trợ hiệu ứng trong suốt (Acrylic / Mica) và bo góc mượt mà.
-   - **Tùy biến Scale & Width**:
-     - Chiều rộng thanh bên: Điều chỉnh kích thước vật lý của cửa sổ bằng hàm thay đổi kích thước bề mặt đồ họa `QQuickWindow.setWidth` kết hợp cập nhật vị trí neo mép phải màn hình qua hàm `SetWindowPos` của `user32.dll`.
-     - Tỉ lệ điểm ảnh: Kiểm soát ma trận phóng to toàn cục thông qua thuộc tính tỉ lệ `scale` của nút gốc (Root Item) hoặc biến môi trường `QT_SCALE_FACTOR`.
-
-2. **Duy trì và tối ưu hóa toàn bộ hệ thống dịch vụ phần cứng (Hardware & System Services)**:
-   - **Điều khiển công suất APU (TDP)**: Nạp thư viện `libryzenadj.dll` và trình điều khiển nhân `WinRing0x64.sys` bằng `ctypes.cdll.LoadLibrary`, ánh xạ con trỏ cấu hình SMU và gọi hàm `set_stapm_limit` / `set_fast_limit` trực tiếp không qua FFI trung gian.
-   - **Đường cong quạt tản nhiệt (Fan Curves)**: Giao tiếp trực tiếp với vi điều khiển nhúng (Embedded Controller) thông qua cổng I/O vật lý (`0x62` / `0x66`) bằng thư viện `InpOutx64.dll` qua `ctypes`, hoặc truy vấn giao diện WMI OEM bằng mô-đun `wmi`.
-   - **Bật/Tắt màn hình cảm ứng**: Thao tác mã định danh thiết bị vật lý qua hàm quản lý cấu hình nhân `CM_Disable_DevNode` / `CM_Enable_DevNode` thuộc `cfgmgr32.dll`.
-   - **Âm lượng và độ sáng màn hình**:
-     - Âm lượng: Giao tiếp giao diện COM của Windows Core Audio API (`IAudioEndpointVolume`) bằng thư viện `pycaw`.
-     - Độ sáng: Truy xuất phương thức `WmiSetBrightness` trong không gian tên `root/wmi` hoặc gọi hàm `SetMonitorBrightness` từ `dxva2.dll`.
-   - **Khởi động cùng Windows**: Ghi trực tiếp giá trị chuỗi đường dẫn tệp thực thi vào nhánh khóa thanh ghi `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` bằng mô-đun chuẩn `winreg`.
-   - **Lớp phủ thông số hiệu năng RTSS OSD**: Ánh xạ tệp bộ nhớ chia sẻ vào không gian địa chỉ ảo của tiến trình bằng mô-đun chuẩn `mmap` đối với tay cầm ánh xạ `RTSSSharedMemoryV2`, đọc/ghi trực tiếp cấu trúc nhị phân `RTSS_SHARED_MEMORY`.
-
-3. **Cơ chế lớp phủ trên các chế độ hiển thị trò chơi (Overlay Pipeline on Game Displays)**:
-   - **Chế độ Không viền và Tối ưu hóa Toàn màn hình (Borderless / Fullscreen Optimizations - iFlip)**:
-     - Khả thi 100% và triệt tiêu lỗi mất tiêu điểm.
-     - Lấy tay cầm cửa sổ Win32 từ đối tượng giao diện bằng thuộc tính `winId()`.
-     - Gán cửa sổ vào phân lớp công cụ hệ thống bằng hàm nội bộ: `SetWindowBand(hwnd, NULL, ZBID_SYSTEM_TOOLS)`.
-     - Bổ sung cờ `WS_EX_NOACTIVATE` vào kiểu dáng mở rộng của `HWND`, đảm bảo DWM vẽ đè bảng điều khiển lên điểm ảnh của trò chơi mà không làm trò chơi mất trạng thái tiền cảnh.
-   - **Chế độ Toàn màn hình Độc quyền Cổ điển (Legacy Exclusive Fullscreen - DWM Bypass)**:
-     - Bản chất vật lý: Khi trò chơi chiếm dụng độc quyền bộ điều khiển xuất hình vật lý của card đồ họa (Hardware Scanout Bypass DWM), mọi cửa sổ Win32 độc lập ở cấp hệ điều hành đều không thể hiển thị đè lên nếu không can thiệp vào chuỗi lệnh vẽ nội bộ của trò chơi ([[Móc Đồ Họa DXGI (DXGI Hook)]]).
-     - Phương án xử lý tối ưu: Windows 10/11 mặc định kích hoạt cơ chế Tối ưu hóa Toàn màn hình (FSO) chuyển đổi chuỗi xuất hình sang cơ chế Độc quyền Độc lập (Independent Flip), giúp bảo toàn 100% hiệu năng đồ họa mà DWM vẫn duy trì khả năng ghép nối lớp phủ `ZBID_SYSTEM_TOOLS`. Đối với các trò chơi cá biệt tắt FSO, hệ thống chỉ cần kích hoạt cờ tương thích FSO thông qua thanh ghi hệ thống mà không cần sử dụng kỹ thuật tiêm mã DLL.
+### Bản chất kỹ thuật từ gốc rễ (First Principles):
+1. **Lịch sử và nguyên nhân trùng lặp trước đây**:
+   - *Cách làm cũ*: Khi nạp driver Ring 0 (`WinRing0x64.sys`) và giao tiếp EC cổng I/O (`inpoutx64.dll`), các đoạn mã mẫu cũ sao chép thủ công các tệp `.sys` và `.dll` từ `bin/` ra thư mục gốc (`root`) hoặc thư mục chứa trình thông dịch Python (`sys.executable`) vì mặc định hàm nạp của Windows (`LoadLibraryExW`) ưu tiên tìm kiếm trong thư mục làm việc hiện thời (`Current Working Directory`).
+   - *Thảm họa kỹ thuật*: Làm phân mảnh và ô nhiễm thư mục gốc của dự án, gây lỗi phiên bản không đồng nhất khi một bên được cập nhật còn một bên giữ phiên bản cũ, và vi phạm nguyên tắc gom cụm tài nguyên nhị phân.
+2. **Cơ chế nạp tập trung giải quyết triệt để**:
+   - *Đăng ký thư mục nhị phân vào không gian tiến trình*: Sử dụng hàm API của hệ điều hành Windows `SetDllDirectoryW` (được bọc qua `os.add_dll_directory(bin_dir)` trong Python 3.8+). Hệ điều hành sẽ ưu tiên tìm kiếm mọi liên kết phụ thuộc (`dependency link`) của DLL trực tiếp trong `bin/`.
+   - *Giải quyết đường dẫn Ring 0 Driver*: Khi `libryzenadj.dll` gọi hàm khởi tạo `InitializeOls()`, thư viện `WinRing0x64.dll` đã nằm trong `bin/` sẽ xác định vị trí của chính nó qua `GetModuleFileNameW`, từ đó tìm thấy `WinRing0x64.sys` nằm ngay bên cạnh mà không cần bất kỳ bước sao chép trung gian nào ra ngoài thư mục gốc. Thư mục gốc dự án được giữ sạch sẽ 100%.

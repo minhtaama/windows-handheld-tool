@@ -15,7 +15,9 @@ echo   Windows Handheld Tool - Automated Deploy Test (Python)
 echo ========================================================
 echo.
 
-cd /d "%~dp0"
+set "SCRIPT_DIR=%~dp0"
+set "PROJECT_ROOT=%~dp0..\.."
+cd /d "%PROJECT_ROOT%"
 
 :: 2. Check and ensure Code Signing Certificate exists
 echo [*] Step 1/6: Checking Code Signing Certificate...
@@ -24,7 +26,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "if (-not $cert) { exit 1 } else { exit 0 }"
 if %errorlevel% neq 0 (
     echo [!] Certificate HandheldToolsSigner not found. Running setup_certificate.bat...
-    call setup_certificate.bat
+    call "%SCRIPT_DIR%setup_certificate.bat"
 ) else (
     echo [OK] Certificate HandheldToolsSigner is ready.
 )
@@ -40,27 +42,23 @@ echo.
 
 :: 4. Build Standalone Executable via PyInstaller with UIAccess Manifest
 echo [*] Step 3/6: Packaging Frontend and Python Application...
-echo [*] Compiling React Frontend (Vite)...
-cd frontend
-call npm run build
+echo [*] Compiling Flutter Web Frontend...
+call flutter build web --release
 if %errorlevel% neq 0 (
-    echo [ERROR] Frontend build failed!
-    cd ..
+    echo [ERROR] Flutter Web build failed!
     pause
     exit /b %errorlevel%
 )
-cd ..
 
-set "DIST_DIR=%~dp0dist\windows_handheld_tool"
-if exist "dist\windows_handheld_tool" rmdir /S /Q "dist\windows_handheld_tool"
+set "DIST_DIR=%PROJECT_ROOT%\dist\windows_handheld_tool"
+if exist "%DIST_DIR%" rmdir /S /Q "%DIST_DIR%"
 
 pyinstaller --noconfirm --onedir --windowed --name "windows_handheld_tool" ^
     --manifest "app.manifest" ^
     --add-data "config.json;." ^
     --add-data "bin;bin" ^
-    --add-data "frontend/dist;frontend/dist" ^
+    --add-data "build\web;build\web" ^
     "main.py"
-
 
 if %errorlevel% neq 0 (
     echo [ERROR] PyInstaller packaging failed!
@@ -80,7 +78,7 @@ for %%F in (
     "inpoutx64.dll"
 ) do (
     if exist "bin\%%~F" (
-        copy /Y "bin\%%~F" "%DIST_DIR%\" >nul
+        copy /Y "bin\%%~F" "%DIST_DIR%\bin\" >nul
     )
 )
 if exist "config.json" copy /Y "config.json" "%DIST_DIR%\config.json" >nul
@@ -131,7 +129,7 @@ if %errorlevel% geq 8 (
     exit /b %errorlevel%
 )
 
-if exist "uninstall_test.bat" copy /Y "uninstall_test.bat" "%TARGET_DIR%\" >nul
+if exist "%SCRIPT_DIR%uninstall_test.bat" copy /Y "%SCRIPT_DIR%uninstall_test.bat" "%TARGET_DIR%\" >nul
 
 echo.
 echo ========================================================

@@ -1,11 +1,11 @@
 {
     "overlay": {
-        "width": 520,
-        "width_percent": 45,
+        "width": 380,
+        "width_percent": 30,
         "animation_duration_ms": 400,
         "side": "right",
         "scale_percent": 100,
-        "scale": 1.2
+        "scale": 1.0
     },
     "hotkey": {
         "toggle_overlay": "Ctrl+Shift+Q",
@@ -25,7 +25,7 @@
             "min": 5,
             "max": 35,
             "step": 1,
-            "current": 13,
+            "current": 15,
             "auto": true,
             "stapm": 15,
             "fast": 18,
@@ -48,7 +48,7 @@
             "min": 0,
             "max": 100,
             "step": 2,
-            "current": 54
+            "current": 50
         },
         "rtss": {
             "fps_limit": 60,

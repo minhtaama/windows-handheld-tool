@@ -55,6 +55,9 @@ def main():
     logger.info("Khởi động Windows Handheld Tool (Python Host Runtime)...")
     config = ConfigManager()
 
+    # Thiết lập cờ Chromium hỗ trợ trong suốt và tăng tốc đồ họa
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-transparent-visuals"
+
     # 1. Khởi tạo Qt Application
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -67,16 +70,17 @@ def main():
         Qt.WindowType.WindowStaysOnTopHint |
         Qt.WindowType.Tool
     )
-    panel.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+    panel.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+    panel.setStyleSheet("background: transparent;")
 
-    initial_width = config.get("overlay", "width", default=380)
-    panel.resize(initial_width, 1080)
+    initial_percent = config.get("overlay", "width_percent", default=35)
 
     # 3. Quản lý cửa sổ Win32 và phân lớp hệ thống
     win_mgr = WindowManager(panel)
     controller = AppController(panel, win_mgr)
 
-    # Đưa cửa sổ vào trạng thái ban đầu (Docked bên phải, bắt đầu hiển thị hoặc ẩn tùy config)
+    # Đưa cửa sổ vào trạng thái ban đầu (Docked bên phải theo tỷ lệ width_percent)
+    win_mgr.update_geometry(initial_percent)
     win_mgr.show()
 
     # 4. Khởi tạo Khay hệ thống (System Tray Icon)
@@ -101,10 +105,17 @@ def main():
     ) else None)
     tray.show()
 
-    # 5. Khởi tạo Dịch vụ Phím tắt toàn cục (Hotkey)
+    # 5. Khởi tạo Dịch vụ Phím tắt toàn cục (Hotkey cho Overlay và Bàn phím ảo)
+    from src.services.virtual_keyboard import VirtualKeyboardService
     hotkey_svc = HotkeyService()
-    hotkey_str = config.get("hotkey", "toggle_overlay", default="Ctrl+Shift+Q")
-    hotkey_svc.start(lambda: controller.toggle_requested.emit(), hotkey_str)
+    overlay_hk = config.get("hotkey", "toggle_overlay", default="Ctrl+Shift+Q")
+    keyboard_hk = config.get("hotkey", "toggle_keyboard", default="Ctrl+Alt+K")
+    hotkey_svc.start(
+        on_overlay_toggle=lambda: controller.toggle_requested.emit(),
+        on_keyboard_toggle=lambda: VirtualKeyboardService.toggle_keyboard(),
+        overlay_hk=overlay_hk,
+        keyboard_hk=keyboard_hk,
+    )
 
     # 6. Khởi tạo Dịch vụ Đọc Tay Cầm (Gamepad XInput BACK+RB)
     gamepad_svc = GamepadService()

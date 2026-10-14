@@ -30,7 +30,7 @@ class WindowManager(QObject):
     def __init__(self, widget: QWidget):
         super().__init__()
         self.widget = widget
-        self.hwnd = int(widget.winId())
+        self.hwnd = widget.winId()
         self.is_visible = False
         self.panel_width = 380
         self._init_win32_attributes()
@@ -59,13 +59,21 @@ class WindowManager(QObject):
             logger.warning(f"Lỗi gọi SetWindowBand: {e}")
 
     def update_geometry(self, width: int):
-        self.panel_width = width
         screen = QGuiApplication.primaryScreen()
         if not screen:
             return
         geo = screen.geometry()
         screen_w = geo.width()
         screen_h = geo.height()
+
+        # Nếu giá trị truyền vào là phần trăm (<= 100), tính ra pixel thực tế
+        if width <= 100:
+            actual_width = int(screen_w * (width / 100.0))
+        else:
+            actual_width = width
+
+        # Giới hạn an toàn: tối thiểu 320px và không vượt quá màn hình
+        self.panel_width = max(320, min(screen_w, actual_width))
 
         x = screen_w - self.panel_width
         y = 0

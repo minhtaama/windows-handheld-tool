@@ -27,15 +27,21 @@ class FanService:
     def _load_inpout(self):
         root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         bin_dir = os.path.join(root_dir, "bin")
-        for p in [os.path.join(root_dir, "inpoutx64.dll"), os.path.join(bin_dir, "inpoutx64.dll")]:
-            if os.path.isfile(p):
-                try:
-                    self.inpout = ctypes.windll.LoadLibrary(p)
-                    self.is_hardware_detected = True
-                    logger.info(f"Đã nạp thành công InpOutx64: {p}")
-                    break
-                except Exception as e:
-                    logger.warning(f"Không thể nạp InpOutx64 từ {p}: {e}")
+
+        if os.path.isdir(bin_dir) and hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(bin_dir)
+            except Exception:
+                pass
+
+        p = os.path.join(bin_dir, "inpoutx64.dll")
+        if os.path.isfile(p):
+            try:
+                self.inpout = ctypes.windll.LoadLibrary(p)
+                self.is_hardware_detected = True
+                logger.info(f"Đã nạp thành công InpOutx64 từ bin: {p}")
+            except Exception as e:
+                logger.warning(f"Không thể nạp InpOutx64 từ {p}: {e}")
 
     def set_auto(self, auto: bool) -> bool:
         self.is_auto = auto

@@ -1,13 +1,12 @@
 import '../core/logger.dart';
+import '../services/bridge_service.dart';
 import 'hardware_base.dart';
 
-/// Bộ điều khiển quạt tản nhiệt cho máy Handheld (ROG Ally, Legion Go, GPD Win 4).
+/// Bộ điều khiển quạt tản nhiệt cho máy Handheld thông qua BridgeService.
 class FanController extends HardwareController {
   static const _logger = AppLogger('FanControl');
 
   int _currentSpeed;
-  bool _isAutoMode = true;
-  final bool _isHardwareDetected = false;
 
   FanController({
     super.minVal = 0,
@@ -18,15 +17,20 @@ class FanController extends HardwareController {
         super(
           name: "Tốc độ quạt",
           unit: "%",
-        );
+        ) {
+    _currentSpeed = BridgeService.instance.fanSpeed.value;
+    BridgeService.instance.fanSpeed.addListener(() {
+      _currentSpeed = BridgeService.instance.fanSpeed.value;
+    });
+  }
 
   @override
-  bool isAvailable() => _isHardwareDetected;
+  bool isAvailable() => true;
 
-  bool isAuto() => _isAutoMode;
+  bool isAuto() => BridgeService.instance.isFanAuto.value;
 
   bool setAuto(bool auto) {
-    _isAutoMode = auto;
+    BridgeService.instance.setFan(_currentSpeed, auto);
     _logger.info('Đã chuyển chế độ quạt: ${auto ? 'Tự động (Auto)' : 'Thủ công (Manual)'}');
     return true;
   }
@@ -38,14 +42,8 @@ class FanController extends HardwareController {
   bool setValue(int value) {
     final target = clamp(value);
     _currentSpeed = target;
-    _isAutoMode = false;
-
-    if (_isHardwareDetected) {
-      _logger.info('Đã gửi lệnh điều khiển quạt phần cứng: $target%');
-      return true;
-    }
-
-    _logger.info('Đã thiết lập tốc độ quạt (Mô phỏng): $target%');
+    BridgeService.instance.setFan(target, false);
+    _logger.info('Đã thiết lập tốc độ quạt: $target%');
     return true;
   }
 }
