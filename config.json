@@ -1,6 +1,6 @@
 {
     "overlay": {
-        "width": 360,
+        "width": 520,
         "width_percent": 45,
         "animation_duration_ms": 400,
         "side": "right",
@@ -20,17 +20,16 @@
     "system": {
         "autostart": false
     },
-    "dxgi_hook": {
-        "enabled": true,
-        "auto_borderless": true
-    },
     "hardware": {
         "tdp": {
             "min": 5,
             "max": 35,
             "step": 1,
             "current": 13,
-            "auto": true
+            "auto": true,
+            "stapm": 15,
+            "fast": 18,
+            "slow": 15
         },
         "fan": {
             "min": 0,
@@ -43,16 +42,13 @@
             "min": 0,
             "max": 100,
             "step": 5,
-            "current": 75
+            "current": 47
         },
         "volume": {
             "min": 0,
             "max": 100,
             "step": 2,
-            "current": 50
-        },
-        "audio": {
-            "current": 60
+            "current": 54
         },
         "rtss": {
             "fps_limit": 60,
@@ -67,6 +63,13 @@
             "osd_show_fan": false,
             "osd_layout": "compact",
             "osd_position": "topLeft"
+        },
+        "audio": {
+            "current": 60
         }
+    },
+    "dxgi_hook": {
+        "enabled": true,
+        "auto_borderless": true
     }
 }

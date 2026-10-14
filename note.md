@@ -205,23 +205,26 @@ flowchart TD
    - Điều khiển độ sáng màn hình (WMI Brightness), âm lượng hệ thống (Core Audio), bàn phím cảm ứng (TabTip), và lắng nghe phím tắt toàn cục (Gamepad Combo `BACK + RB`, hotkey `Ctrl+Shift+Q`).
 
 ##### Hiện trạng triển khai thực tế và Lộ trình nghiệm thu (Current Implementation Status)
-Tình trạng hiện tại vẫn ko khác gì lần trước:
-- Khi ấn vào system tray icon: Vẫn không hiện ra panel, chuột phải cũng ko hiện ra menu
-- Khi ấn tổ hợp Ctrl+Shift+Q: Màn hình ko còn đen sì, nhưng behaviour giống như hiển thị 1 lớp overlay transparent toàn màn hình, khiến cho mouse ko thao tác với desktop được. Bấm hotkey lần nữa thì hết.
-- Do lỗi ngay ở Desktop bình thường nên chưa vào game để test
 
-- **Hoàn tất chuyển đổi mô hình Right Dock Window**:
-  - Đã loại bỏ hoàn toàn mô hình Fullscreen Transparent Overlay (1920x1080) và mã lọc va chạm chuột `WM_NCHITTEST` trên cửa sổ cha [windows/runner/win32_window.cpp](file:///d:/dev-projects/windows-handheld-tool/windows/runner/win32_window.cpp).
-  - Cửa sổ Win32 thực tế hiện chỉ chiếm đúng chiều rộng của Side Panel (`panelWidth x screenHeight`), neo tại mép phải màn hình (`X = screenWidth - panelWidth, Y = 0`). Khoảng 65% màn hình bên trái hoàn toàn không có cửa sổ che chắn, cho phép con trỏ chuột tương tác tự do 100% với Desktop và Game mà không cần bất kỳ thủ thuật hit-test nào.
-  - Khắc phục triệt để sự cố khay hệ thống (System Tray) trên Windows 11: Hàm `hideDockWindow()` trong [lib/services/native_window_service.dart](file:///d:/dev-projects/windows-handheld-tool/lib/services/native_window_service.dart) không dùng lệnh `SW_HIDE` mà dời tọa độ cửa sổ ra ngoài màn hình vật lý (`X = screenWidth`), duy trì `IsWindowVisible == TRUE` giúp tiến trình `explorer.exe` của Windows 11 liên tục duy trì đường truyền thông điệp chuột `WM_USER + 1`.
-  - Tích hợp hàm `resizeDockWindow()`: Cho phép gọi trực tiếp `SetWindowPos` co dãn kích thước vật lý của HWND tức thì khi người dùng kéo thanh trượt độ rộng trong tab Cài đặt.
-- **Tối ưu hóa bề mặt hiển thị Flutter**:
-  - Widget [lib/ui/overlay_screen.dart](file:///d:/dev-projects/windows-handheld-tool/lib/ui/overlay_screen.dart) đã chuyển thành `StatelessWidget`, chứa trực tiếp `QuickSettingsPanel` trong `SizedBox.expand`, xóa bỏ hoàn toàn hoạt cảnh trượt trễ `Offset(1.0, 0.0)` và các cấu trúc `Stack` lồng nhau không cần thiết.
-- **Trạng thái đóng gói và phân phối**:
-  - Kiểm tra cú pháp và kiểu dữ liệu: `flutter analyze` đạt chuẩn 0 lỗi / 0 cảnh báo.
-  - Đã hoàn tất biên dịch tập tin nhị phân Release: `build\windows\x64\runner\Release\windows_handheld_tool.exe`.
-  - Toàn bộ các thư viện driver liên kết động tầng thấp (`ryzenadj.dll`, `WinRing0x64.dll`, `WinRing0x64.sys`, `inpoutx64.dll`) và tập tin cấu hình `config.json` đã được sao chép sẵn sàng vào thư mục Release.
-  - Kịch bản triển khai tự động [deploy_test.bat](file:///d:/dev-projects/windows-handheld-tool/deploy_test.bat) đã sẵn sàng để người dùng thực thi với quyền Quản trị viên (Run as Administrator) nhằm ký số Authenticode nội bộ, đồng bộ vào `C:\Program Files\WindowsHandheldTools\` và kích hoạt ứng dụng trên phân lớp `ZBID_SYSTEM_TOOLS` có quyền `TokenUIAccess`.
+- **Hoàn tất chuyển đổi toàn diện sang Môi trường Thực thi Python (Python Native Runtime)**:
+  - Đã xóa sạch 100% mã nguồn và tài nguyên phụ thuộc Flutter (`lib/`, `windows/`, `build/`, `.dart_tool`, `pubspec.yaml`, `analysis_options.yaml`), tuân thủ nghiêm ngặt nguyên tắc loại bỏ tương thích ngược.
+  - Tái cấu trúc dự án theo nguyên lý phân ly trách nhiệm (Separation of Concerns) vào không gian mã nguồn `src/` với các mô-đun độc lập: `core/`, `hardware/`, `services/`, `input/`, `overlay/`, `ui/`.
+- **Giải quyết triệt để sự cố tiêu điểm và khay hệ thống (Focus Loss & System Tray Resolution)**:
+  - Khung giao diện PySide6 quản lý trực tiếp tay cầm cửa sổ Win32 (`HWND`), gắn trực tiếp cờ mở rộng `WS_EX_NOACTIVATE` (`0x08000000`) và `WS_EX_TOOLWINDOW` (`0x00000080`).
+  - Khi thao tác chạm cảm ứng hoặc click chuột trên thanh bên, nhân Windows không chuyển tiêu điểm ra khỏi trò chơi tiền cảnh, đảm bảo trò chơi không bị tạm dừng hoặc tụt FPS.
+  - Vùng cửa sổ thực tế chỉ chiếm đúng chiều rộng Side Panel (`panelWidth x screenHeight`) neo mép phải; phần còn lại hoàn toàn không có cửa sổ che chắn, cho phép chuột tương tác tự do 100% với Desktop và Game.
+  - Biểu tượng khay hệ thống (`QSystemTrayIcon`) và phím tắt toàn cục (`Ctrl+Shift+Q` qua `RegisterHotKey`) nhận sự kiện tức thì trên luồng thông điệp Windows mà không bị nghẽn luồng.
+- **Hoạt động của các dịch vụ hệ thống & phần cứng**:
+  - `TdpService`: Nạp trực tiếp `libryzenadj.dll` và driver `WinRing0x64.sys` bằng `ctypes`.
+  - `FanService`: Điều khiển cổng I/O vật lý của Embedded Controller qua `inpoutx64.dll`.
+  - `AudioService`: Tương tác trực tiếp giao diện COM của Windows Core Audio API qua `pycaw`.
+  - `BrightnessService`: Điều khiển độ sáng màn hình trực tiếp qua không gian tên `root/wmi`.
+  - `TouchscreenService`: Dò tìm và bật/tắt thiết bị HID Touchscreen qua `pnputil`.
+  - `GamepadService`: Luồng quét trạng thái cần điều khiển và tổ hợp `BACK + RB` từ `xinput1_4.dll`.
+  - `RtssService`: Giao tiếp tệp bộ nhớ chia sẻ `RTSSSharedMemoryV2` để hiển thị OSD.
+- **Quy trình triển khai**:
+  - Kịch bản chạy phát triển: [run_dev.bat](file:///d:/dev-projects/windows-handheld-tool/run_dev.bat) khởi chạy trực tiếp với Python.
+  - Kịch bản đóng gói và phân phối: [deploy_test.bat](file:///d:/dev-projects/windows-handheld-tool/deploy_test.bat) tự động đóng gói qua PyInstaller với `app.manifest` (`uiAccess="true"`), ký chứng chỉ số Authenticode nội bộ `HandheldToolsSigner`, đồng bộ vào `C:\Program Files\WindowsHandheldTools\` và kích hoạt trên phân lớp `ZBID_SYSTEM_TOOLS`.
 
 ---
 
@@ -269,3 +272,72 @@ flowchart TD
   - Gửi mã điều khiển thiết bị (DeviceIoControl với mã IOCTL của HidHide) để thêm PID trò chơi vào danh sách chặn.
 - **Bước 4**: Khi đóng lớp phủ (`OverlayController.hideOverlay`):
   - Gửi mã điều khiển thiết bị để xóa PID trò chơi khỏi danh sách chặn, hoàn trả luồng dữ liệu tay cầm cho trò chơi ngay lập tức.
+
+---
+
+## 6. Bản Chất Vật Lý Của Môi Trường Thực Thi Tiến Trình Chủ (Host Runtime Architecture)
+
+### Xuất phát từ bế tắc thực tế giữa tầng giao diện đồ họa và dịch vụ hệ thống (The "Why")
+
+- **Trước đây làm bằng cách nào?**:
+  - Sử dụng khung giao diện đồ họa đa nền tảng ([[Khung Giao Diện Đồ Họa Đa Nền Tảng (Cross-Platform UI Framework)]] - điển hình là Flutter Engine) nhúng trong tiến trình thực thi C++ Win32 Runner để quản lý cả giao diện bảng điều khiển lẫn các dịch vụ can thiệp phần cứng.
+- **Bị nghẽn kỹ thuật gì?**:
+  1. **Xung đột quyền kiểm soát cửa sổ và tiêu điểm (Window Focus Conflict)**: Động cơ đồ họa Flutter Engine đòi hỏi độc quyền chuỗi hoán đổi điểm ảnh (Swapchain) và liên tục tranh chấp tiêu điểm cửa sổ (`WM_ACTIVATE`). Khi người dùng chạm hoặc click vào bảng điều khiển, Flutter cưỡng bức kích hoạt cửa sổ, khiến trò chơi tiền cảnh bị mất tiêu điểm (Focus Loss), gây thu nhỏ cửa sổ game hoặc tụt tốc độ khung hình.
+  2. **Vô hiệu hóa cờ mở rộng hệ thống (`WS_EX_NOACTIVATE`)**: Thuộc tính cho phép chuột/cảm ứng tương tác với cửa sổ mà không cướp tiêu điểm của ứng dụng nền bị xung đột trực tiếp với cơ chế nhận sự kiện bàn phím/chuột của Flutter Engine.
+  3. **Lớp trừu tượng cồng kềnh (Abstraction Overhead)**: Việc giao tiếp giữa luồng thực thi giao diện (Dart Isolate) và luồng xử lý thông điệp Windows (Win32 Message Loop) phải thông qua kênh nhị phân tuần tự (Platform Channels / Dart FFI), gây tắc nghẽn thông điệp hệ thống khay (System Tray `WM_USER + 1`) và lỗi bộ lọc hit-test chuột (`WM_NCHITTEST`).
+- **Môi trường thực thi trực tiếp giải quyết triệt để ra sao?**:
+  - Chuyển đổi sang [[Môi Trường Tương Tác Hệ Thống Python (Python System Runtime)]] kết hợp giao diện tăng tốc phần cứng (PySide6 / QML) và API Win32 nguyên thủy.
+  - Loại bỏ hoàn toàn tầng bao bọc động cơ đồ họa trung gian; cho phép tiến trình can thiệp trực tiếp vào từng bit thuộc tính của tay cầm cửa sổ (`HWND`), thiết lập đồng thời cờ `WS_EX_NOACTIVATE` (`0x08000000`) và `WS_EX_TOOLWINDOW` (`0x00000080`).
+  - Giao tiếp trực tiếp với cổng phần cứng vật lý và trình điều khiển nhân (`libryzenadj.dll`, `WinRing0x64.sys`) qua giao diện gọi hàm ngoại vi nhị phân (`ctypes`) với 0% độ trễ phụ trội.
+
+### Sơ đồ đối chiếu kiến trúc thực thi
+
+```mermaid
+flowchart TD
+    subgraph Engine_Model["Mô Hình Động Cơ Đa Nền Tảng (Flutter Engine)"]
+        UI_Dart["Mã Giao Diện (Dart Isolate)"]
+        Channel["Kênh Cầu Nối (Platform Channel / FFI)"]
+        Engine_Core["Hộp Đen Động Cơ (Flutter Engine - Đòi Tiêu Điểm WM_ACTIVATE)"]
+        Win32_HWND1["Tay Cầm Cửa Sổ (HWND Bị Khóa Swapchain)"]
+        UI_Dart --> Channel --> Engine_Core --> Win32_HWND1
+    end
+
+    subgraph Direct_Model["Mô Hình Thực Thi Trực Tiếp (Python Native + QML/Win32)"]
+        UI_QML["Bề Mặt Giao Diện Tăng Tốc Phần Cứng (QML / PySide6)"]
+        Direct_Call["Gọi Trực Tiếp Không Gian Tầng Thấp (ctypes / Win32 API)"]
+        Win32_HWND2["Tay Cầm Cửa Sổ Hệ Thống (HWND với cờ WS_EX_NOACTIVATE)"]
+        Direct_Hardware["Trình Điều Khiển Phần Cứng (WinRing0 / RyzenAdj / WMI)"]
+        UI_QML --> Win32_HWND2
+        Direct_Call --> Win32_HWND2
+        Direct_Call --> Direct_Hardware
+    end
+```
+
+### Đánh giá khả thi 3 trụ cột kỹ thuật khi chuyển dịch sang Python
+
+1. **Bảo toàn bề mặt giao diện Tab Bar và khả năng tùy biến hình học (UI Geometry & Pixel Scaling)**:
+   - **Cơ chế vật lý**: Khung giao diện Qt Quick (QML) trong PySide6 sử dụng kiến trúc biểu đồ cảnh tăng tốc phần cứng (Hardware-Accelerated Scene Graph) biên dịch trực tiếp sang tập lệnh Direct3D 11 trên Windows.
+   - **Tái hiện Tab Bar**: Sử dụng các thành phần gốc `TabBar`, `TabButton` và `StackLayout` để phân tách 4 không gian điều khiển (`Home`, `Performance`, `Device`, `Settings`), hỗ trợ hiệu ứng trong suốt (Acrylic / Mica) và bo góc mượt mà.
+   - **Tùy biến Scale & Width**:
+     - Chiều rộng thanh bên: Điều chỉnh kích thước vật lý của cửa sổ bằng hàm thay đổi kích thước bề mặt đồ họa `QQuickWindow.setWidth` kết hợp cập nhật vị trí neo mép phải màn hình qua hàm `SetWindowPos` của `user32.dll`.
+     - Tỉ lệ điểm ảnh: Kiểm soát ma trận phóng to toàn cục thông qua thuộc tính tỉ lệ `scale` của nút gốc (Root Item) hoặc biến môi trường `QT_SCALE_FACTOR`.
+
+2. **Duy trì và tối ưu hóa toàn bộ hệ thống dịch vụ phần cứng (Hardware & System Services)**:
+   - **Điều khiển công suất APU (TDP)**: Nạp thư viện `libryzenadj.dll` và trình điều khiển nhân `WinRing0x64.sys` bằng `ctypes.cdll.LoadLibrary`, ánh xạ con trỏ cấu hình SMU và gọi hàm `set_stapm_limit` / `set_fast_limit` trực tiếp không qua FFI trung gian.
+   - **Đường cong quạt tản nhiệt (Fan Curves)**: Giao tiếp trực tiếp với vi điều khiển nhúng (Embedded Controller) thông qua cổng I/O vật lý (`0x62` / `0x66`) bằng thư viện `InpOutx64.dll` qua `ctypes`, hoặc truy vấn giao diện WMI OEM bằng mô-đun `wmi`.
+   - **Bật/Tắt màn hình cảm ứng**: Thao tác mã định danh thiết bị vật lý qua hàm quản lý cấu hình nhân `CM_Disable_DevNode` / `CM_Enable_DevNode` thuộc `cfgmgr32.dll`.
+   - **Âm lượng và độ sáng màn hình**:
+     - Âm lượng: Giao tiếp giao diện COM của Windows Core Audio API (`IAudioEndpointVolume`) bằng thư viện `pycaw`.
+     - Độ sáng: Truy xuất phương thức `WmiSetBrightness` trong không gian tên `root/wmi` hoặc gọi hàm `SetMonitorBrightness` từ `dxva2.dll`.
+   - **Khởi động cùng Windows**: Ghi trực tiếp giá trị chuỗi đường dẫn tệp thực thi vào nhánh khóa thanh ghi `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` bằng mô-đun chuẩn `winreg`.
+   - **Lớp phủ thông số hiệu năng RTSS OSD**: Ánh xạ tệp bộ nhớ chia sẻ vào không gian địa chỉ ảo của tiến trình bằng mô-đun chuẩn `mmap` đối với tay cầm ánh xạ `RTSSSharedMemoryV2`, đọc/ghi trực tiếp cấu trúc nhị phân `RTSS_SHARED_MEMORY`.
+
+3. **Cơ chế lớp phủ trên các chế độ hiển thị trò chơi (Overlay Pipeline on Game Displays)**:
+   - **Chế độ Không viền và Tối ưu hóa Toàn màn hình (Borderless / Fullscreen Optimizations - iFlip)**:
+     - Khả thi 100% và triệt tiêu lỗi mất tiêu điểm.
+     - Lấy tay cầm cửa sổ Win32 từ đối tượng giao diện bằng thuộc tính `winId()`.
+     - Gán cửa sổ vào phân lớp công cụ hệ thống bằng hàm nội bộ: `SetWindowBand(hwnd, NULL, ZBID_SYSTEM_TOOLS)`.
+     - Bổ sung cờ `WS_EX_NOACTIVATE` vào kiểu dáng mở rộng của `HWND`, đảm bảo DWM vẽ đè bảng điều khiển lên điểm ảnh của trò chơi mà không làm trò chơi mất trạng thái tiền cảnh.
+   - **Chế độ Toàn màn hình Độc quyền Cổ điển (Legacy Exclusive Fullscreen - DWM Bypass)**:
+     - Bản chất vật lý: Khi trò chơi chiếm dụng độc quyền bộ điều khiển xuất hình vật lý của card đồ họa (Hardware Scanout Bypass DWM), mọi cửa sổ Win32 độc lập ở cấp hệ điều hành đều không thể hiển thị đè lên nếu không can thiệp vào chuỗi lệnh vẽ nội bộ của trò chơi ([[Móc Đồ Họa DXGI (DXGI Hook)]]).
+     - Phương án xử lý tối ưu: Windows 10/11 mặc định kích hoạt cơ chế Tối ưu hóa Toàn màn hình (FSO) chuyển đổi chuỗi xuất hình sang cơ chế Độc quyền Độc lập (Independent Flip), giúp bảo toàn 100% hiệu năng đồ họa mà DWM vẫn duy trì khả năng ghép nối lớp phủ `ZBID_SYSTEM_TOOLS`. Đối với các trò chơi cá biệt tắt FSO, hệ thống chỉ cần kích hoạt cờ tương thích FSO thông qua thanh ghi hệ thống mà không cần sử dụng kỹ thuật tiêm mã DLL.

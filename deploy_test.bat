@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-title Windows Handheld Tool - Automated Build, Sign and Deploy Test
+title Windows Handheld Tool - Automated Build, Sign and Deploy Test (Python Runtime)
 
 :: 1. Check Administrator Privileges (UAC Elevation)
 net session >nul 2>&1
@@ -11,7 +11,7 @@ if %errorlevel% neq 0 (
 )
 
 echo ========================================================
-echo   Windows Handheld Tool - Automated Deploy Test
+echo   Windows Handheld Tool - Automated Deploy Test (Python)
 echo ========================================================
 echo.
 
@@ -33,26 +33,45 @@ echo.
 :: 3. Terminate running process and stop driver service to avoid file lock
 echo [*] Step 2/6: Stopping active processes and driver service...
 taskkill /F /IM "windows_handheld_tool.exe" 2>nul
+taskkill /F /IM "python.exe" /FI "WINDOWTITLE eq Windows Handheld Tool*" 2>nul
 net stop "WinRing0_1_2_0" 2>nul
 echo [OK] Environment unlocked.
 echo.
 
-:: 4. Build Flutter Windows Release
-echo [*] Step 3/6: Compiling Flutter Windows Release (preserving Material Icons)...
-call flutter build windows --release --no-tree-shake-icons
+:: 4. Build Standalone Executable via PyInstaller with UIAccess Manifest
+echo [*] Step 3/6: Packaging Frontend and Python Application...
+echo [*] Compiling React Frontend (Vite)...
+cd frontend
+call npm run build
 if %errorlevel% neq 0 (
-    echo [ERROR] Flutter build release failed!
+    echo [ERROR] Frontend build failed!
+    cd ..
     pause
     exit /b %errorlevel%
 )
-echo [OK] Flutter build completed.
+cd ..
+
+set "DIST_DIR=%~dp0dist\windows_handheld_tool"
+if exist "dist\windows_handheld_tool" rmdir /S /Q "dist\windows_handheld_tool"
+
+pyinstaller --noconfirm --onedir --windowed --name "windows_handheld_tool" ^
+    --manifest "app.manifest" ^
+    --add-data "config.json;." ^
+    --add-data "bin;bin" ^
+    --add-data "frontend/dist;frontend/dist" ^
+    "main.py"
+
+
+if %errorlevel% neq 0 (
+    echo [ERROR] PyInstaller packaging failed!
+    pause
+    exit /b %errorlevel%
+)
+echo [OK] PyInstaller build completed.
 echo.
 
 :: 5. Copy clean runtime driver binaries and config.json to Release folder
-echo [*] Step 4/6: Preparing runtime binaries in Release folder...
-set "RELEASE_DIR=%~dp0build\windows\x64\runner\Release"
-if exist "%RELEASE_DIR%\bin" rmdir /S /Q "%RELEASE_DIR%\bin"
-
+echo [*] Step 4/6: Synchronizing driver binaries to dist folder...
 for %%F in (
     "ryzenadj.dll"
     "libryzenadj.dll"
@@ -61,11 +80,11 @@ for %%F in (
     "inpoutx64.dll"
 ) do (
     if exist "bin\%%~F" (
-        copy /Y "bin\%%~F" "%RELEASE_DIR%\" >nul
+        copy /Y "bin\%%~F" "%DIST_DIR%\" >nul
     )
 )
-if exist "config.json" copy /Y "config.json" "%RELEASE_DIR%\config.json" >nul
-echo [OK] Runtime binaries and config.json copied to Release root.
+if exist "config.json" copy /Y "config.json" "%DIST_DIR%\config.json" >nul
+echo [OK] Driver binaries synchronized.
 echo.
 
 :: 6. Locate signtool.exe and sign the release executable
@@ -86,10 +105,10 @@ if not defined SIGNTOOL (
 )
 
 echo [*] Using SignTool: "!SIGNTOOL!"
-"!SIGNTOOL!" sign /sm /s My /n "HandheldToolsSigner" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "%RELEASE_DIR%\windows_handheld_tool.exe"
+"!SIGNTOOL!" sign /sm /s My /n "HandheldToolsSigner" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "%DIST_DIR%\windows_handheld_tool.exe"
 if %errorlevel% neq 0 (
     echo [!] Timestamp server unreachable. Signing without timestamp...
-    "!SIGNTOOL!" sign /sm /s My /n "HandheldToolsSigner" /fd SHA256 "%RELEASE_DIR%\windows_handheld_tool.exe"
+    "!SIGNTOOL!" sign /sm /s My /n "HandheldToolsSigner" /fd SHA256 "%DIST_DIR%\windows_handheld_tool.exe"
     if !errorlevel! neq 0 (
         echo [ERROR] Code signing failed!
         pause
@@ -104,7 +123,7 @@ echo [*] Step 6/6: Deploying to C:\Program Files\WindowsHandheldTools\...
 set "TARGET_DIR=C:\Program Files\WindowsHandheldTools"
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 
-robocopy "%RELEASE_DIR%" "%TARGET_DIR%" /E /PURGE /R:2 /W:1 >nul
+robocopy "%DIST_DIR%" "%TARGET_DIR%" /E /PURGE /R:2 /W:1 >nul
 :: Robocopy exit codes 0-7 indicate success
 if %errorlevel% geq 8 (
     echo [ERROR] Robocopy deployment failed with code %errorlevel%!

@@ -1,0 +1,47 @@
+import psutil
+from typing import Dict, Any
+from src.hardware.tdp_service import TdpService
+from src.core.logger import setup_logger
+
+logger = setup_logger("SystemTelemetry")
+
+class SystemTelemetryService:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(SystemTelemetryService, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self.tdp_service = TdpService()
+        self._initialized = True
+
+    def get_snapshot(self) -> Dict[str, Any]:
+        """Thu thập các chỉ số phần cứng tức thời: CPU, RAM, Pin, Nhiệt độ, TDP"""
+        cpu_usage = psutil.cpu_percent(interval=None)
+        mem = psutil.virtual_memory()
+        ram_usage = mem.percent
+        ram_used_gb = round(mem.used / (1024 ** 3), 1)
+        ram_total_gb = round(mem.total / (1024 ** 3), 1)
+
+        battery = psutil.sensors_battery()
+        battery_percent = int(battery.percent) if battery else 100
+        is_charging = battery.power_plugged if battery else True
+
+        cpu_temp, live_tdp, fast_limit = self.tdp_service.get_telemetry()
+
+        return {
+            "cpu_percent": int(cpu_usage),
+            "cpu_temp": int(round(cpu_temp)) if cpu_temp > 0 else 0,
+            "ram_percent": int(ram_usage),
+            "ram_used_gb": ram_used_gb,
+            "ram_total_gb": ram_total_gb,
+            "battery_percent": battery_percent,
+            "is_charging": is_charging,
+            "live_tdp": int(round(live_tdp)) if live_tdp > 0 else 0,
+            "fast_limit": int(round(fast_limit)) if fast_limit > 0 else 0,
+        }
