@@ -1,8 +1,9 @@
 import os
 import sys
+import ctypes
 import urllib.request
 from PySide6.QtWidgets import QWidget, QVBoxLayout
-from PySide6.QtCore import Qt, Signal, QUrl, QCoreApplication
+from PySide6.QtCore import Qt, Signal, QUrl, QCoreApplication, QEvent
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
 from PySide6.QtWebChannel import QWebChannel
@@ -29,9 +30,46 @@ class QuickPanel(QWidget):
         self._setup_ui()
         self._connect_bridge_signals()
 
+    def bring_to_front(self):
+        """Kích hoạt và đưa cửa sổ lên đỉnh cao nhất của dải Topmost (đè Taskbar và nhận bàn phím)"""
+        from ctypes import wintypes
+        hwnd = wintypes.HWND(self.winId())
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, wintypes.UINT
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+
+        user32.SetWindowPos(
+            hwnd,
+            wintypes.HWND(-1),  # HWND_TOPMOST
+            0, 0, 0, 0,
+            0x0001 | 0x0002 | 0x0040  # SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+        )
+        user32.SetForegroundWindow(hwnd)
+        self.activateWindow()
+
+    def mousePressEvent(self, event):
+        self.bring_to_front()
+        super().mousePressEvent(event)
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.FocusIn):
+            self.bring_to_front()
+        return super().eventFilter(watched, event)
+
+    def _on_page_load_finished(self, ok: bool):
+        proxy = self.view.focusProxy()
+        if proxy:
+            proxy.installEventFilter(self)
+
     def _setup_ui(self):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet("background: transparent;")
+        self.installEventFilter(self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -41,6 +79,8 @@ class QuickPanel(QWidget):
         self.view = QWebEngineView(self)
         self.view.setStyleSheet("background: transparent;")
         self.view.page().setBackgroundColor(QColor(0, 0, 0, 0))
+        self.view.installEventFilter(self)
+        self.view.loadFinished.connect(self._on_page_load_finished)
 
         # Bật các tính năng tăng tốc và dev tools
         settings = self.view.settings()
@@ -72,25 +112,39 @@ class QuickPanel(QWidget):
             return False
 
     def _load_frontend(self):
-        if getattr(sys, "frozen", False):
-            root_dir = os.path.dirname(os.path.abspath(sys.executable))
-        else:
-            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-        build_dir = os.path.join(root_dir, "build", "web")
-        build_index = os.path.join(build_dir, "index.html")
-
+        # 1. Nếu đang chạy Flutter Web Dev Server tại cổng 5173 (phát triển độc lập)
         if self._is_dev_server_running():
             logger.info("Phát hiện Flutter Web Dev Server đang chạy tại http://localhost:5173. Đang nạp chế độ Dev...")
             self.view.load(QUrl("http://localhost:5173"))
-        elif os.path.isfile(build_index):
+            return
+
+        # 2. Quét tìm thư mục build/web chứa index.html từ các vị trí tiềm năng (PyInstaller bundle, _internal, exe_dir hoặc project root)
+        candidates = []
+        if getattr(sys, "frozen", False):
+            mei_dir = getattr(sys, "_MEIPASS", "")
+            if mei_dir:
+                candidates.append(os.path.join(mei_dir, "build", "web"))
+            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+            candidates.append(os.path.join(exe_dir, "build", "web"))
+            candidates.append(os.path.join(exe_dir, "_internal", "build", "web"))
+        else:
+            dev_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            candidates.append(os.path.join(dev_root, "build", "web"))
+
+        found_build_dir = None
+        for path in candidates:
+            if os.path.isfile(os.path.join(path, "index.html")):
+                found_build_dir = path
+                break
+
+        if found_build_dir:
             if not self.static_server:
-                self.static_server = StaticServer(directory=build_dir, port=8766)
+                self.static_server = StaticServer(directory=found_build_dir, port=8766)
                 self.static_server.start()
-            logger.info("Đang nạp giao diện Flutter Web Production từ máy chủ tĩnh: http://127.0.0.1:8766")
+            logger.info(f"Đang nạp giao diện Flutter Web Production từ máy chủ tĩnh: http://127.0.0.1:8766 (Thư mục: {found_build_dir})")
             self.view.load(QUrl("http://127.0.0.1:8766"))
         else:
-            logger.warning(f"Chưa tìm thấy bản build {build_index}. Đang nạp máy chủ dev fallback...")
+            logger.warning("Chưa tìm thấy bản build tĩnh (build/web/index.html). Đang nạp máy chủ dev fallback...")
             self.view.load(QUrl("http://localhost:5173"))
 
     def _toggle_dev_tools(self):

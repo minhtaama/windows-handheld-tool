@@ -57,8 +57,15 @@ class RtssService {
     return true;
   }
 
-  bool updateOsdText(String text) => true;
-  bool clearOsdText() => true;
+  bool updateOsdText(String text) {
+    BridgeService.instance.updateOsdText(text);
+    return true;
+  }
+
+  bool clearOsdText() {
+    BridgeService.instance.clearOsdText();
+    return true;
+  }
 }
 
 /// Các vị trí neo góc màn hình hiển thị Overlay OSD của RTSS.

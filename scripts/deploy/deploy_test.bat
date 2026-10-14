@@ -68,9 +68,11 @@ if %errorlevel% neq 0 (
 echo [OK] PyInstaller build completed.
 echo.
 
-:: 5. Copy clean runtime driver binaries and config.json to Release folder
-echo [*] Step 4/6: Synchronizing driver binaries to dist folder...
+:: 5. Copy clean runtime driver binaries, web assets and config.json to Release folder
+echo [*] Step 4/6: Synchronizing driver binaries and web assets to dist folder...
+if not exist "%DIST_DIR%\bin" mkdir "%DIST_DIR%\bin"
 for %%F in (
+    "ryzenadj.exe"
     "ryzenadj.dll"
     "libryzenadj.dll"
     "WinRing0x64.dll"
@@ -81,8 +83,16 @@ for %%F in (
         copy /Y "bin\%%~F" "%DIST_DIR%\bin\" >nul
     )
 )
+:: Đồng bộ WinRing0 trực tiếp tại thư mục chứa windows_handheld_tool.exe
+if exist "bin\WinRing0x64.sys" copy /Y "bin\WinRing0x64.sys" "%DIST_DIR%\" >nul
+if exist "bin\WinRing0x64.dll" copy /Y "bin\WinRing0x64.dll" "%DIST_DIR%\" >nul
 if exist "config.json" copy /Y "config.json" "%DIST_DIR%\config.json" >nul
-echo [OK] Driver binaries synchronized.
+
+if exist "build\web" (
+    if not exist "%DIST_DIR%\build\web" mkdir "%DIST_DIR%\build\web"
+    robocopy "build\web" "%DIST_DIR%\build\web" /E >nul
+)
+echo [OK] Driver binaries and web assets synchronized.
 echo.
 
 :: 6. Locate signtool.exe and sign the release executable

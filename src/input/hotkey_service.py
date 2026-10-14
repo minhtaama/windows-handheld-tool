@@ -118,7 +118,11 @@ class HotkeyService:
                 if res1:
                     logger.info(f"Đã đăng ký phím tắt Overlay: {self.overlay_hk}")
                 else:
-                    logger.warning(f"Không thể đăng ký phím tắt Overlay '{self.overlay_hk}' (Lỗi: {kernel32.GetLastError()})")
+                    err1 = kernel32.GetLastError()
+                    if err1 == 1409:
+                        logger.warning(f"Phím tắt Overlay '{self.overlay_hk}' đang bị chiếm giữ bởi ứng dụng khác (Mã lỗi 1409: ERROR_HOTKEY_ALREADY_REGISTERED).")
+                    else:
+                        logger.warning(f"Không thể đăng ký phím tắt Overlay '{self.overlay_hk}' (Lỗi: {err1})")
 
         # 2. Đăng ký phím tắt cho Virtual Keyboard (TabTip)
         if self.keyboard_hk:
@@ -128,7 +132,11 @@ class HotkeyService:
                 if res2:
                     logger.info(f"Đã đăng ký phím tắt Bàn phím ảo: {self.keyboard_hk}")
                 else:
-                    logger.warning(f"Không thể đăng ký phím tắt Bàn phím ảo '{self.keyboard_hk}' (Lỗi: {kernel32.GetLastError()})")
+                    err2 = kernel32.GetLastError()
+                    if err2 == 1409:
+                        logger.warning(f"Phím tắt Bàn phím ảo '{self.keyboard_hk}' đang bị chiếm giữ bởi ứng dụng khác (Mã lỗi 1409: ERROR_HOTKEY_ALREADY_REGISTERED).")
+                    else:
+                        logger.warning(f"Không thể đăng ký phím tắt Bàn phím ảo '{self.keyboard_hk}' (Lỗi: {err2})")
 
     def _unregister_all(self, user32):
         user32.UnregisterHotKey(None, HOTKEY_OVERLAY_ID)
@@ -138,6 +146,25 @@ class HotkeyService:
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
         self.thread_id = kernel32.GetCurrentThreadId()
+
+        # Định nghĩa kiểu tham số 64-bit chuẩn cho Win32 HotKey API
+        user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+        user32.RegisterHotKey.restype = wintypes.BOOL
+
+        user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.UnregisterHotKey.restype = wintypes.BOOL
+
+        user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.PostThreadMessageW.restype = wintypes.BOOL
+
+        user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+        user32.GetMessageW.restype = wintypes.BOOL
+
+        user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+        user32.TranslateMessage.restype = wintypes.BOOL
+
+        user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+        user32.DispatchMessageW.restype = wintypes.LPARAM
 
         self._register_all(user32, kernel32)
 
@@ -159,7 +186,7 @@ class HotkeyService:
                 elif msg.wParam == HOTKEY_KEYBOARD_ID:
                     logger.info(f"Phát hiện nhấn phím nóng Bàn phím ảo ({self.keyboard_hk}).")
                     if self.on_keyboard_toggle:
-                        self.on_keyboard_toggle()
+                        threading.Thread(target=self.on_keyboard_toggle, daemon=True).start()
 
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))

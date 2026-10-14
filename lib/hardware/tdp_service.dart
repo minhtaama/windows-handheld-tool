@@ -1,5 +1,6 @@
 import '../core/logger.dart';
 import '../services/bridge_service.dart';
+import '../services/system_telemetry_service.dart';
 import 'hardware_base.dart';
 
 /// Điều khiển TDP cho CPU/APU Handheld (AMD APU) thông qua BridgeService.
@@ -40,10 +41,16 @@ class TdpController extends HardwareController {
   }
 
   /// Đọc TDP đo thực tế tức thời từ cảm biến.
-  double? getLiveTdp() => _currentTdp.toDouble();
+  double? getLiveTdp() {
+    final live = SystemTelemetryService.instance.latest.liveTdp;
+    return live > 0 ? live.toDouble() : _currentTdp.toDouble();
+  }
 
   /// Đọc nhiệt độ CPU tức thời.
-  double? getLiveCpuTemp() => 45.0;
+  double? getLiveCpuTemp() {
+    final temp = SystemTelemetryService.instance.latest.cpuTemp;
+    return temp > 0 ? temp.toDouble() : 45.0;
+  }
 
   bool isHardwareActive() => true;
 }

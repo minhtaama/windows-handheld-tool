@@ -137,10 +137,12 @@ class BridgeService {
 
     final batteryPct = (data['battery_percent'] as num?)?.toInt() ?? 100;
     final isCharging = (data['is_charging'] as bool?) ?? false;
-    final cpuUsage = (data['cpu_usage'] as num?)?.toInt() ?? 0;
+    final cpuUsage = ((data['cpu_usage'] ?? data['cpu_percent']) as num?)?.toInt() ?? 0;
     final ramUsed = ((data['ram_used_gb'] as num?) ?? 0.0).toDouble();
     final ramTotal = ((data['ram_total_gb'] as num?) ?? 16.0).toDouble();
-    final ramPct = ((data['ram_usage_percent'] as num?) ?? 0).toInt();
+    final ramPct = ((data['ram_usage_percent'] ?? data['ram_percent']) as num?)?.toInt() ?? 0;
+    final cpuTemp = (data['cpu_temp'] as num?)?.toInt() ?? 45;
+    final liveTdp = (data['live_tdp'] as num?)?.toInt() ?? tdp.value;
 
     // Đồng bộ lại các trạng thái phần cứng nếu có gửi kèm trong telemetry
     if (data.containsKey('is_touch_enabled')) {
@@ -171,7 +173,8 @@ class BridgeService {
       ramUsedGb: ramUsed,
       ramTotalGb: ramTotal,
       ramUsagePercent: ramPct,
-      cpuTemp: (data['cpu_temp'] as num?)?.toInt() ?? 45,
+      cpuTemp: cpuTemp,
+      liveTdp: liveTdp,
     );
 
     _telemetryController.add(telemData);
@@ -231,6 +234,14 @@ class BridgeService {
     _send({'action': 'setFpsLimit', 'limit': limit});
   }
 
+  void updateOsdText(String text) {
+    _send({'action': 'updateOsdText', 'text': text});
+  }
+
+  void clearOsdText() {
+    _send({'action': 'clearOsdText'});
+  }
+
   void setOsdMetric(String metric, bool enabled) {
     _send({'action': 'setOsdMetric', 'metric': metric, 'enabled': enabled});
   }
@@ -256,6 +267,10 @@ class BridgeService {
       'target': target,
       'hotkey': hotkey,
     });
+  }
+
+  void bringToFront() {
+    _send({'action': 'bringToFront'});
   }
 
   void closeOverlay() {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/app_theme.dart';
 import '../../input/gamepad_service.dart';
 import '../../input/hotkey_service.dart';
+import '../../services/bridge_service.dart';
 import 'help_box.dart';
 
 /// Thẻ cài đặt phím tắt đơn nhất (1 tính năng = 1 hotkey duy nhất: Bàn phím PC HOẶC Gamepad).
@@ -44,6 +45,7 @@ class HotkeyTileState extends State<HotkeyTile> {
   /// Kích hoạt chế độ ghi nhận phím trực tiếp ngay trên thẻ
   void startRecording() {
     if (_isRecording) return;
+    BridgeService.instance.bringToFront();
     setState(() {
       _isRecording = true;
       _capturedKeys = '';

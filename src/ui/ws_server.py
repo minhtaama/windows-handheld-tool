@@ -88,6 +88,10 @@ class WsServer(QObject):
                 self.bridge.toggleVirtualKeyboard()
             elif action == "setFpsLimit":
                 self.bridge.setFpsLimit(int(req.get("limit", 60)))
+            elif action == "updateOsdText":
+                self.bridge.updateOsdText(str(req.get("text", "")))
+            elif action == "clearOsdText":
+                self.bridge.clearOsdText()
             elif action == "setOsdMetric":
                 self.bridge.setOsdMetric(str(req.get("metric", "fps")), bool(req.get("enabled", True)))
             elif action == "setPanelWidth":
@@ -98,6 +102,8 @@ class WsServer(QObject):
                 self.bridge.setHotkey(str(req.get("target", "overlay")), str(req.get("hotkey", "")))
             elif action == "setAutostart":
                 self.bridge.setAutostart(bool(req.get("enabled", True)))
+            elif action == "bringToFront":
+                self.bridge.bringToFront()
             elif action == "closeOverlay":
                 self.bridge.closeOverlay()
             elif action == "exitApp":

@@ -86,7 +86,15 @@ class ConfigManager:
     def __init__(self, config_path: str = "config.json"):
         if self._initialized:
             return
-        self.config_path = os.path.abspath(config_path)
+        if config_path == "config.json":
+            import sys
+            if getattr(sys, "frozen", False):
+                root_dir = os.path.dirname(os.path.abspath(sys.executable))
+            else:
+                root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            self.config_path = os.path.join(root_dir, "config.json")
+        else:
+            self.config_path = os.path.abspath(config_path)
         self.data: Dict[str, Any] = self._load_config()
         self._initialized = True
 

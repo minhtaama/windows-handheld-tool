@@ -475,6 +475,49 @@ flowchart TD
   - Nhúng mô-đun máy chủ HTTP tĩnh siêu nhẹ [src/ui/static_server.py](file:///d:/dev-projects/windows-handheld-tool/src/ui/static_server.py) (`ThreadingHTTPServer`) chạy trên một luồng nền nội bộ của tiến trình Python, chỉ lắng nghe trên giao diện mạng lặp `127.0.0.1:8766`.
   - `QWebEngineView` nạp giao diện qua URL `http://127.0.0.1:8766`. Giao thức HTTP chuẩn xóa bỏ hoàn toàn rào cản CORS, cho phép nạp 100% tài nguyên Wasm, Canvas và Dart vào bộ nhớ trong tích tắc, đồng thời đặt màu nền mặc định `0b0d14` cho trang để chống nháy sáng.
 
+### 6.2. Cơ Chế Định Vị Tài Nguyên Bản Đóng Gói Và Triệt Tiêu Lỗi Từ Chối Kết Nối (PyInstaller Bundle Asset Resolution & Connection Refused Elimination)
+
+```mermaid
+flowchart TD
+    subgraph Packaging_Phase["Công Đoạn Đóng Gói (PyInstaller 6+ --onedir)"]
+        Flutter_Build["Biên Dịch Flutter Web (build/web/)"]
+        PyInstaller_Tool["Công Cụ Đóng Gói PyInstaller"]
+        Internal_Dir["Thư Mục Tài Nguyên Nội Bộ (_internal/build/web/)"]
+        Root_Exe["Tệp Thực Thi Gốc (windows_handheld_tool.exe)"]
+
+        Flutter_Build --> PyInstaller_Tool
+        PyInstaller_Tool --> Internal_Dir
+        PyInstaller_Tool --> Root_Exe
+    end
+
+    subgraph Runtime_Resolution["Không Gian Khởi Chạy (Frozen Runtime)"]
+        Sys_Frozen["Kiểm Tra Thuộc Tính Thực Thi (sys.frozen)"]
+        Candidate_MEIPASS["Đường Dẫn Tài Nguyên Nội Bộ (sys._MEIPASS/build/web)"]
+        Candidate_ExeDir["Đường Dẫn Cạnh Tệp Thực Thi (exe_dir/build/web)"]
+        Static_HTTP["Khởi Chạy Máy Chủ Tĩnh (StaticServer :8766)"]
+        Fallback_Dev["Rơi Vào Cổng Phát Triển (localhost:5173 - LỖI ERR_CONNECTION_REFUSED)"]
+
+        Sys_Frozen --> Candidate_MEIPASS
+        Sys_Frozen --> Candidate_ExeDir
+        Candidate_MEIPASS -->|Tìm Thấy index.html| Static_HTTP
+        Candidate_ExeDir -->|Tìm Thấy index.html| Static_HTTP
+        Candidate_MEIPASS -.->|Không Tìm Thấy (Lỗi Cũ)| Fallback_Dev
+    end
+```
+
+- **Trước đây làm bằng cách nào?**:
+  - Trong phương thức nạp giao diện `_load_frontend()` của [src/ui/quick_panel.py](file:///d:/dev-projects/windows-handheld-tool/src/ui/quick_panel.py), khi ứng dụng ở trạng thái đóng gói (`sys.frozen == True`), mã nguồn xác định thư mục gốc bằng hàm `os.path.dirname(os.path.abspath(sys.executable))` (chính là `C:\Program Files\WindowsHandheldTools`), sau đó kiểm tra tệp `build/web/index.html` nằm trực tiếp dưới thư mục này.
+- **Bị nghẽn / thảm họa kỹ thuật gì?**:
+  - *Thay đổi cấu trúc đóng gói của PyInstaller 6+*: Trong chế độ phân tách thư mục (`--onedir`), PyInstaller gom toàn bộ tài nguyên bổ sung (`--add-data`) và thư viện nhị phân vào thư mục con `_internal\`, thay vì đặt ngang hàng với tệp thực thi `.exe`. Đường dẫn thực tế của giao diện web là `C:\Program Files\WindowsHandheldTools\_internal\build\web\index.html`.
+  - *Xảy ra lỗi rẽ nhánh sai*: Lệnh kiểm tra `os.path.isfile(build_index)` trả về kết quả sai (`False`). Khung điều khiển không khởi động máy chủ tĩnh [src/ui/static_server.py](file:///d:/dev-projects/windows-handheld-tool/src/ui/static_server.py) tại cổng 8766, mà rẽ sang nhánh `else` dự phòng gọi nạp địa chỉ máy chủ phát triển `http://localhost:5173`.
+  - *Bản chất vật lý tầng mạng (Socket TCP RST)*: Ở môi trường cài đặt thực tế (`Release`), không có tiến trình máy chủ phát triển nào lắng nghe trên cổng 5173. Giao diện mạng lặp (`127.0.0.1`) nhận gói tin bắt tay khởi tạo kết nối (TCP SYN) tới cổng 5173 và lập tức trả về gói tin từ chối kết nối (TCP RST). Động cơ trình duyệt Chromium WebEngine báo lỗi mạng `ERR_CONNECTION_REFUSED` (mã lỗi socket -102), dẫn đến việc màn hình hiển thị biểu tượng trang web bị lỗi kết nối.
+- **Công nghệ giải quyết triệt để**:
+  - *Định vị đa tầng qua biến môi trường PyInstaller (`sys._MEIPASS`)*: Khi tiến trình Python chạy ở trạng thái đóng gói (`sys.frozen == True`), PyInstaller luôn nạp đường dẫn thư mục tài nguyên nội bộ vào biến `sys._MEIPASS` (trỏ tới `_internal\`). Hệ thống quét danh sách các vị trí ứng viên theo thứ tự ưu tiên:
+    1. Quét trong `os.path.join(sys._MEIPASS, "build", "web")`.
+    2. Quét trong `os.path.join(os.path.dirname(sys.executable), "build", "web")`.
+    3. Quét trong thư mục gốc dự án khi đang ở môi trường phát triển mã nguồn.
+  - *Đồng bộ sao chép tệp trong kịch bản triển khai*: Bổ sung vào kịch bản [scripts/deploy/deploy_test.bat](file:///d:/dev-projects/windows-handheld-tool/scripts/deploy/deploy_test.bat) lệnh sao chép trực tiếp thư mục `build\web` sang thư mục phát hành `%DIST_DIR%\build\web`, bảo đảm cả hai cơ chế truy cập trực tiếp và thông qua `_internal` đều có tệp tĩnh, kích hoạt máy chủ HTTP `127.0.0.1:8766` hoạt động 100%.
+
 ---
 
 ## 7. Cơ Chế Nạp Thư Viện Nhị Phân Và Quản Lý Driver Nhân (Binary & Kernel Driver Loading Mechanism)
@@ -513,3 +556,284 @@ flowchart TD
 2. **Cơ chế nạp tập trung giải quyết triệt để**:
    - *Đăng ký thư mục nhị phân vào không gian tiến trình*: Sử dụng hàm API của hệ điều hành Windows `SetDllDirectoryW` (được bọc qua `os.add_dll_directory(bin_dir)` trong Python 3.8+). Hệ điều hành sẽ ưu tiên tìm kiếm mọi liên kết phụ thuộc (`dependency link`) của DLL trực tiếp trong `bin/`.
    - *Giải quyết đường dẫn Ring 0 Driver*: Khi `libryzenadj.dll` gọi hàm khởi tạo `InitializeOls()`, thư viện `WinRing0x64.dll` đã nằm trong `bin/` sẽ xác định vị trí của chính nó qua `GetModuleFileNameW`, từ đó tìm thấy `WinRing0x64.sys` nằm ngay bên cạnh mà không cần bất kỳ bước sao chép trung gian nào ra ngoài thư mục gốc. Thư mục gốc dự án được giữ sạch sẽ 100%.
+3. **An toàn con trỏ động và thu hẹp kiểu dữ liệu tĩnh (Dynamic DLL Pointer Safety & Type Narrowing Guard)**:
+   - *Bản chất vật lý con trỏ bộ nhớ*: Biến `self.lib` trong [src/hardware/tdp_service.py](file:///d:/dev-projects/windows-handheld-tool/src/hardware/tdp_service.py) là con trỏ tham chiếu đối tượng thư viện `ctypes.CDLL`. Khi tệp DLL chưa được nạp hoặc nạp thất bại ở chế độ giả lập, `self.lib` giữ giá trị rỗng (`None`, con trỏ địa chỉ `0x0`).
+   - *Cơ chế kiểm tra kiểu tĩnh (Static Type Checking)*: Khi hàm `get_telemetry()` chỉ kiểm tra `if not self.is_active or not self.ry_handle:`, bộ phân tích tĩnh nhận thấy `self.lib` vẫn có thể mang kiểu rỗng (`NoneType`), dẫn đến cảnh báo lỗi `Object of class NoneType has no attribute refresh_table`.
+   - *Công nghệ giải quyết triệt để*:
+     - Bổ sung điều kiện chắn kiểu (Type Guard): Thêm `or not self.lib` vào điều kiện kiểm tra ở đầu hàm. Trình phân tích tĩnh sẽ tự động thu hẹp kiểu dữ liệu (Type Narrowing) và xác nhận `self.lib` là một đối tượng `CDLL` hợp lệ 100%.
+     - Kiểm tra bảng ký hiệu xuất khẩu DLL (Export Symbol Table): Sử dụng hàm kiểm tra thuộc tính `hasattr(self.lib, "refresh_table")` trước khi thực thi để bảo đảm không xảy ra ngoại lệ truy xuất hàm không tồn tại.
+
+---
+
+## 8. Quản Lý Tiêu Điểm Bàn Phím, Thứ Tự Hiển Thị Thanh Tác Vụ Và Giao Tiếp Bàn Phím Ảo (Keyboard Focus, Taskbar Z-Order & Virtual Keyboard COM Physics)
+
+```mermaid
+flowchart TD
+    subgraph Windows_Shell["Hệ Thống Windows Shell & Giao Tiếp Phần Cứng"]
+        OS_Taskbar["Thanh Tác Vụ Windows (Shell_TrayWnd - WS_EX_TOPMOST)"]
+        Hardware_Keyboard["Bàn Phím Phần Cứng (Hardware Keyboard Event)"]
+        TabTip_Service["Tiến Trình Nền Bàn Phím Ảo (TabTip.exe - PID Running)"]
+        COM_Subsystem["Hệ Thống Đối Tượng Phân Tán (COM Subsystem)"]
+    end
+
+    subgraph Overlay_Process["Tiến Trình Gaming Overlay (Python Host)"]
+        HWND_Overlay["Định Danh Cửa Sổ (HWND QuickPanel)"]
+        Win_Manager["Bộ Quản Lý Cửa Sổ (WindowManager)"]
+        VK_Service["Dịch Vụ Bàn Phím Ảo (VirtualKeyboardService)"]
+        ITip_Invocation["Giao Tiếp COM Đảo Trạng Thái (ITipInvocation)"]
+
+        Win_Manager -->|SetForegroundWindow & SetWindowPos HWND_TOPMOST| HWND_Overlay
+        VK_Service -->|Khởi Tạo CLSID UIHostNoLaunch| COM_Subsystem
+        COM_Subsystem -->|Gọi Toggle qua vtable| ITip_Invocation
+    end
+
+    subgraph Flutter_Web["Khung Nhìn Trình Duyệt Nhúng (QWebEngineView / Flutter Web)"]
+        Glass_Pane["Bề Mặt Bắt Sự Kiện (flt-glass-pane)"]
+        HW_Keyboard_Service["Bộ Lắng Nghe Bàn Phím (HardwareKeyboard.instance)"]
+        Glass_Pane --> HW_Keyboard_Service
+    end
+
+    Hardware_Keyboard -->|Truyền Thông Điệp WM_KEYDOWN khi có Tiêu Điểm| HWND_Overlay
+    HWND_Overlay -->|Chuyển Tiếp Tiêu Điểm Nội Bộ| Glass_Pane
+    ITip_Invocation -->|Bật / Ẩn Giao Diện Đồ Họa Bàn Phím| TabTip_Service
+```
+
+### 1. Bản chất vật lý của cơ chế chiếm tiêu điểm bàn phím (Keyboard Focus Physics)
+- **Trước đây làm bằng cách nào?**: Cửa sổ `QuickPanel` được gán cờ kiểu mở rộng `WS_EX_NOACTIVATE` (`0x08000000`) với ý định ban đầu là ngăn cửa sổ cướp tiêu điểm của trò chơi khi hiển thị.
+- **Bị nghẽn / thảm họa kỹ thuật gì?**:
+  - Khi gán cờ `WS_EX_NOACTIVATE`, hệ điều hành Windows ban hành chỉ thị cứng: *Cấm tuyệt đối việc chuyển tiêu điểm bàn phím (`WM_SETFOCUS` / `WM_ACTIVATE`) vào cửa sổ này, kể cả khi người dùng nhấp chuột trực tiếp lên cửa sổ*.
+  - Hậu quả: Trình duyệt nhúng `QWebEngineView` và bề mặt `flt-glass-pane` của Flutter Web không bao giờ có tiêu điểm. Mọi phím người dùng gõ trên bàn phím phần cứng đều bị gửi vào cửa sổ ứng dụng nền trước đó. Bộ lắng nghe sự kiện bàn phím của Flutter (`HardwareKeyboard.instance.addHandler`) hoàn toàn tê liệt, không thể ghi nhận phím để đổi phím tắt.
+- **Công nghệ giải quyết triệt để**:
+  - Loại bỏ hoàn toàn cờ `WS_EX_NOACTIVATE` khỏi thuộc tính cửa sổ.
+  - Khi hiển thị (`show()`), tiến trình gọi trực tiếp hàm API Windows `user32.SetForegroundWindow(self.hwnd)` và `self.widget.activateWindow()` để nhận quyền điều khiển bàn phím.
+  - Khi người dùng bấm chuột vào panel, sự kiện tiêu điểm kích hoạt tức thì, cho phép `HardwareKeyboard` bắt trọn vẹn mọi tổ hợp phím phần cứng.
+
+### 2. Bản chất thứ tự hiển thị Z-Order và xung đột thanh tác vụ (Taskbar Z-Order Contention)
+- **Hiện tượng đời thường trước đây**: Khi mở panel, nếu người dùng bấm chuột vào thanh tác vụ (Taskbar), Taskbar sẽ nhảy lên che mất một phần panel. Khi bấm chuột lại vào panel, panel vẫn nằm bên dưới và không thể trồi lên trên Taskbar.
+- **Bản chất vật lý tầng Win32**:
+  - Thanh tác vụ của Windows (`Shell_TrayWnd`) là một cửa sổ thuộc phân lớp luôn nổi (`WS_EX_TOPMOST`).
+  - Trong cùng dải Z-Order luôn nổi, cửa sổ nào được kích hoạt (`Active Window`) sau cùng sẽ được bộ quản lý cửa sổ của Windows (Desktop Window Manager - DWM) đưa lên đỉnh cao nhất.
+  - Do panel cũ bị gắn cờ `WS_EX_NOACTIVATE`, khi người dùng bấm chuột vào panel, Windows **từ chối kích hoạt**, khiến DWM tiếp tục giữ Taskbar ở vị trí đỉnh Z-Order và đè bẹp panel.
+- **Công nghệ giải quyết triệt để**:
+  - Khi loại bỏ `WS_EX_NOACTIVATE`, mỗi cú nhấp chuột lên panel sẽ kích hoạt cửa sổ, tự động đưa HWND của panel lên đỉnh Z-Order của dải Topmost, đè lên trên Taskbar.
+  - Đồng thời, khi hiển thị hoặc nhận sự kiện bấm chuột, gọi hàm API `user32.SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)` để khẳng định vị thế ưu tiên hiển thị cao nhất.
+
+### 3. Bản chất vật lý của cơ chế kích hoạt bàn phím ảo Modern Touch Keyboard (TabTip COM Physics)
+- **Trước đây làm bằng cách nào?**: Sử dụng hàm gọi thực thi `ShellExecuteW` hoặc lệnh dòng lệnh `start TabTip.exe` trỏ vào tệp `C:\Program Files\Common Files\microsoft shared\ink\TabTip.exe`.
+- **Bị nghẽn / thảm họa kỹ thuật gì?**:
+  - Kể từ Windows 10 (bản 20H2 trở đi) và toàn bộ các phiên bản Windows 11, tiến trình `TabTip.exe` là một dịch vụ Modern Shell được hệ thống khởi chạy sẵn ở chế độ nền (Background Daemon) ngay khi khởi động Windows.
+  - Khi tiến trình đã tồn tại trong danh sách tiến trình của hệ điều hành, lệnh gọi `ShellExecuteW` chỉ kiểm tra tiến trình đã chạy rồi trả về mã thành công rỗng mà không hề gửi tín hiệu mở giao diện đồ họa (UI) của bàn phím lên màn hình.
+- **Công nghệ giải quyết triệt để**:
+  - Sử dụng giao tiếp trực tiếp với hệ thống đối tượng phân tán (Component Object Model - COM) của Windows Shell.
+  - Khởi tạo đối tượng từ mã định danh lớp CLSID `{4ce576fa-83dc-4f88-951c-9d0782b4e376}` (`UIHostNoLaunch`) và mã định danh giao tiếp IID `{37c994e7-432b-4834-a2f7-dce1f13b834b}` (`ITipInvocation`).
+  - Truy xuất bảng hàm ảo (vtable) tại chỉ mục số 3 để lấy con trỏ hàm `Toggle(HWND hwndDesktop)`.
+### 4. Cơ Chế Duy Trì Hiển Thị Bàn Phím Ảo Và Triệt Tiêu Lỗi Tự Mở Lại (Physical Keyboard Timing & Auto-Invoke Elimination)
+- **Hiện tượng đời thường trước đây**:
+  1. *Lỗi mất bàn phím khi nhấc tay*: Khi ấn tổ hợp phím nóng mở bàn phím ảo (ví dụ `Ctrl+Alt+K`), bàn phím ảo vừa ló lên nhưng ngay khi người dùng nhấc ngón tay ra khỏi bàn phím thì bàn phím ảo lập tức biến mất.
+  2. *Lỗi tự động mở lại sau khi đóng bằng nút*: Khi người dùng bấm nút đóng trên thanh Touch Keyboard, bàn phím ảo vừa hạ xuống thì ngay lập tức tự động bật ngược trở lại màn hình.
+  3. *Lỗi bấm phím nóng lần 2 để đóng thì bàn phím đóng rồi lại tự mở lên*: Bàn phím đang mở, người dùng ấn lại `Ctrl+Alt+K` để đóng bàn phím thì bàn phím vừa tụt xuống lại lập tức trồi lên ngay.
+- **Bản chất vật lý tầng Windows Shell & Quản lý tiêu điểm (Focus Physics)**:
+  1. *Xung đột vòng đời sự kiện nhấn và nhả phím (KeyDown vs KeyUp Timing Collision)*: Khi người dùng bấm tổ hợp `Ctrl+Alt+K`, hệ điều hành bắn ra thông điệp `WM_HOTKEY` ngay tại thời điểm phím cuối cùng được nhấn xuống (`KeyDown`), trong khi ngón tay người dùng vẫn đang đè lên các phím vật lý. Hàm mở bàn phím ảo được kích hoạt ngay lúc đó. Khoảng vài chục mili-giây sau, khi người dùng **nhấc tay ra**, bàn phím vật lý gửi các tín hiệu ngắt phần cứng nhả phím (`WM_KEYUP` / `WM_SYSKEYUP`) lên hệ điều hành. Hệ thống Windows Shell Input nhận diện chuỗi sự kiện `WM_KEYUP` từ phần cứng và kết luận người dùng vừa tương tác với bàn phím cơ vật lý, dẫn đến việc tự động ẩn ngay lập tức bàn phím ảo cảm ứng.
+  2. *Vòng lặp kích hoạt tự động do chuyển đổi tiêu điểm (Auto-Invoke Focus Loop)*: Khi các khóa Registry `EnableDesktopModeAutoInvoke` hoặc `TouchKeyboardAutoInvokeDesktopMode` được đặt bằng 1, Windows Desktop Window Manager kích hoạt cơ chế tự động mở bàn phím ảo mỗi khi phát hiện tiêu điểm thay đổi. Khi người dùng đóng bàn phím bằng nút đóng trên giao diện Touch Keyboard, tiêu điểm hệ thống lập tức rơi về cửa sổ ứng dụng nền. Trình quản lý của Windows nhận diện có cửa sổ nhận tiêu điểm trong khi bàn phím đang đóng, nó liền tự động kích hoạt tiến trình nạp lại Touch Keyboard, gây ra hiện tượng bàn phím vừa đóng lại tự động bật lên.
+  3. *Xung đột trạng thái khi đóng bằng phím tắt (Toggle Timing Inversion)*: Khi bàn phím ảo đang mở, người dùng ấn phím phần cứng `Ctrl+Alt+K`. Bản thân Windows nhận thấy phím cơ vật lý được gõ nên đã tự động ẩn bàn phím ảo xuống ngay khoảnh khắc nhấn phím. Nếu hàm xử lý phím nóng tiếp tục đợi nhấc tay rồi mới gọi phương thức đảo trạng thái `ITipInvocation::Toggle`, lệnh này sẽ nhìn thấy bàn phím ảo đang đóng và **lại mở ngược bàn phím ảo lên**, tạo thành hiệu ứng đóng rồi lại tự mở.
+- **Công nghệ giải quyết triệt để**:
+  1. *Truy vấn trạng thái thực tế qua giao tiếp `IFrameworkInputPane`*: Sử dụng giao tiếp COM `IFrameworkInputPane` (CLSID `{d5120aa3-46ba-44c5-822d-ca8092c1fc72}`, IID `{5752238b-24f0-495a-82f1-2fd593056796}`) để đọc tọa độ hiển thị thực tế (`Location`) của Touch Keyboard trước khi thực thi lệnh:
+     - **Luồng MỞ (Bàn phím đang đóng - Tọa độ rỗng)**: Người dùng muốn mở bàn phím. Hệ thống chạy cơ chế chờ nhấc ngón tay khỏi bàn phím vật lý (`_wait_for_keys_up`), đợi xả sạch thông điệp `WM_KEYUP`, sau đó gọi `ITipInvocation::Toggle` để mở bàn phím và duy trì cố định trên màn hình.
+     - **Luồng ĐÓNG (Bàn phím đang mở - Chiều cao > 0)**: Người dùng muốn đóng bàn phím. Hệ thống gọi phương thức đóng tức thì (hoặc cho phép Windows tự thu bàn phím khi phát hiện phím cơ), sau đó chờ nhấc ngón tay ra nhưng **tuyệt đối không gọi lệnh Toggle mở lại**, bảo đảm bàn phím ảo đóng hoàn toàn và giữ nguyên trạng thái đóng.
+  2. *Triệt tiêu hoàn toàn cơ chế Auto-Invoke trong Registry*: Tự động cấu hình giá trị `EnableDesktopModeAutoInvoke` = 0 (REG_DWORD) trong `HKCU\Software\Microsoft\TabletTip\1.7` và `TouchKeyboardAutoInvokeDesktopMode` = 0 (REG_DWORD) trong `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\TouchKeyboard`. Việc gán giá trị 0 tường minh chỉ thị cho Windows Shell tuyệt đối không tự động nạp lại bàn phím ảo khi các cửa sổ nền chuyển đổi tiêu điểm.
+  3. *Bộ lọc chống kích hoạt kép (Debounce Mechanism)*: Áp dụng khoảng chặn thời gian 0.5 giây được chốt lại tại thời điểm kết thúc chuỗi tác vụ của `toggle_keyboard`, triệt tiêu hoàn toàn hiện tượng nảy phím hoặc sự kiện kích hoạt lặp từ hàng đợi phần cứng.
+
+---
+
+## 9. Bản Chất Vật Lý Của Tranh Chấp Độ Phân Giải Game Độc Quyền Và Đồng Bộ Hóa Dịch Vụ Phần Cứng (Exclusive Fullscreen Mode Switch & Hardware Services Synchronization)
+
+```mermaid
+flowchart TD
+    subgraph Game_FSE["Không Gian Trò Chơi Độc Quyền (Exclusive Fullscreen 720p)"]
+        Game_Device["Thiết Bị D3D11 / Vulkan Của Game"]
+        HW_Scanout["Bộ Quét Phần Cứng Tín Hiệu Màn Hình (Hardware Scanout: 1280x720)"]
+        Game_Device --> HW_Scanout
+    end
+
+    subgraph Conflict_Point["Điểm Giao Tranh Chấp Tiêu Điểm Và Chuỗi Hoán Đổi (Collision Point)"]
+        Set_Foreground["Gọi user32.SetForegroundWindow(HWND)"]
+        DWM_Restore["DWM Cưỡng Chế Chuyển Chế Độ Quét Về Desktop 1080p"]
+        WebEngine_Draw["Chromium GPU Vẽ Trên Viewport Cũ (1920x1080)"]
+        Driver_Deadlock["Treo Khối Nhân Đồ Họa dxgkrnl.sys (GPU TDR / Đơ Máy Tính)"]
+
+        Set_Foreground --> DWM_Restore
+        DWM_Restore --> Driver_Deadlock
+        WebEngine_Draw --> Driver_Deadlock
+    end
+
+    subgraph Safe_Solution["Kiến Trúc Điều Khiển An Toàn Tuyệt Đối"]
+        Query_Metrics["Đọc Phân Giải Thực Tế (user32.GetSystemMetrics SM_CXSCREEN)"]
+        No_Activate["Giữ Cờ SWP_NOACTIVATE (Không Cướp Tiêu Điểm)"]
+        Gamepad_Input["Điều Hướng Bằng Gamepad Qua Giao Thức XInput Polling"]
+        RTSS_Hook["Bơm Chỉ Số Trực Tiếp Vào Game Qua Shared Memory Của RTSS"]
+
+        Query_Metrics --> No_Activate
+        No_Activate --> Gamepad_Input
+        No_Activate --> RTSS_Hook
+    end
+
+    HW_Scanout -.->|Xảy Ra Xung Đột Khi Bấm Hotkey Cũ| Conflict_Point
+    HW_Scanout ===>|Áp Dụng Kiến Trúc Mới| Safe_Solution
+```
+
+### 1. Bản chất vật lý của tranh chấp quét hiển thị khi Game Fullscreen chạy độ phân giải thấp (Display Mode Switch & GPU Deadlock Physics)
+- **Hiện tượng đời thường trước đây**:
+  - Khi chạy game ở chế độ Không viền (Borderless Windowed) hoặc độ phân giải 1920x1080 trùng với độ phân giải Windows Desktop, bảng điều khiển `QuickPanel` hiển thị mượt mà và ổn định 100%.
+  - Nhưng khi game chạy ở chế độ Toàn màn hình độc quyền (Exclusive Fullscreen - FSE) với độ phân giải thấp hơn Windows (ví dụ 1280x720 để tăng FPS trên máy Handheld), vừa bấm phím nóng kích hoạt thì máy tính bị đơ cứng hoàn toàn, màn hình đen hoặc game bị văng (crash), bắt buộc phải nhấn giữ nút nguồn để khởi động lại.
+- **Bản chất vật lý tầng phần cứng đồ họa và hệ điều hành (First Principles)**:
+  1. *Chuyển đổi chế độ quét tín hiệu phần cứng (Display Mode Switch)*: Khi game kích hoạt chế độ FSE ở độ phân giải 720p, card đồ họa chỉ thị cho Bộ điều khiển quét tín hiệu hiển thị (Display Scanout Controller) thay đổi tần số và kích thước điểm ảnh phần cứng từ 1080p sang 720p. Toàn bộ [[Chuỗi Hoán Đổi Bề Mặt Đồ Họa (DXGI Swapchain)]] của màn hình bị game độc chiếm quyền xuất trực tiếp (Direct Flip Scanout), ngắt hoàn toàn sự can thiệp của Bộ ghép nối cửa sổ Windows (Desktop Window Manager - DWM).
+  2. *Xung đột cưỡng bức chuyển tiêu điểm (`SetForegroundWindow`)*: Khi nhấn Hotkey, phương thức `show()` trong [src/overlay/window_manager.py](file:///d:/dev-projects/windows-handheld-tool/src/overlay/window_manager.py) gọi hàm `user32.SetForegroundWindow(self.hwnd)` và `self.widget.activateWindow()`. Windows coi đây là mệnh lệnh bắt buộc phải đưa cửa sổ desktop lên hàng đầu. Hệ thống DXGI nhận diện game độc quyền bị mất quyền ưu tiên (Focus Loss), dẫn đến việc DWM lập tức cố gắng kích hoạt chuyển đổi ngược chế độ quét phần cứng (Display Mode Switch) từ 720p về lại 1080p của Desktop.
+  3. *Lệch tọa độ khung nhìn và tràn vùng đệm (Out-of-bounds Viewport Contention)*: Phương thức `update_geometry()` đọc kích thước màn hình qua `QGuiApplication.primaryScreen().geometry()`, vốn đang bị lưu đệm (cache) thông số cũ 1920x1080. QuickPanel được tính toán đặt tại tọa độ `X = 1920 - 380 = 1540`, chiều cao 1080. Trong khi đó, khung quét thực tế của màn hình đang bị giới hạn ở 1280x720. Tọa độ `X = 1540` nằm hoàn toàn ngoài không gian hiển thị của card đồ họa.
+  4. *Bế tắc nhân điều khiển đồ họa (GPU Driver Hang / TDR Deadlock)*: Trình duyệt nhúng Chromium (`QWebEngineView`) sở hữu tiến trình tăng tốc đồ họa riêng (Chromium GPU Process) sử dụng DirectX 11 để vẽ giao diện. Khi hai thiết bị Direct3D (tiến trình game và tiến trình GPU của Chromium) cùng tranh chấp chuỗi hoán đổi trong khi độ phân giải quét của card đồ họa đang bị giằng co giữa 720p và 1080p, lệnh xuất hình `Present()` của DirectX bị gián đoạn và trả về lỗi `DXGI_ERROR_DEVICE_RESET`. Trình điều khiển GPU (đặc biệt là APU AMD Radeon trên ROG Ally, Legion Go) rơi vào trạng thái bế tắc phát hiện và phục hồi quá hạn (Timeout Detection and Recovery - TDR) hoặc treo cứng nhân đồ họa (`dxgkrnl.sys`).
+  5. *Nghịch lý hiển thị khi loại bỏ cướp tiêu điểm (Direct Flip Bypass vs Inactive DWM Plane)*: Khi gán cờ `SWP_NOACTIVATE` để triệt tiêu lệnh `SetForegroundWindow`, hệ điều hành không kích hoạt chuyển đổi ngược độ phân giải, giải quyết triệt để lỗi crash hoặc đơ máy tính. Tuy nhiên, xuất hiện hiện tượng thứ phát: **Khi ấn Hotkey thì bảng điều khiển không xuất hiện trên màn hình**. Nguyên nhân vật lý xuất phát từ việc trong chế độ Toàn màn hình độc quyền (Exclusive Fullscreen - FSE), card đồ họa thiết lập luồng quét tín hiệu trực tiếp (Hardware Direct Flip) từ bộ đệm của game ra thẳng cổng màn hình mà bỏ qua hoàn toàn bộ ghép nối Windows DWM. Do `SWP_NOACTIVATE` giữ cho game không mất tiêu điểm, DWM không nhận được tín hiệu can thiệp để lấy lại quyền quét hiển thị. Bề mặt cửa sổ `QuickPanel` vẫn được Chromium vẽ vào bộ đệm DWM nhưng bộ điều khiển quét của card đồ họa không đọc luồng dữ liệu này, dẫn đến việc panel bị che khuất 100% phía sau khung hình của game.
+- **Công nghệ giải quyết triệt để**:
+  1. *Triệt tiêu hoàn toàn lệnh cướp tiêu điểm khi game chạy độc quyền*: Khi game đang ở chế độ toàn màn hình, cửa sổ `QuickPanel` chỉ được hiển thị bằng cờ không kích hoạt `SWP_NOACTIVATE`, **tuyệt đối không gọi** `SetForegroundWindow` hay `activateWindow()`. Người dùng vẫn điều hướng hoàn hảo toàn bộ bảng điều khiển bằng tay cầm Gamepad thông qua cơ chế đọc thăm dò nút bấm [[Giao Thức Tay Cầm Phần Cứng (XInput Polling)]] vốn hoạt động độc lập không cần tiêu điểm cửa sổ. Chỉ khi người dùng chủ động chạm vào màn hình cảm ứng hoặc nhấp chuột thì mới kích hoạt tiêu điểm.
+  2. *Truy vấn trực tiếp độ phân giải quét vật lý tức thời*: Loại bỏ việc phụ thuộc vào bộ đệm của Qt, sử dụng trực tiếp Win32 API `user32.GetSystemMetrics(0)` (SM_CXSCREEN) và `user32.GetSystemMetrics(1)` (SM_CYSCREEN) tại thời điểm mở panel. Nếu phát hiện chiều rộng màn hình hiện tại là 1280px, panel tự động tính toán vị trí `X = 1280 - panel_width` và chiều cao 720px, bảo đảm bề mặt Direct3D của Chromium luôn nằm chuẩn xác bên trong khung quét vật lý của game.
+  3. *Phân hóa vai trò giữa QuickPanel và RTSS OSD*: Bảng điều khiển `QuickPanel` đảm nhận vai trò thiết lập nhanh (Quick Settings). Mọi nhu cầu hiển thị chỉ số liên tục trong lúc chơi game (FPS, %CPU, %RAM, Nhiệt độ) được ủy thác hoàn toàn cho **Lớp phủ RTSS (RivaTuner Statistics Server OSD)**. RTSS vẽ trực tiếp vào chuỗi hoán đổi của game ở mọi độ phân giải (720p, 900p, 1080p) mà không tạo cửa sổ ngoài và không gây ra bất kỳ nguy cơ xung đột nào.
+  4. *Bảo toàn chế độ Toàn màn hình độc quyền (Exclusive Fullscreen Preservation)*: Hệ thống bảo toàn 100% chế độ Toàn màn hình độc quyền (FSE) của mọi thể loại game mà không cần người dùng phải chuyển đổi sang Borderless Windowed. Bằng cách triệt tiêu toàn bộ lệnh chiếm tiêu điểm và ép cửa sổ vào dải Z-Band đặc quyền `ZBID_UIACCESS`, lớp phủ hiển thị trực tiếp lên bề mặt Direct3D/Vulkan của game FSE ở bất kỳ độ phân giải nào (720p, 900p, 1080p) mà không làm gián đoạn chuỗi hoán đổi phần cứng.
+
+### 2. Kiến trúc cầu nối dữ liệu cảm biến và đồng bộ hóa dịch vụ phần cứng (Telemetry Bridge & Hardware Control Engine)
+- **Trước đây làm bằng cách nào?**:
+  - Trong bản kiến trúc cũ, giao diện Flutter Desktop gọi trực tiếp các thư viện DLL phần cứng (`libryzenadj.dll`, `inpoutx64.dll`, `RTSSSharedMemoryV2`) thông qua giao tiếp nội vi Dart FFI (`dart:ffi`).
+- **Bị nghẽn / thảm họa kỹ thuật gì?**:
+  - Khi chuyển đổi sang kiến trúc Flutter Web chạy trên trình duyệt nhúng Chromium (`QWebEngineView`), môi trường máy ảo Dart Web bị cô lập hoàn toàn khỏi hệ điều hành, không thể nạp các tệp DLL qua `dart:ffi`.
+  - Các dịch vụ phần cứng bên trong thư mục `lib/hardware/` bị thay thế bằng các hàm giả lập rỗng (Stub functions chỉ trả về `true`), trong khi các dịch vụ tương ứng ở phía Python (`src/hardware/`) chưa hoàn thiện thuật toán kết nối phần cứng thực tế, tạo ra 4 điểm đứt gãy:
+    1. *Lệch khóa định danh JSON (Payload Key Mismatch)*: Dịch vụ Python [src/services/system_telemetry.py](file:///d:/dev-projects/windows-handheld-tool/src/services/system_telemetry.py) đẩy gói tin mang các khóa `"cpu_percent"` và `"ram_percent"`, nhưng dịch vụ cầu nối Dart [lib/services/bridge_service.dart](file:///d:/dev-projects/windows-handheld-tool/lib/services/bridge_service.dart) lại trích xuất theo tên `"cpu_usage"` và `"ram_usage_percent"`. Do không khớp khóa, Dart luôn lấy giá trị ngầm định là 0%, khiến giao diện trang chủ không hiển thị % tải.
+    2. *Thiếu quyền quản trị và cơ chế dự phòng TDP*: Thư viện `libryzenadj.dll` giao tiếp với bộ xử lý AMD thông qua driver Ring 0 `WinRing0x64.sys`. Driver này bắt buộc phải có quyền quản trị Administrator (`runas`). Khi ứng dụng khởi chạy với tài khoản tiêu chuẩn, hàm `init_ryzenadj()` trả về con trỏ rỗng (`NULL`), khiến cờ `is_active` bị tắt và rơi vào chế độ mô phỏng. Đồng thời, mã nguồn thiếu cơ chế gọi thực thi tệp CLI dự phòng `ryzenadj.exe` có sẵn trong thư mục `bin/`.
+    3. *Thiếu mạch điều khiển thanh ghi EC và đường cong quạt (Fan Curves)*: Dịch vụ `fan_service.py` chỉ mới tải thư viện `inpoutx64.dll` và ghi nhận nhật ký (log) tượng trưng mà chưa hiện thực hóa các lệnh ghi vào cổng I/O `0x6C` / `0x68` của Bộ điều khiển nhúng (Embedded Controller - EC) trên máy Handheld. Đồng thời hệ thống chưa có cấu trúc dữ liệu bảng nội suy đường cong quạt theo nhiệt độ thời gian thực.
+    4. *Đứt gãy kênh truyền văn bản RTSS OSD*: Giao diện Flutter Web định dạng xong chuỗi OSD nhưng không gửi qua WebSocket sang Python. Ở phía Python, phương thức `update_osd` trong [src/hardware/rtss_service.py](file:///d:/dev-projects/windows-handheld-tool/src/hardware/rtss_service.py) chưa hiện thực hóa cấu trúc bộ nhớ chia sẻ `RTSSSharedMemoryV2`, và phương thức `set_fps_limit` chưa ghi dữ liệu vào tệp cấu hình profile của RivaTuner.
+- **Công nghệ giải quyết triệt để**:
+  1. *Đồng bộ hóa tuyệt đối cấu trúc gói tin cảm biến (Telemetry Contract)*: Chuẩn hóa toàn bộ tên trường JSON trong gói tin truyền tin: Python cung cấp đầy đủ cả `cpu_usage` (hoặc `cpu_percent`), `ram_usage_percent`, `cpu_temp` và `live_tdp`, bảo đảm Dart giải mã chính xác 100% dữ liệu cảm biến vào luồng `StreamController<SystemTelemetryData>`.
+  2. *Cơ chế thực thi TDP đa tầng (Hybrid DLL & CLI Fallback)*: Trong [src/hardware/tdp_service.py](file:///d:/dev-projects/windows-handheld-tool/src/hardware/tdp_service.py), nếu việc nạp DLL hoặc khởi tạo `init_ryzenadj()` thất bại, hệ thống tự động rẽ nhánh sang cơ chế gọi lệnh dòng lệnh thông qua tiến trình con `subprocess.run` trỏ vào tệp `bin/ryzenadj.exe` với các cờ `--stapm-limit`, `--fast-limit`, `--slow-limit`, bảo đảm việc chỉnh công suất hoạt động bền bỉ.
+  3. *Hiện thực hóa giao thức vùng nhớ chia sẻ RTSS (RTSS Shared Memory V2 Protocol)*: Chuyển giao toàn bộ thuật toán thao tác bộ nhớ chia sẻ Win32 sang Python: Sử dụng `ctypes` và `mmap` để mở vùng nhớ `RTSSSharedMemoryV2`, kiểm tra chữ ký `0x53535452` ('RTSS'), tìm slot trống trong mảng `OSDArr`, khóa cờ đồng bộ `dwBusy`, ghi chuỗi văn bản OSD vào trường `szOSDEx` (offset 512), và kích hoạt vẽ lại bằng cách tăng trường `dwOSDFrame`. Bổ sung action `updateOsdText` trên WebSocket để Flutter Web truyền chuỗi định dạng sang Python mỗi giây.
+  4. *Vòng lặp điều tốc đường cong quạt trên luồng nền (Background Fan Curve Worker)*: Xây dựng bảng quy đổi nhiệt độ $\rightarrow$ tốc độ quạt (ví dụ 40°C $\rightarrow$ 30%, 60°C $\rightarrow$ 50%, 75°C $\rightarrow$ 80%, 85°C $\rightarrow$ 100%). Luồng nền Python liên tục so sánh nhiệt độ CPU tức thời lấy từ `tdp_service` và tự động gửi lệnh điều tốc qua EC hoặc giao tiếp quản lý phần cứng của thiết bị.
+  5. *Bóc trần cơ chế chặn Ring 0 của Windows 11 (HVCI / Memory Integrity & Vulnerable Driver Blocklist)*:
+     - **Hiện tượng thực tế**: Ứng dụng đã được chạy với quyền quản trị Administrator cao nhất, nhưng TDP vẫn không hoạt động và lệnh kiểm tra `ryzenadj.exe -i` báo lỗi `Unable to get os_access Obj, check permission`.
+     - **Bản chất vật lý tầng nhân hệ điều hành (First Principles)**:
+       - Để giao tiếp với bộ quản lý năng lượng [[Bộ Quản Lý Năng Lượng AMD (AMD SMU Mailbox)]], công cụ phụ thuộc vào driver nhân `WinRing0x64.sys` để đọc ghi trực tiếp không gian địa chỉ vật lý PCI. Driver này tồn tại lỗ hổng bảo mật CVE-2020-14979 (cho phép mã người dùng đọc ghi tùy ý vào không gian bộ nhớ nhân Kernel).
+       - Trên Windows 11 (phiên bản 22H2 trở đi), tính năng **Cách ly lõi / Toàn vẹn bộ nhớ (Hypervisor-Protected Code Integrity - HVCI)** và **Danh sách chặn driver có lỗ hổng (Microsoft Vulnerable Driver Blocklist)** được kích hoạt mặc định. Ở cấp độ ảo hóa phần cứng CPU (Virtual Trust Level 1 - VTL 1), Hypervisor của Windows giám sát mọi lệnh gọi nạp driver `NtLoadDriver`.
+       - Ngay khi `WinRing0x64.dll` yêu cầu nạp `WinRing0x64.sys`, nhân Windows nhận diện mã băm (Hash) của driver nằm trong danh sách đen bị chặn và từ chối nạp với mã trạng thái `STATUS_DRIVER_BLOCKED` (hoặc `STATUS_IMAGE_CERT_REVOKED`). Lệnh nạp bị triệt tiêu từ cấp độ phần cứng ảo hóa, hoàn toàn độc lập với quyền `SeLoadDriverPrivilege` của tài khoản Administrator.
+       - Hệ quả trực tiếp: Hàm `InitializeOls()` trong `WinRing0x64.dll` trả về 0, `GetDllStatus()` trả về giá trị 2 (`OLS_DLL_DRIVER_NOT_LOADED`), dẫn đến `init_ryzenadj()` trả về con trỏ `NULL` và tiến trình không thể mở đối tượng truy cập phần cứng `os_access`.
+     - **Giải pháp xử lý triệt để**:
+       - Tắt tính năng Toàn vẹn bộ nhớ (Memory Integrity) trong Windows: Vào `Windows Security` $\rightarrow$ `Device Security` $\rightarrow$ `Core isolation details` $\rightarrow$ Gạt chuyển `Memory integrity` sang trạng thái **Off**, sau đó khởi động lại máy tính.
+       - Hoặc vô hiệu hóa lớp bảo vệ ảo hóa qua cửa sổ dòng lệnh quản trị: Thực thi lệnh `bcdedit /set hypervisorlaunchtype off` rồi khởi động lại hệ điều hành.
+  6. *Bản chất vật lý chuỗi điều tốc quạt (Fan Curves) và điểm nghẽn cảm biến*:
+     - **Nguyên nhân chuỗi điều tốc quạt không chạy**: Luồng chạy ngầm `_fan_curve_worker` trong `fan_service.py` đọc nhiệt độ CPU từ hàm `tdp_svc.get_telemetry()`. Khi TDP bị chặn bởi HVCI, `get_telemetry()` trả về giá trị `(0.0, 0.0, 0.0)`. Điều kiện `if temp > 0:` luôn nhận giá trị sai, khiến toàn bộ thuật toán nội suy đường cong quạt bị đóng băng vĩnh viễn trong vòng lặp chờ.
+     - **Thiếu hụt mạch ghi thanh ghi phần cứng**: Trong hàm `_apply_hardware_speed()`, hệ thống chỉ mới ghi log ra màn hình console mà chưa truyền lệnh ghi qua cổng I/O `0x6C / 0x68` của Bộ điều khiển nhúng (Embedded Controller - EC).
+     - **Khác biệt phần cứng Handheld và Desktop**: Các thiết bị Handheld (như ASUS ROG Ally, Lenovo Legion Go, AYANEO) sử dụng vi điều khiển nhúng EC hoặc giao diện WMI ACPI chuyên biệt (`\\.\root\wmi` -> `AsusAtkWmi_WMNB`). Trong khi đó, các bo mạch chủ máy tính để bàn (như ASUS PRIME B450M-A II) điều khiển quạt qua chip Super I/O (LPC Bus như ITE IT8655E / Nuvoton), đòi hỏi giao thức thanh ghi hoàn toàn khác biệt.
+
+### 3. Bản chất vật lý của cơ chế phân lớp Z-Band và đặc quyền UIAccess vượt mặt mọi Game Fullscreen (Z-Band Architecture, UIAccess Token & CreateWindowInBand Physics)
+- **Trước đây làm bằng cách nào?**:
+  - Giao diện cũ gọi `user32.SetWindowPos(hwnd, HWND_TOPMOST, ...)` và gán cờ `WS_EX_TOPMOST` thông thường, sau đó thử gọi hàm nội vi `user32.SetWindowBand(self.hwnd, None, ZBID_SYSTEM_TOOLS)` trên cửa sổ Qt đã tạo sẵn.
+- **Bị nghẽn / thảm họa kỹ thuật gì?**:
+  1. *Lỗi Access Denied của hàm SetWindowBand*: Trong Windows 10/11, hàm `SetWindowBand` bị kiểm soát nghiêm ngặt bởi Trình quản lý ứng dụng Immersive (IAM). Lệnh gọi `SetWindowBand` trên một cửa sổ Win32 đã tạo sẵn từ không gian người dùng (*User-mode*) luôn bị từ chối với mã lỗi `ERROR_ACCESS_DENIED` (mã lỗi 5).
+  2. *Cơ chế Direct Flip cô lập dải Desktop*: Trong chế độ Exclusive Fullscreen (FSE), game chiếm trọn bộ quét của dải `ZBID_DESKTOP` (Band 1). Do `SetWindowBand` thất bại, cửa sổ `QuickPanel` vẫn bị giữ ở Band 1, khiến nó nằm hoàn toàn phía dưới bề mặt quét phần cứng của game và không thể hiển thị khi nhấn phím nóng.
+  3. *Môi trường phát triển không được cấp TokenUIAccess*: Khi chạy ứng dụng trực tiếp bằng lệnh `python main.py`, tệp `python.exe` không có chứng chỉ số và không nằm trong `C:\Program Files\`. Windows tự động tước bỏ đặc quyền `uiAccess="true"`, khiến mọi API phân lớp Z-Band bị vô hiệu hóa.
+- **Công nghệ giải quyết triệt để**:
+  1. *Phân lớp dải hiển thị đặc quyền `ZBID_UIACCESS` (Band 2)*: Windows thiết kế riêng phân lớp `ZBID_UIACCESS` dành cho các công cụ trợ năng và bàn phím ảo hệ thống (`osk.exe`). Phân lớp này nằm ở tầng Z-order cao hơn toàn bộ dải `ZBID_DESKTOP`. Khi một cửa sổ nằm trong `ZBID_UIACCESS`, bộ ghép nối DWM và card đồ họa bắt buộc phải xuất hình cửa sổ này đè lên trên bất kỳ game Fullscreen Exclusive nào.
+  2. *Khởi tạo cửa sổ trực tiếp trong phân lớp qua `CreateWindowInBand`*: Thay vì tạo cửa sổ thông thường rồi gọi `SetWindowBand` sau đó (vốn bị Windows chặn lỗi 5), hệ thống phải sử dụng hàm nội vi `user32.CreateWindowInBand` (hoặc `CreateWindowInBandEx`) với tham số `dwBand = 2` (`ZBID_UIACCESS`) ngay từ khoảnh khắc tạo cửa sổ Host Window, sau đó lồng ghép bề mặt vẽ của Qt WebEngine vào bên trong.
+  3. *Quy trình đóng gói và ký số Authenticode*: Ứng dụng khai báo thẻ `<requestedExecutionLevel level="asInvoker" uiAccess="true"/>` trong [app.manifest](file:///d:/dev-projects/windows-handheld-tool/app.manifest), được đóng gói thành tệp thực thi độc lập qua PyInstaller, được ký bằng chứng chỉ `HandheldToolsSigner`, và được cài đặt cố định vào thư mục bảo vệ `C:\Program Files\WindowsHandheldTools\windows_handheld_tool.exe`. Khi được khởi chạy từ đường dẫn này, Windows cấp phát thẻ bảo mật `TokenUIAccess`, cho phép cửa sổ vươn lên mọi phân lớp game Fullscreen mà không bị che khuất.### 4. Bản chất vật lý của hiện tượng cắt xén con trỏ 64-bit và cơ chế điều vận phím nóng toàn cục (64-bit Pointer Truncation, Win32 Hotkey Dispatcher & Virtual Keyboard Synchronization)
+- **Trước đây làm bằng cách nào?**:
+  - Mã nguồn Python sử dụng thư viện `ctypes.WinDLL("user32")` để gọi các hàm thao tác cửa sổ Win32 (`user32.SetWindowPos`, `user32.BringWindowToTop`) và gán hằng số con trỏ lớp đỉnh `HWND_TOPMOST = -1` dạng số nguyên thuần túy.
+  - Phím nóng toàn cục được nạp chuỗi từ tệp cấu hình [config.json](file:///d:/dev-projects/windows-handheld-tool/config.json) và đăng ký qua hàm API Win32 `RegisterHotKey`.
+- **Bị nghẽn / thảm họa kỹ thuật gì?**:
+  1. *Thảm họa cắt xén con trỏ 64-bit (Pointer Truncation to 32-bit Integer)*:
+     - Trên hệ điều hành Windows 64-bit, con trỏ tay nắm cửa sổ (`HWND`) là một kiểu dữ liệu con trỏ 64-bit (`UINT_PTR` / 8 bytes). Giá trị của `HWND_TOPMOST` theo định nghĩa chuẩn trong tệp tiêu đề `WinUser.h` là `((HWND)-1)`, tức là giá trị nguyên 64-bit lấp đầy các bit 1: `0xFFFFFFFFFFFFFFFF`.
+     - Khi gọi `user32.SetWindowPos` qua `ctypes` mà **không khai báo danh sách kiểu tham số (`argtypes`)**, trình thông dịch Python mặc định ép toàn bộ các tham số số nguyên sang kiểu số nguyên 32-bit (`ctypes.c_int`).
+     - Khi thực thi lệnh gọi hàm, giá trị `-1` bị đặt vào thanh ghi 32-bit hoặc chỉ truyền 4 bytes `0x00000000FFFFFFFF` vào thanh ghi `RDX` (thanh ghi chứa tham số thứ 2 theo quy ước gọi hàm Microsoft x64 Calling Convention).
+     - Nhân Windows Kernel (`win32kbase.sys`) trích xuất 64-bit từ thanh ghi `RDX`, phát hiện giá trị `0x00000000FFFFFFFF` không khớp với bất kỳ tay nắm cửa sổ hợp lệ nào trong bảng quản lý cửa sổ (Handle Table) và cũng không bằng hằng số `0xFFFFFFFFFFFFFFFF`. Kernel lập tức hủy bỏ lệnh dời vị trí và trả về mã lỗi **`ERROR_INVALID_WINDOW_HANDLE (1400)`**.
+     - Hệ quả thực tế: Mỗi lần người dùng nhấn phím nóng, mã nguồn Python vẫn ghi nhận sự kiện và gọi hàm `show()`, nhưng hàm `SetWindowPos` bên dưới âm thầm thất bại 100%. Cửa sổ `QuickPanel` bị kẹt chết ở vị trí ngoài màn hình `X = screen_w`, tạo ra hiện tượng: **Ứng dụng hiện trên khay hệ thống nhưng bấm Hotkey không thấy mở**.
+  2. *Xung đột chiếm dụng phím tắt giữa các tiến trình (Error 1409 - Hotkey Collision)*:
+     - Khi ứng dụng bị lỗi hoặc khởi động lại nhưng tiến trình cũ chạy ngầm chưa được tiêu diệt hoàn toàn (`python.exe` hoặc `windows_handheld_tool.exe`), tiến trình cũ vẫn đang nắm giữ đăng ký phím nóng `Ctrl+Shift+Q` và `Ctrl+Alt+K` với nhân hệ điều hành.
+     - Tiến trình mới gọi `RegisterHotKey` bị Windows từ chối với mã lỗi `ERROR_HOTKEY_ALREADY_REGISTERED (1409)`. Tiến trình mới xuất hiện trên khay hệ thống nhưng luồng nhận thông điệp `WM_HOTKEY` hoàn toàn bị tê liệt.
+  3. *Sai lệch chuỗi định danh phím tắt bàn phím ảo (Typo Mismatch & Modifier Flag Parser)*:
+     - Trong tệp cấu hình, chuỗi phím tắt bàn phím ảo bị lỗi chính tả `"Ctrl+Altift+K"`.
+     - Bộ phân tích cú pháp chuỗi phím tắt [src/input/hotkey_service.py](file:///d:/dev-projects/windows-handheld-tool/src/input/hotkey_service.py) không khớp được từ khóa `Altift`, dẫn đến việc cờ `MOD_ALT` (0x0001) bị bỏ qua. Hệ thống chỉ gán cờ `MOD_CONTROL` và đăng ký nhầm thành tổ hợp `Ctrl+K`. Khi người dùng bấm `Ctrl+Alt+K` theo thói quen, Windows không phát thông điệp `WM_HOTKEY`.
+- **Công nghệ giải quyết triệt để**:
+  1. *Khai báo tường minh nguyên mẫu hàm 64-bit (Win32 Function Prototypes Enactment)*:
+     - Bắt buộc khai báo đầy đủ danh sách kiểu dữ liệu `argtypes` và `restype` cho toàn bộ các hàm API Win32 thao tác tay nắm cửa sổ:
+       - `user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]`
+       - `user32.SetWindowPos.restype = wintypes.BOOL`
+       - `user32.BringWindowToTop.argtypes = [wintypes.HWND]`
+       - `user32.BringWindowToTop.restype = wintypes.BOOL`
+     - Chuyển đổi toàn bộ các hằng số vị trí sang đối tượng con trỏ hợp lệ: `HWND_TOPMOST = wintypes.HWND(-1)`. Đảm bảo giá trị truyền vào thanh ghi `RDX` luôn là con trỏ 64-bit chuẩn xác `0xFFFFFFFFFFFFFFFF`.
+  2. *Đồng bộ hóa hình học khung nhìn Qt và Win32 Compositor*:
+     - Trong phương thức `update_geometry()`, song song với lệnh `SetWindowPos`, hệ thống gọi hàm `self.widget.setGeometry(x, y, self.panel_width, screen_h)` để bộ máy dựng hình giao diện của Qt WebEngine cập nhật kích thước khung nhìn thực tế tức thời, loại bỏ triệt để hiện tượng cửa sổ có tọa độ nhưng bề mặt vẽ bị rỗng 0x0.
+  3. *Chuẩn hóa chuỗi cấu hình và cơ chế bắt lỗi đăng ký Hotkey*:
+     - Sửa đổi chuỗi cấu hình trong [config.json](file:///d:/dev-projects/windows-handheld-tool/config.json) thành chuẩn `"Ctrl+Alt+K"`.
+     - Bổ sung định nghĩa tham số cho `user32.RegisterHotKey` và bắt lỗi `ERROR_HOTKEY_ALREADY_REGISTERED (1409)` để phát cảnh báo tức thời khi có tiến trình ma chạy ngầm chiếm giữ tài nguyên.
+  4. *Khởi tạo ứng dụng ở trạng thái Ẩn trong khay hệ thống (Clean Tray Docking)*:
+     - Tại thời điểm khởi động [main.py](file:///d:/dev-projects/windows-handheld-tool/main.py), gọi hàm `win_mgr.hide()` để đỗ cửa sổ tại tọa độ an toàn `X = screen_w` với cờ `is_visible = False`.
+     - Khi người dùng nhấn Hotkey `Ctrl+Shift+Q` lần đầu tiên, phương thức `toggle()` nhận diện trạng thái đóng và lập tức gọi `show()`, trượt bảng điều khiển ra màn hình mượt mà và chuẩn xác.
+
+```mermaid
+flowchart TD
+    User["Người dùng nhấn Hotkey (Ctrl+Shift+Q)"] --> OS_Kernel["Nhân Windows (win32k.sys) bắt giữ phím"]
+    OS_Kernel -->|Bơm thông điệp WM_HOTKEY| MsgLoop["Luồng thông điệp HotkeyService (_msg_loop)"]
+    MsgLoop -->|Phát tín hiệu controller.toggle_requested| QtQueue["Hàng đợi sự kiện Qt (QueuedConnection)"]
+    QtQueue --> WinMgr["WindowManager::show()"]
+    WinMgr --> SetProto["Ép kiểu 64-bit HWND_TOPMOST = 0xFFFFFFFFFFFFFFFF"]
+    SetProto --> SetPos["user32.SetWindowPos(HWND, HWND_TOPMOST, X, Y, W, H)"]
+    SetPos --> DWM["Windows DWM / Compositor"]
+    DWM --> Screen["Bảng điều khiển QuickPanel hiển thị tức thời đè lên Game"]
+```
+
+### 5. Bản chất vật lý của hiện tượng nháy đen, lệch khung quét khi mở Panel và phân tích đứt gãy kết nối RTSS OSD (Display Mode Switch, Focus Loss Contention & RTSS Shared Memory Daemon Physics)
+- **Trước đây làm bằng cách nào?**:
+  - Khi người dùng nhấn phím nóng `Ctrl+Shift+Q`, phương thức `show()` trong [[Cơ Chế Quản Lý Cửa Sổ (WindowManager)]] gọi `self.widget.show()`, `update_geometry()`, `user32.BringWindowToTop(self.hwnd)` và `user32.SetWindowPos(self.hwnd, HWND_TOPMOST, ..., SWP_SHOWWINDOW | SWP_NOACTIVATE)`.
+  - Khi nhấp chuột vào giao diện, phương thức `bring_to_front()` gọi `user32.SetForegroundWindow(self.hwnd)` và `self.widget.activateWindow()`.
+  - Phía giao diện Flutter Web định dạng chuỗi chỉ số phần cứng qua bộ định dạng [[Lớp Phủ Thông Số Game (RTSS OSD)]] và gửi gói tin qua WebSocket sang Python để nạp vào vùng nhớ chia sẻ `RTSSSharedMemoryV2`.
+- **Bị nghẽn / thảm họa kỹ thuật gì?**:
+  1. *Hiện tượng màn hình nháy đen do chuyển đổi quyền quét phần cứng (Hardware Direct Flip vs DWM Composition Switch)*:
+     - Trong chế độ Toàn màn hình độc quyền (Exclusive Fullscreen - FSE), tiến trình game sở hữu toàn quyền điều khiển bộ quét hiển thị của card đồ họa (CRTC / Display Controller). Khung hình Direct3D được đưa thẳng ra cổng xuất hình (Hardware Direct Flip) mà bỏ qua hoàn toàn bộ ghép nối Windows DWM.
+     - Khi gọi `self.widget.show()` trên một cửa sổ Qt WebEngine (Chromium), hệ điều hành Windows nhận lệnh đưa cửa sổ ra màn hình. Dù lệnh `SetWindowPos` có cờ `SWP_NOACTIVATE`, nhưng việc hiển thị cửa sổ con và bộ xử lý thông điệp mặc định của Qt vẫn kích hoạt phân hệ DirectX Graphics Infrastructure (DXGI) ghi nhận sự kiện chuyển đổi trạng thái cửa sổ nền.
+     - Hệ quả: DXGI phát hiện game bị mất quyền ưu tiên độc quyền (Focus Loss). Card đồ họa buộc phải dừng luồng Direct Flip và thực hiện lệnh **Chuyển đổi chế độ quét màn hình (Display Mode Switch)** để trả quyền điều khiển về cho bộ ghép nối DWM. Quá trình tái đàm phán tín hiệu đồng bộ dọc (VSync) và tần số quét giữa card đồ họa và tấm nền màn hình làm mất tín hiệu trong khoảng 200ms - 400ms $\rightarrow$ Tạo ra hiện tượng **Màn hình chớp nháy đen một cái**.
+  2. *Lệch pha thời gian đo đạc khung nhìn (Race Condition in Viewport Geometry Query)*:
+     - Tại thời điểm nhấn Hotkey lần đầu, hàm `update_geometry()` lập tức gọi Win32 API `GetSystemMetrics(0)` và `GetSystemMetrics(1)`.
+     - Tuy nhiên, tại khoảnh khắc đó, GPU và DWM đang dở dang quá trình đổi chế độ quét hiển thị (Mode Switch in-flight). Giá trị trả về từ `GetSystemMetrics` hoặc kích thước khung nhìn nội vi của Chromium chưa kịp ổn định theo độ phân giải quét mới.
+     - Kết quả: Panel tính toán tọa độ `X = screen_w - panel_width` và chiều cao `screen_h` dựa trên thông số quét chưa ổn định, khiến panel bị lệch vị trí và sai lệch kích thước chiều rộng/chiều cao.
+     - Đến lần ấn Hotkey thứ hai (sau khi tắt và mở lại), GPU và DWM đã hoàn tất 100% việc ổn định chế độ quét, nên hệ thống đọc được chính xác kích thước khung quét vật lý $\rightarrow$ Panel hiển thị chuẩn xác.
+  3. *Hiện tượng nháy đen lần hai khi nhấp chuột trở lại game (Regain Focus Flip Transition)*:
+     - Sau khi người dùng tắt panel bằng hotkey, cửa sổ panel đã được dời ra ngoài màn hình nhưng game vẫn đang chạy ở chế độ ghép nối cửa sổ thông thường của DWM.
+     - Khi người dùng nhấp chuột vào màn hình game, hệ điều hành gửi thông điệp nhận tiêu điểm (`WM_SETFOCUS`) tới tiến trình game. DXGI nhận diện game trở lại làm cửa sổ chính và lập tức ra lệnh cho GPU ngắt kết nối DWM để tái kích hoạt luồng quét trực tiếp phần cứng (Hardware Direct Flip). Card đồ họa thực hiện chuyển đổi chế độ lần thứ hai $\rightarrow$ **Màn hình lại nháy đen thêm một lần nữa**.
+  4. *Đứt gãy chuỗi hiển thị RTSS OSD do tiến trình dịch vụ chưa khởi chạy (Missing RTSS Daemon)*:
+     - Vùng nhớ chia sẻ `RTSSSharedMemoryV2` là một đối tượng nhân Windows Kernel (`FileMapping`) chỉ tồn tại trên RAM khi tiến trình máy chủ **`RTSS.exe`** (RivaTuner Statistics Server) đang thực sự hoạt động trong hệ thống.
+     - Mặc dù thư mục phần mềm tồn tại tại `C:\Program Files (x86)\RivaTuner Statistics Server`, nhưng tiến trình `RTSS.exe` chưa được khởi chạy ngầm.
+     - Trong mã nguồn giao diện Flutter Web [lib/hardware/rtss_service.dart](file:///d:/dev-projects/windows-handheld-tool/lib/hardware/rtss_service.dart), phương thức `ensureRunning()` chỉ là một hàm rỗng giả lập (`return true;`), không gửi lệnh khởi động tiến trình sang Python.
+     - Phía dịch vụ Python [src/hardware/rtss_service.py](file:///d:/dev-projects/windows-handheld-tool/src/hardware/rtss_service.py) khi thực thi `OpenFileMappingW(0x001F, False, "RTSSSharedMemoryV2")` nhận về con trỏ rỗng (`NULL`) do không tìm thấy vùng nhớ trong Kernel.
+     - Biến `self.is_connected` bị khóa ở giá trị `False`. Toàn bộ các gói tin đẩy chuỗi văn bản OSD từ Flutter Web qua WebSocket đều bị hủy bỏ âm thầm tại dòng kiểm tra `if not self.is_connected: return False`, khiến lớp phủ RTSS hoàn toàn không hiển thị trong game.
+- **Công nghệ giải quyết triệt để**:
+  1. *Triệt tiêu hoàn toàn sự kiện chuyển tiêu điểm (Strict No-Activate & Focus Lock on Game)*:
+     - Bổ sung cờ cửa sổ không nhận tiêu điểm `Qt.WindowType.WindowDoesNotAcceptFocus` và thuộc tính `Qt.WidgetAttribute.WA_ShowWithoutActivating` cho cửa sổ `QuickPanel`.
+     - Đảm bảo cờ mở rộng Win32 `WS_EX_NOACTIVATE` (0x08000000) được duy trì liên tục trên `GWL_EXSTYLE`. Tuyệt đối không gọi `SetForegroundWindow` hay `activateWindow()` khi mở panel trên nền game.
+     - Nhờ giữ nguyên tiêu điểm tuyệt đối trên tiến trình game, hệ thống DXGI không bao giờ kích hoạt ngắt kết nối chế độ quét (Display Mode Switch), triệt tiêu hoàn toàn hiện tượng nháy đen ở cả 2 chiều mở panel và click lại vào game.
+  2. *Truy vấn độ phân giải trực tiếp từ cửa sổ game đang hoạt động*:
+     - Thay vì phụ thuộc vào `GetSystemMetrics` vốn dễ bị nhiễu động khi GPU đổi độ phân giải, hệ thống đọc trực tiếp kích thước khung chữ nhật của cửa sổ game đang nắm quyền hiển thị thông qua `user32.GetWindowRect(user32.GetForegroundWindow(), ...)`, bảo đảm chiều cao và tọa độ đặt panel chuẩn xác ngay từ khung hình đầu tiên.
+  3. *Tự động khởi chạy tiến trình ngầm RTSS.exe từ Python (RTSS Process Lifecycle Guardian)*:
+     - Trong [src/hardware/rtss_service.py](file:///d:/dev-projects/windows-handheld-tool/src/hardware/rtss_service.py), bổ sung phương thức `ensure_running()`: Nếu `OpenFileMappingW` trả về con trỏ rỗng, tự động truy vấn Registry tìm đường dẫn `RTSS.exe` và kích hoạt tiến trình ngầm thông qua `subprocess.Popen` (với cờ `CREATE_NO_WINDOW = 0x08000000`). Chờ 500ms để Kernel tạo đối tượng `RTSSSharedMemoryV2` rồi tự động liên kết lại vùng nhớ.
+  4. *Cơ chế hiển thị độc quyền bất chấp độ phân giải (Native Exclusive Fullscreen Overlay via ZBID_UIACCESS & Hardware Direct Flip Interception)*:
+     - Mục tiêu cốt lõi của công cụ là **bắt buộc phải hiển thị overlay đè trực tiếp lên 100% các thể loại Game Toàn màn hình độc quyền (Exclusive Fullscreen)**, bất kể game đang chạy ở độ phân giải thấp hơn độ phân giải Windows (ví dụ: Game 720p/900p trên màn hình 1080p), tuyệt đối không yêu cầu người dùng phải chuyển game sang chế độ Không viền (Borderless Windowed).
+     - Bằng cách đặt cửa sổ trong dải đặc quyền `ZBID_UIACCESS` (Band 2) kết hợp cờ `WS_EX_NOACTIVATE` (0x08000000) và chặn thông điệp `WM_MOUSEACTIVATE` bằng mã `MA_NOACTIVATE`, card đồ họa duy trì luồng quét Direct Flip của game liên tục mà không gây ra bất kỳ đợt chuyển đổi chế độ quét màn hình nào. Bảng điều khiển được render trực tiếp vào lớp phủ phần cứng cấp hệ thống đè lên khung hình của game FSE.
+
+```mermaid
+flowchart TD
+    subgraph ModeSwitch["Cơ chế gây nháy đen (Display Mode Switch)"]
+        A["Game FSE sở hữu Direct Flip (Không qua DWM)"] -->|Nhấn Hotkey mở Panel| B["Qt WebEngine kích hoạt sự kiện Window Show"]
+        B -->|DXGI phát hiện mất tiêu điểm| C["Card đồ họa ngắt luồng quét VSync"]
+        C -->|Tái đàm phán tín hiệu màn hình| D["MÀN HÌNH NHÁY ĐEN (200-400ms)"]
+        D -->|DWM giành quyền hiển thị| E["Panel xuất hiện trên Desktop"]
+        E -->|Click chuột lại vào Game| F["Game lấy lại tiêu điểm (WM_SETFOCUS)"]
+        F -->|DXGI tái kích hoạt Direct Flip| G["MÀN HÌNH LẠI NHÁY ĐEN LẦN 2"]
+    end
+
+    subgraph Solution["Giải pháp triệt tiêu nháy đen"]
+        H["Gán WS_EX_NOACTIVATE & WA_ShowWithoutActivating"] --> I["Game FSE không bao giờ mất tiêu điểm"]
+        I --> J["DXGI không chuyển đổi chế độ quét"]
+        J --> K["Panel hiển thị tức thời đè lên game không chớp màn hình"]
+    end
+```

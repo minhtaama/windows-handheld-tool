@@ -27,6 +27,8 @@ class AppController(QObject):
         self.panel.request_close.connect(self.win_mgr.hide)
         self.panel.request_width_change.connect(self._on_width_changed)
         self.panel.request_scale_change.connect(self._on_scale_changed)
+        self.panel.bridge.requestBringToFront.connect(self.win_mgr.bring_to_front)
+        self.win_mgr.visibility_changed.connect(self.panel.bridge.overlayVisibilityChanged.emit)
 
     @Slot(int)
     def _on_width_changed(self, width: int):
@@ -79,9 +81,9 @@ def main():
     win_mgr = WindowManager(panel)
     controller = AppController(panel, win_mgr)
 
-    # Đưa cửa sổ vào trạng thái ban đầu (Docked bên phải theo tỷ lệ width_percent)
+    # Đưa cửa sổ vào trạng thái ban đầu (Docked bên phải theo tỷ lệ width_percent, ẩn sẵn ở khay hệ thống)
     win_mgr.update_geometry(initial_percent)
-    win_mgr.show()
+    win_mgr.hide()
 
     # 4. Khởi tạo Khay hệ thống (System Tray Icon)
     tray = QSystemTrayIcon(create_tray_icon(), app)
@@ -107,6 +109,7 @@ def main():
 
     # 5. Khởi tạo Dịch vụ Phím tắt toàn cục (Hotkey cho Overlay và Bàn phím ảo)
     from src.services.virtual_keyboard import VirtualKeyboardService
+    VirtualKeyboardService.ensure_registry_settings()
     hotkey_svc = HotkeyService()
     overlay_hk = config.get("hotkey", "toggle_overlay", default="Ctrl+Shift+Q")
     keyboard_hk = config.get("hotkey", "toggle_keyboard", default="Ctrl+Alt+K")

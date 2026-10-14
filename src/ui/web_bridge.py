@@ -24,6 +24,7 @@ class WebBridge(QObject):
     requestClose = Signal()
     requestWidthChange = Signal(int)
     requestScaleChange = Signal(float)
+    requestBringToFront = Signal()
     requestExitApp = Signal()
 
     def __init__(self, parent=None):
@@ -122,6 +123,14 @@ class WebBridge(QObject):
         self.rtss_svc.set_fps_limit(limit)
         self.config.set(limit, "hardware", "rtss", "fps_limit")
 
+    @Slot(str)
+    def updateOsdText(self, text: str):
+        self.rtss_svc.update_osd(text)
+
+    @Slot()
+    def clearOsdText(self):
+        self.rtss_svc.clear_osd()
+
     @Slot(str, bool)
     def setOsdMetric(self, metric_key: str, enabled: bool):
         self.config.set(enabled, "hardware", "rtss", f"osd_show_{metric_key}")
@@ -157,6 +166,10 @@ class WebBridge(QObject):
     def setAutostart(self, enabled: bool):
         AutostartService.set_enabled(enabled)
         self.config.set(enabled, "system", "autostart")
+
+    @Slot()
+    def bringToFront(self):
+        self.requestBringToFront.emit()
 
     @Slot()
     def closeOverlay(self):

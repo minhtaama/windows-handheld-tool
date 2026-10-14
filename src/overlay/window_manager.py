@@ -21,8 +21,66 @@ SWP_NOACTIVATE   = 0x0010
 SWP_SHOWWINDOW   = 0x0040
 SWP_HIDEWINDOW   = 0x0080
 
-HWND_TOPMOST     = -1
-ZBID_SYSTEM_TOOLS = 2
+HWND_TOP         = wintypes.HWND(0)
+HWND_BOTTOM      = wintypes.HWND(1)
+HWND_TOPMOST     = wintypes.HWND(-1)
+HWND_NOTOPMOST   = wintypes.HWND(-2)
+
+# Các định danh phân lớp Z-Order Band (ZBID) nội vi của Windows
+ZBID_DEFAULT      = 0
+ZBID_DESKTOP      = 1
+ZBID_UIACCESS     = 2   # Phân lớp đặc quyền UIAccess (dùng cho On-Screen Keyboard, Accessibility Overlay)
+ZBID_SYSTEM_TOOLS = 16  # Phân lớp công cụ hệ thống cấp cao (Windows 10/11)
+
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+# Khai báo đầy đủ nguyên mẫu hàm 64-bit để tránh lỗi 1400 (ERROR_INVALID_WINDOW_HANDLE) do cắt xén con trỏ HWND
+user32.SetWindowPos.argtypes = [
+    wintypes.HWND,
+    wintypes.HWND,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    wintypes.UINT,
+]
+user32.SetWindowPos.restype = wintypes.BOOL
+
+user32.BringWindowToTop.argtypes = [wintypes.HWND]
+user32.BringWindowToTop.restype = wintypes.BOOL
+
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+user32.SetForegroundWindow.restype = wintypes.BOOL
+
+user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+user32.GetSystemMetrics.restype = ctypes.c_int
+
+user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.GetWindowLongW.restype = wintypes.LONG
+
+user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.LONG]
+user32.SetWindowLongW.restype = wintypes.LONG
+
+# Khai báo nguyên mẫu API nội vi quản lý Window Band
+pfnSetWindowBand = getattr(user32, "SetWindowBand", None)
+if pfnSetWindowBand:
+    pfnSetWindowBand.argtypes = [wintypes.HWND, wintypes.HWND, wintypes.DWORD]
+    pfnSetWindowBand.restype = wintypes.BOOL
+
+pfnGetWindowBand = getattr(user32, "GetWindowBand", None)
+if pfnGetWindowBand:
+    pfnGetWindowBand.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    pfnGetWindowBand.restype = wintypes.BOOL
+
+pfnCreateWindowInBand = getattr(user32, "CreateWindowInBand", None)
+if pfnCreateWindowInBand:
+    pfnCreateWindowInBand.argtypes = [
+        wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+        wintypes.DWORD
+    ]
+    pfnCreateWindowInBand.restype = wintypes.HWND
 
 class WindowManager(QObject):
     visibility_changed = Signal(bool)
@@ -30,41 +88,63 @@ class WindowManager(QObject):
     def __init__(self, widget: QWidget):
         super().__init__()
         self.widget = widget
-        self.hwnd = widget.winId()
+        self.hwnd = wintypes.HWND(widget.winId())
         self.is_visible = False
         self.panel_width = 380
+        self.current_band = ZBID_DESKTOP
         self._init_win32_attributes()
 
     def _init_win32_attributes(self):
-        user32 = ctypes.windll.user32
-        # Thiết lập Extended Window Styles: WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+        # 1. Thiết lập Extended Window Styles: Đảm bảo có WS_EX_TOOLWINDOW và WS_EX_TOPMOST
         try:
             current_style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
-            new_style = current_style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST
+            new_style = (current_style & ~WS_EX_NOACTIVATE) | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
             user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, new_style)
-            logger.info(f"Đã gán cờ WS_EX_NOACTIVATE và WS_EX_TOOLWINDOW cho HWND {self.hwnd}.")
+            logger.info(f"Đã gán cờ WS_EX_TOOLWINDOW và WS_EX_TOPMOST cho HWND {self.hwnd}.")
         except Exception as e:
             logger.warning(f"Lỗi khi gán ExStyle: {e}")
 
-        # Thử đưa vào phân lớp hệ thống ZBID_SYSTEM_TOOLS = 2 nếu tiến trình có quyền uiAccess
-        try:
-            pfnSetWindowBand = getattr(user32, "SetWindowBand", None)
-            if pfnSetWindowBand:
-                res = pfnSetWindowBand(self.hwnd, None, ZBID_SYSTEM_TOOLS)
-                if res:
-                    logger.info("Đã gán thành công phân lớp ZBID_SYSTEM_TOOLS.")
-                else:
-                    logger.info("SetWindowBand bỏ qua (Yêu cầu TokenUIAccess trong môi trường Production).")
-        except Exception as e:
-            logger.warning(f"Lỗi gọi SetWindowBand: {e}")
+        # 2. Thử đưa vào phân lớp hệ thống ZBID_UIACCESS = 2 (Đặc quyền UIAccess)
+        band_applied = False
+        if pfnSetWindowBand:
+            for target_band in (ZBID_UIACCESS, ZBID_SYSTEM_TOOLS):
+                try:
+                    res = pfnSetWindowBand(self.hwnd, 0, target_band)
+                    if res:
+                        self.current_band = target_band
+                        band_applied = True
+                        logger.info(f"Đã gán thành công cửa sổ vào phân lớp Z-Band: {target_band}.")
+                        break
+                except Exception as e:
+                    logger.debug(f"Thử gán Z-Band {target_band}: {e}")
+
+        if not band_applied:
+            err = ctypes.get_last_error()
+            logger.info(f"SetWindowBand bỏ qua (Mã {err}: Cần TokenUIAccess khi chạy từ Program Files đã ký số).")
+
+        # 3. Đọc lại phân lớp thực tế qua GetWindowBand
+        if pfnGetWindowBand:
+            try:
+                b = wintypes.DWORD()
+                if pfnGetWindowBand(self.hwnd, ctypes.byref(b)):
+                    self.current_band = b.value
+                    logger.info(f"Phân lớp Z-Band thực tế hiện tại của cửa sổ: {self.current_band}")
+            except Exception as e:
+                logger.debug(f"Lỗi GetWindowBand: {e}")
+
+    def _get_screen_dimensions(self) -> tuple[int, int]:
+        sw = user32.GetSystemMetrics(0)  # SM_CXSCREEN (Độ phân giải quét thực tế tức thời)
+        sh = user32.GetSystemMetrics(1)  # SM_CYSCREEN
+        if sw > 0 and sh > 0:
+            return sw, sh
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            geo = screen.geometry()
+            return geo.width(), geo.height()
+        return 1920, 1080
 
     def update_geometry(self, width: int):
-        screen = QGuiApplication.primaryScreen()
-        if not screen:
-            return
-        geo = screen.geometry()
-        screen_w = geo.width()
-        screen_h = geo.height()
+        screen_w, screen_h = self._get_screen_dimensions()
 
         # Nếu giá trị truyền vào là phần trăm (<= 100), tính ra pixel thực tế
         if width <= 100:
@@ -72,48 +152,76 @@ class WindowManager(QObject):
         else:
             actual_width = width
 
-        # Giới hạn an toàn: tối thiểu 320px và không vượt quá màn hình
-        self.panel_width = max(320, min(screen_w, actual_width))
+        # Giới hạn an toàn: tối thiểu 300px và không vượt quá chiều rộng màn hình quét hiện tại
+        self.panel_width = max(300, min(screen_w, actual_width))
 
         x = screen_w - self.panel_width
         y = 0
 
-        user32 = ctypes.windll.user32
-        flags = SWP_NOZORDER | SWP_NOACTIVATE
         if not self.is_visible:
             # Nếu đang ẩn, dời ra ngoài màn hình bên phải
             x = screen_w
 
-        user32.SetWindowPos(self.hwnd, 0, x, y, self.panel_width, screen_h, flags)
+        self.widget.setGeometry(x, y, self.panel_width, screen_h)
+        flags = SWP_NOACTIVATE | (SWP_SHOWWINDOW if self.is_visible else 0)
+        res = user32.SetWindowPos(
+            self.hwnd,
+            HWND_TOPMOST,
+            x, y, self.panel_width, screen_h,
+            flags
+        )
+        if not res:
+            logger.warning(f"SetWindowPos thất bại trong update_geometry (Lỗi: {ctypes.get_last_error()})")
+
+    def bring_to_front(self):
+        """Đưa cửa sổ lên đỉnh cao nhất của dải Z-Order khi người dùng chạm hoặc click chuột"""
+        if not self.is_visible:
+            return
+        user32.BringWindowToTop(self.hwnd)
+        user32.SetWindowPos(
+            self.hwnd,
+            HWND_TOPMOST,
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+        )
+        user32.SetForegroundWindow(self.hwnd)
+        self.widget.activateWindow()
 
     def show(self):
         self.is_visible = True
         self.widget.show()
         self.update_geometry(self.panel_width)
-        user32 = ctypes.windll.user32
-        user32.SetWindowPos(
+
+        # 1. BringWindowToTop: Ép đưa cửa sổ lên vị trí đầu tiên của dải Band hiện tại
+        user32.BringWindowToTop(self.hwnd)
+
+        # 2. SetWindowPos với HWND_TOPMOST và SWP_SHOWWINDOW
+        res = user32.SetWindowPos(
             self.hwnd,
             HWND_TOPMOST,
             0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE
         )
+        if not res:
+            logger.warning(f"SetWindowPos thất bại trong show (Lỗi: {ctypes.get_last_error()})")
+
         self.visibility_changed.emit(True)
-        logger.info("Hiển thị thanh điều khiển Handheld (Show Dock).")
+        logger.info(f"Hiển thị thanh điều khiển Handheld (Phân lớp Band: {self.current_band} - Safe Fullscreen Overlay).")
 
     def hide(self):
         self.is_visible = False
-        screen = QGuiApplication.primaryScreen()
-        screen_w = screen.geometry().width() if screen else 1920
-        screen_h = screen.geometry().height() if screen else 1080
+        screen_w, screen_h = self._get_screen_dimensions()
 
-        user32 = ctypes.windll.user32
-        # Dời tọa độ ra ngoài màn hình X = screen_w nhưng vẫn giữ HWND mở để thông điệp và event không bị ngắt
-        user32.SetWindowPos(
+        # Dời tọa độ ra ngoài màn hình X = screen_w nhưng vẫn giữ HWND mở để websocket và event không bị ngắt
+        self.widget.setGeometry(screen_w, 0, self.panel_width, screen_h)
+        res = user32.SetWindowPos(
             self.hwnd,
-            0,
+            HWND_TOPMOST,
             screen_w, 0, self.panel_width, screen_h,
-            SWP_NOZORDER | SWP_NOACTIVATE
+            SWP_NOACTIVATE
         )
+        if not res:
+            logger.warning(f"SetWindowPos thất bại trong hide (Lỗi: {ctypes.get_last_error()})")
         self.visibility_changed.emit(False)
         logger.info("Đã thu nhỏ / ẩn thanh điều khiển (Hide Dock).")
 
@@ -122,3 +230,4 @@ class WindowManager(QObject):
             self.hide()
         else:
             self.show()
+
