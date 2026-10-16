@@ -2,6 +2,17 @@ import sys
 import os
 import ctypes
 
+# Thiết lập Per-Monitor V2 DPI Awareness trước khi nạp bất kỳ cửa sổ nào
+# DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+try:
+    user32 = ctypes.windll.user32
+    if hasattr(user32, "SetProcessDpiAwarenessContext"):
+        user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    else:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    pass
+
 # Thiết lập cờ Chromium hỗ trợ trong suốt và tương thích với tiến trình đặc quyền TokenUIAccess trước khi nạp QtWebEngine
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-transparent-visuals --no-sandbox --disable-gpu-sandbox"
 os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
@@ -72,6 +83,7 @@ def main():
 
     # 3. Quản lý cửa sổ Win32 và phân lớp hệ thống
     win_mgr = WindowManager(panel)
+    panel.win_mgr = win_mgr
     controller = AppController(panel, win_mgr)
 
     # Đưa cửa sổ vào trạng thái ban đầu (Docked bên phải theo tỷ lệ width_percent, ẩn sẵn ở khay hệ thống)

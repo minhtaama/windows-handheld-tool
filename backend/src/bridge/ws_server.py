@@ -40,6 +40,11 @@ class WsServer(QObject):
         try:
             init_json = self.bridge.getInitialState()
             client.sendTextMessage(json.dumps({"type": "init", "data": json.loads(init_json)}))
+            # Đồng bộ ngay trạng thái ẩn/hiện thực tế của cửa sổ khi trình duyệt vừa kết nối
+            parent_panel = self.parent()
+            if parent_panel and hasattr(parent_panel, "win_mgr") and parent_panel.win_mgr:
+                is_vis = bool(parent_panel.win_mgr.is_visible)
+                client.sendTextMessage(json.dumps({"type": "visibility", "data": {"visible": is_vis}}))
         except Exception as e:
             logger.error(f"Lỗi khi gửi initial state sang client: {e}")
 

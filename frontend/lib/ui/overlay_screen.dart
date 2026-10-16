@@ -30,7 +30,7 @@ class _OverlayScreenState extends State<OverlayScreen>
       vsync: this,
       duration: const Duration(milliseconds: 200),
       reverseDuration: const Duration(milliseconds: 160),
-      value: 1.0,
+      value: 0.0,
     );
 
     _fadeAnim = CurvedAnimation(

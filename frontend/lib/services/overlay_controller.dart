@@ -11,7 +11,7 @@ class OverlayController extends ChangeNotifier {
 
   OverlayController._();
 
-  bool _isVisible = true;
+  bool _isVisible = false;
   bool get isVisible => _isVisible;
   bool _isClosing = false;
 
