@@ -1,6 +1,6 @@
 import ctypes
 from ctypes import wintypes
-from PySide6.QtCore import QObject, Signal, QRect
+from PySide6.QtCore import QObject, Signal, Slot, QRect, QTimer
 from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QGuiApplication
 from src.core.logger import setup_logger
@@ -97,19 +97,32 @@ class WindowManager(QObject):
     def __init__(self, widget: QWidget):
         super().__init__()
         self.widget = widget
-        self.hwnd = wintypes.HWND(widget.winId())
+        self.hwnd = wintypes.HWND(0)
         self.is_visible = False
+        self._is_closing = False
+        self.width_setting = 35
         self.panel_width = 380
         self.current_band = ZBID_DESKTOP
+
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._perform_physical_hide)
+
+        # Đặt tọa độ ngoài màn hình trước khi gọi show() lần đầu để khởi tạo QWebEngineView ngầm không nháy hình
+        screen_w, screen_h = self._get_screen_dimensions()
+        self.widget.setGeometry(screen_w, 0, screen_w, screen_h)
+        self.widget.show()
+
+        self.hwnd = wintypes.HWND(self.widget.winId())
         self._init_win32_attributes()
 
     def _init_win32_attributes(self):
-        # 1. Thiết lập Extended Window Styles: Đảm bảo có WS_EX_TOOLWINDOW và WS_EX_TOPMOST
+        # 1. Thiết lập Extended Window Styles: Đảm bảo có WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW và WS_EX_TOPMOST
         try:
             current_style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
-            new_style = (current_style & ~WS_EX_NOACTIVATE) | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+            new_style = current_style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
             user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, new_style)
-            logger.info(f"Đã gán cờ WS_EX_TOOLWINDOW và WS_EX_TOPMOST cho HWND {self.hwnd}.")
+            logger.info(f"Đã gán cờ WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW và WS_EX_TOPMOST cho HWND {self.hwnd}.")
         except Exception as e:
             logger.warning(f"Lỗi khi gán ExStyle: {e}")
 
@@ -142,15 +155,19 @@ class WindowManager(QObject):
                 logger.debug(f"Lỗi GetWindowBand: {e}")
 
     def _get_screen_dimensions(self) -> tuple[int, int]:
-        # 1. Thử lấy kích thước khung quét thực tế từ cửa sổ Foreground (tiến trình game đang chạy)
+        # 1. Thử lấy kích thước khung quét thực tế từ cửa sổ Foreground nếu đó là ứng dụng Toàn màn hình (tọa độ 0, 0)
         try:
+            own_hwnd = self.hwnd.value or 0
             fg_hwnd = user32.GetForegroundWindow()
-            if fg_hwnd and fg_hwnd != self.hwnd:
-                rc = wintypes.RECT()
-                if user32.GetClientRect(fg_hwnd, ctypes.byref(rc)):
-                    w = rc.right - rc.left
-                    h = rc.bottom - rc.top
-                    if w >= 640 and h >= 480:
+            if fg_hwnd and fg_hwnd != own_hwnd:
+                win_rc = wintypes.RECT()
+                client_rc = wintypes.RECT()
+                if user32.GetWindowRect(fg_hwnd, ctypes.byref(win_rc)) and user32.GetClientRect(fg_hwnd, ctypes.byref(client_rc)):
+                    w = client_rc.right - client_rc.left
+                    h = client_rc.bottom - client_rc.top
+                    win_w = win_rc.right - win_rc.left
+                    win_h = win_rc.bottom - win_rc.top
+                    if win_rc.left == 0 and win_rc.top == 0 and win_w == w and win_h == h and w >= 640 and h >= 480:
                         return w, h
         except Exception as e:
             logger.debug(f"Không thể đọc kích thước ForegroundWindow: {e}")
@@ -168,7 +185,9 @@ class WindowManager(QObject):
             return geo.width(), geo.height()
         return 1920, 1080
 
+    @Slot(int)
     def update_geometry(self, width: int):
+        self.width_setting = width
         screen_w, screen_h = self._get_screen_dimensions()
 
         # Nếu giá trị truyền vào là phần trăm (<= 100), tính ra pixel thực tế
@@ -177,27 +196,25 @@ class WindowManager(QObject):
         else:
             actual_width = width
 
-        # Giới hạn an toàn: tối thiểu 300px và không vượt quá chiều rộng màn hình quét hiện tại
         self.panel_width = max(300, min(screen_w, actual_width))
 
-        x = screen_w - self.panel_width
+        # Khi hiển thị: phủ toàn màn hình (0, 0, screen_w, screen_h) để chứa lớp nền đen mờ (Backdrop) + Panel bên phải
+        # Khi ẩn: dời hoàn toàn ra ngoài màn hình bên phải (x = screen_w) để trả lại tương tác chuột cho Game/Desktop
+        x = 0 if self.is_visible else screen_w
         y = 0
 
-        if not self.is_visible:
-            # Nếu đang ẩn, dời ra ngoài màn hình bên phải
-            x = screen_w
-
-        self.widget.setGeometry(x, y, self.panel_width, screen_h)
+        self.widget.setGeometry(x, y, screen_w, screen_h)
         flags = SWP_NOACTIVATE | (SWP_SHOWWINDOW if self.is_visible else 0)
         res = user32.SetWindowPos(
             self.hwnd,
             HWND_TOPMOST,
-            x, y, self.panel_width, screen_h,
+            x, y, screen_w, screen_h,
             flags
         )
         if not res:
             logger.warning(f"SetWindowPos thất bại trong update_geometry (Lỗi: {ctypes.get_last_error()})")
 
+    @Slot()
     def bring_to_front(self):
         """Đưa cửa sổ lên đỉnh cao nhất của dải Z-Order khi người dùng chạm hoặc click chuột mà không cướp focus"""
         if not self.is_visible:
@@ -210,10 +227,14 @@ class WindowManager(QObject):
             SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE
         )
 
+    @Slot()
     def show(self):
+        self._hide_timer.stop()
+        self._is_closing = False
         self.is_visible = True
-        self.widget.show()
-        self.update_geometry(self.panel_width)
+        if not self.widget.isVisible():
+            self.widget.show()
+        self.update_geometry(self.width_setting)
 
         # 1. BringWindowToTop: Ép đưa cửa sổ lên vị trí đầu tiên của dải Band hiện tại
         user32.BringWindowToTop(self.hwnd)
@@ -229,28 +250,50 @@ class WindowManager(QObject):
             logger.warning(f"SetWindowPos thất bại trong show (Lỗi: {ctypes.get_last_error()})")
 
         self.visibility_changed.emit(True)
-        logger.info(f"Hiển thị thanh điều khiển Handheld (Phân lớp Band: {self.current_band} - Safe Fullscreen Overlay).")
+        logger.info(f"Hiển thị thanh điều khiển Handheld Fullscreen (Phân lớp Band: {self.current_band}).")
 
-    def hide(self):
+    def _perform_physical_hide(self):
+        self._hide_timer.stop()
+        self._is_closing = False
         self.is_visible = False
         screen_w, screen_h = self._get_screen_dimensions()
 
         # Dời tọa độ ra ngoài màn hình X = screen_w nhưng vẫn giữ HWND mở để websocket và event không bị ngắt
-        self.widget.setGeometry(screen_w, 0, self.panel_width, screen_h)
+        self.widget.setGeometry(screen_w, 0, screen_w, screen_h)
+        if not self.widget.isVisible():
+            self.widget.show()
         res = user32.SetWindowPos(
             self.hwnd,
             HWND_TOPMOST,
-            screen_w, 0, self.panel_width, screen_h,
+            screen_w, 0, screen_w, screen_h,
             SWP_NOACTIVATE
         )
         if not res:
             logger.warning(f"SetWindowPos thất bại trong hide (Lỗi: {ctypes.get_last_error()})")
-        self.visibility_changed.emit(False)
         logger.info("Đã thu nhỏ / ẩn thanh điều khiển (Hide Dock).")
 
+    @Slot()
+    def request_animated_hide(self):
+        """Yêu cầu Flutter chạy hiệu ứng Fade-Out trước, sau đó mới dời cửa sổ vật lý ra khỏi màn hình"""
+        if not self.is_visible or self._is_closing:
+            return
+        self._is_closing = True
+        self.visibility_changed.emit(False)
+        # Hẹn giờ dự phòng 240ms phòng trường hợp WebSocket chưa phản hồi lệnh closeOverlay
+        self._hide_timer.start(240)
+
+    @Slot()
+    def hide(self):
+        """Được gọi khi khởi tạo hoặc ngay sau khi Flutter đã hoàn tất hiệu ứng Fade-Out (closeOverlay)"""
+        was_closing = self._is_closing
+        self._perform_physical_hide()
+        if not was_closing:
+            self.visibility_changed.emit(False)
+
+    @Slot()
     def toggle(self):
-        if self.is_visible:
-            self.hide()
+        if self.is_visible and not self._is_closing:
+            self.request_animated_hide()
         else:
             self.show()
 

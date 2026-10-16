@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../core/logger.dart';
+import 'overlay_controller.dart';
 import 'system_telemetry_service.dart';
 
 /// Dịch vụ cầu nối WebSocket giao tiếp thời gian thực giữa giao diện Flutter Web
@@ -98,6 +99,13 @@ class BridgeService {
         _parseTelemetry(data);
       } else if (type == 'config') {
         config.value = data;
+      } else if (type == 'visibility') {
+        final visible = (data['visible'] as bool?) ?? true;
+        if (visible) {
+          OverlayController.instance.showOverlay();
+        } else {
+          OverlayController.instance.hideOverlay();
+        }
       }
     } catch (e) {
       _logger.error('Lỗi phân tích cú pháp gói tin WS: $e');

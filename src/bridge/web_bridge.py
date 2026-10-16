@@ -15,7 +15,7 @@ from src.core.logger import setup_logger
 logger = setup_logger("WebBridge")
 
 class WebBridge(QObject):
-    # Signals sent to React frontend
+    # Signals sent to React/Flutter frontend
     telemetryUpdated = Signal(str)
     configUpdated = Signal(str)
     overlayVisibilityChanged = Signal(bool)
@@ -178,3 +178,4 @@ class WebBridge(QObject):
     @Slot()
     def exitApp(self):
         self.requestExitApp.emit()
+

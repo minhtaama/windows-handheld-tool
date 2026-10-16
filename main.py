@@ -1,6 +1,11 @@
 import sys
 import os
 import ctypes
+
+# Thiết lập cờ Chromium hỗ trợ trong suốt và tương thích với tiến trình đặc quyền TokenUIAccess trước khi nạp QtWebEngine
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-transparent-visuals --no-sandbox --disable-gpu-sandbox"
+os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
+
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QWidget
 from PySide6.QtGui import QIcon, QAction, QPixmap, QColor, QPainter
 from PySide6.QtCore import Qt, QObject, Signal, Slot
@@ -8,8 +13,7 @@ from PySide6.QtCore import Qt, QObject, Signal, Slot
 from src.core.config import ConfigManager
 from src.core.logger import setup_logger
 from src.overlay.window_manager import WindowManager
-from src.ui.quick_panel import QuickPanel
-from src.ui.style import DARK_THEME_QSS
+from src.overlay.quick_panel import QuickPanel
 from src.input.hotkey_service import HotkeyService
 from src.input.gamepad_service import GamepadService
 
@@ -22,12 +26,12 @@ class AppController(QObject):
         super().__init__()
         self.panel = panel
         self.win_mgr = win_mgr
-        self.toggle_requested.connect(self.win_mgr.toggle)
+        self.toggle_requested.connect(self.win_mgr.toggle, Qt.ConnectionType.QueuedConnection)
 
-        self.panel.request_close.connect(self.win_mgr.hide)
-        self.panel.request_width_change.connect(self._on_width_changed)
-        self.panel.request_scale_change.connect(self._on_scale_changed)
-        self.panel.bridge.requestBringToFront.connect(self.win_mgr.bring_to_front)
+        self.panel.request_close.connect(self.win_mgr.hide, Qt.ConnectionType.QueuedConnection)
+        self.panel.request_width_change.connect(self._on_width_changed, Qt.ConnectionType.QueuedConnection)
+        self.panel.request_scale_change.connect(self._on_scale_changed, Qt.ConnectionType.QueuedConnection)
+        self.panel.bridge.requestBringToFront.connect(self.win_mgr.bring_to_front, Qt.ConnectionType.QueuedConnection)
         self.win_mgr.visibility_changed.connect(self.panel.bridge.overlayVisibilityChanged.emit)
 
     @Slot(int)
@@ -57,25 +61,12 @@ def main():
     logger.info("Khởi động Windows Handheld Tool (Python Host Runtime)...")
     config = ConfigManager()
 
-    # Thiết lập cờ Chromium hỗ trợ trong suốt và tăng tốc đồ họa
-    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-transparent-visuals"
-
     # 1. Khởi tạo Qt Application
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    app.setStyleSheet(DARK_THEME_QSS)
 
     # 2. Khởi tạo Panel Giao diện
     panel = QuickPanel()
-    panel.setWindowFlags(
-        Qt.WindowType.FramelessWindowHint |
-        Qt.WindowType.WindowStaysOnTopHint |
-        Qt.WindowType.Tool |
-        Qt.WindowType.WindowDoesNotAcceptFocus
-    )
-    panel.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-    panel.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-    panel.setStyleSheet("background: transparent;")
 
     initial_percent = config.get("overlay", "width_percent", default=35)
 

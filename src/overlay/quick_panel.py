@@ -1,6 +1,7 @@
 import os
 import sys
 import ctypes
+from ctypes import wintypes
 import urllib.request
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtCore import Qt, Signal, QUrl, QCoreApplication, QEvent
@@ -9,9 +10,9 @@ from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtGui import QKeySequence, QShortcut, QColor
 
-from src.ui.web_bridge import WebBridge
-from src.ui.ws_server import WsServer
-from src.ui.static_server import StaticServer
+from src.bridge.web_bridge import WebBridge
+from src.bridge.ws_server import WsServer
+from src.bridge.static_server import StaticServer
 from src.core.logger import setup_logger
 
 logger = setup_logger("QuickPanel")
@@ -23,6 +24,16 @@ class QuickPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setStyleSheet("background: transparent;")
+
         self.bridge = WebBridge(self)
         self.ws_server = WsServer(self.bridge, port=8765, parent=self)
         self.static_server = None
@@ -30,36 +41,17 @@ class QuickPanel(QWidget):
         self._setup_ui()
         self._connect_bridge_signals()
 
-    def bring_to_front(self):
-        """Đưa cửa sổ lên đỉnh cao nhất của dải Topmost mà KHÔNG cướp focus của game"""
-        from ctypes import wintypes
-        hwnd = wintypes.HWND(self.winId())
-        user32 = ctypes.windll.user32
-        user32.SetWindowPos.argtypes = [
-            wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
-            ctypes.c_int, ctypes.c_int, wintypes.UINT
-        ]
-        user32.SetWindowPos.restype = wintypes.BOOL
-
-        user32.SetWindowPos(
-            hwnd,
-            wintypes.HWND(-1),  # HWND_TOPMOST
-            0, 0, 0, 0,
-            0x0001 | 0x0002 | 0x0040 | 0x0010  # SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE
-        )
-
     def mousePressEvent(self, event):
-        self.bring_to_front()
+        self.bridge.requestBringToFront.emit()
         super().mousePressEvent(event)
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.MouseButtonPress:
-            self.bring_to_front()
+            self.bridge.requestBringToFront.emit()
         return super().eventFilter(watched, event)
 
     def nativeEvent(self, eventType, message):
         if eventType == b"windows_generic_MSG":
-            from ctypes import wintypes
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == 0x0021:  # WM_MOUSEACTIVATE
                 # MA_NOACTIVATE = 3 (Không kích hoạt cửa sổ, bảo toàn tuyệt đối tiêu điểm của game)
@@ -72,8 +64,6 @@ class QuickPanel(QWidget):
             proxy.installEventFilter(self)
 
     def _setup_ui(self):
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setStyleSheet("background: transparent;")
         self.installEventFilter(self)
 
         layout = QVBoxLayout(self)
@@ -181,3 +171,4 @@ class QuickPanel(QWidget):
         if self.static_server:
             self.static_server.stop()
         super().closeEvent(event)
+

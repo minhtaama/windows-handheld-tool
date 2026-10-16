@@ -34,9 +34,11 @@ echo.
 
 :: 3. Terminate running process and stop driver service to avoid file lock
 echo [*] Step 2/6: Stopping active processes and driver service...
-taskkill /F /IM "windows_handheld_tool.exe" 2>nul
+taskkill /F /T /IM "windows_handheld_tool.exe" 2>nul
+taskkill /F /T /IM "QtWebEngineProcess.exe" 2>nul
 taskkill /F /IM "python.exe" /FI "WINDOWTITLE eq Windows Handheld Tool*" 2>nul
 net stop "WinRing0_1_2_0" 2>nul
+timeout /t 1 >nul
 echo [OK] Environment unlocked.
 echo.
 
@@ -131,7 +133,11 @@ echo [*] Step 6/6: Deploying to C:\Program Files\WindowsHandheldTools\...
 set "TARGET_DIR=C:\Program Files\WindowsHandheldTools"
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 
-robocopy "%DIST_DIR%" "%TARGET_DIR%" /E /PURGE /R:2 /W:1 >nul
+if exist "%TARGET_DIR%\_internal\VCRUNTIME140.dll" (
+    robocopy "%DIST_DIR%" "%TARGET_DIR%" /E /PURGE /XF "VCRUNTIME140.dll" "VCRUNTIME140_1.dll" /R:2 /W:1 /NP /NDL
+) else (
+    robocopy "%DIST_DIR%" "%TARGET_DIR%" /E /PURGE /R:2 /W:1 /NP /NDL
+)
 :: Robocopy exit codes 0-7 indicate success
 if %errorlevel% geq 8 (
     echo [ERROR] Robocopy deployment failed with code %errorlevel%!

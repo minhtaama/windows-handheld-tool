@@ -1,4 +1,5 @@
 import '../services/bridge_service.dart';
+import '../services/overlay_controller.dart';
 
 /// Quản lý cấu hình đọc và lưu cho ứng dụng trong môi trường Web.
 class ConfigManager {
@@ -10,6 +11,7 @@ class ConfigManager {
     BridgeService.instance.config.addListener(() {
       if (BridgeService.instance.config.value.isNotEmpty) {
         _data = Map<String, dynamic>.from(BridgeService.instance.config.value);
+        OverlayController.instance.notifyListeners();
       }
     });
   }

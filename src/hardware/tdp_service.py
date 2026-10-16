@@ -2,6 +2,7 @@ import os
 import sys
 import ctypes
 import subprocess
+import threading
 from ctypes import c_void_p, c_ulong, c_float
 from typing import Optional, Tuple
 from src.core.logger import setup_logger
@@ -173,24 +174,27 @@ class TdpService:
                 logger.info(f"Đã đặt TDP = {watts}W qua RyzenAdj DLL.")
                 return True
 
-        # 2. Cơ chế thực thi dự phòng qua tệp thực thi CLI ryzenadj.exe
+        # 2. Cơ chế thực thi dự phòng qua tệp thực thi CLI ryzenadj.exe trên luồng nền
         if self.cli_path and os.path.isfile(self.cli_path):
-            try:
-                cmd = [
-                    self.cli_path,
-                    f"--stapm-limit={stapm_mw}",
-                    f"--fast-limit={fast_mw}",
-                    f"--slow-limit={slow_mw}",
-                ]
-                # 0x08000000 = CREATE_NO_WINDOW (chống nháy console khi đang chơi game)
-                res = subprocess.run(cmd, creationflags=0x08000000, capture_output=True, text=True, timeout=3)
-                if res.returncode == 0:
-                    logger.info(f"Đã đặt TDP = {watts}W qua CLI ryzenadj.exe.")
-                    return True
-                else:
-                    logger.warning(f"ryzenadj.exe báo lỗi ({res.returncode}): {res.stderr.strip() or res.stdout.strip()}")
-            except Exception as e:
-                logger.error(f"Lỗi khi gọi ryzenadj.exe CLI: {e}")
+            cli_exe = self.cli_path
+            def _bg_cli():
+                try:
+                    cmd = [
+                        cli_exe,
+                        f"--stapm-limit={stapm_mw}",
+                        f"--fast-limit={fast_mw}",
+                        f"--slow-limit={slow_mw}",
+                    ]
+                    res = subprocess.run(cmd, creationflags=0x08000000, capture_output=True, text=True, timeout=3)
+                    if res.returncode == 0:
+                        logger.info(f"Đã đặt TDP = {watts}W qua CLI ryzenadj.exe.")
+                    else:
+                        logger.warning(f"ryzenadj.exe báo lỗi ({res.returncode}): {res.stderr.strip() or res.stdout.strip()}")
+                except Exception as e:
+                    logger.error(f"Lỗi khi gọi ryzenadj.exe CLI: {e}")
+
+            threading.Thread(target=_bg_cli, daemon=True).start()
+            return True
 
         logger.info(f"[Quản lý năng lượng] Thiết lập mức TDP danh định: {watts}W (Đang chờ nạp driver Ring 0)")
         return True

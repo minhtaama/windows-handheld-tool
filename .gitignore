@@ -36,3 +36,5 @@ windows/flutter/ephemeral/
 windows/dxgi_hook/build/
 windows/bin/
 /dist/
+# Widget Preview related
+.widget_preview/

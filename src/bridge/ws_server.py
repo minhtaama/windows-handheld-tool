@@ -3,7 +3,7 @@ from typing import List
 from PySide6.QtCore import QObject, Slot
 from PySide6.QtNetwork import QHostAddress
 from PySide6.QtWebSockets import QWebSocketServer, QWebSocket
-from src.ui.web_bridge import WebBridge
+from src.bridge.web_bridge import WebBridge
 from src.core.logger import setup_logger
 
 logger = setup_logger("WsServer")
@@ -22,9 +22,10 @@ class WsServer(QObject):
         else:
             logger.error(f"Không thể khởi động WebSocket Server tại cổng {self.port}: {self.server.errorString()}")
 
-        # Lắng nghe Signal đẩy dữ liệu cảm biến từ WebBridge
+        # Lắng nghe Signal đẩy dữ liệu cảm biến và trạng thái hiển thị từ WebBridge
         self.bridge.telemetryUpdated.connect(self._broadcast_telemetry)
         self.bridge.configUpdated.connect(self._broadcast_config)
+        self.bridge.overlayVisibilityChanged.connect(self._broadcast_visibility)
 
     def _on_new_connection(self):
         client = self.server.nextPendingConnection()
@@ -64,6 +65,16 @@ class WsServer(QObject):
                 client.sendTextMessage(payload)
         except Exception as e:
             logger.error(f"Lỗi broadcast config: {e}")
+
+    def _broadcast_visibility(self, is_visible: bool):
+        if not self.clients:
+            return
+        try:
+            payload = json.dumps({"type": "visibility", "data": {"visible": bool(is_visible)}})
+            for client in self.clients:
+                client.sendTextMessage(payload)
+        except Exception as e:
+            logger.error(f"Lỗi broadcast visibility: {e}")
 
     def _on_message(self, client: QWebSocket, msg: str):
         try:
@@ -118,3 +129,4 @@ class WsServer(QObject):
             client.close()
         self.clients.clear()
         self.server.close()
+

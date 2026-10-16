@@ -554,9 +554,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       case GamepadButton.b:
         OverlayController.instance.hideOverlay();
         break;
-      case GamepadButton.x:
-        _handleGamepadX();
-        break;
       default:
         break;
     }
@@ -737,10 +734,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         }
         break;
     }
-  }
-
-  void _handleGamepadX() {
-    // Nút X hiện được xử lý trực tiếp bởi widget HelpBox đang giữ focus
   }
 
   void _updateTdp(int val) {

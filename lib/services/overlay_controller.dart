@@ -13,6 +13,7 @@ class OverlayController extends ChangeNotifier {
 
   bool _isVisible = true;
   bool get isVisible => _isVisible;
+  bool _isClosing = false;
 
   ConfigManager? config;
 
@@ -35,17 +36,31 @@ class OverlayController extends ChangeNotifier {
   }
 
   Future<void> showOverlay() async {
+    _isClosing = false;
     _isVisible = true;
     notifyListeners();
-    onAnimateShow?.call();
+    if (onAnimateShow != null) {
+      await onAnimateShow!();
+    }
   }
 
   Future<void> hideOverlay() async {
+    if (_isClosing) return;
+    _isClosing = true;
+    if (onAnimateHide != null) {
+      await onAnimateHide!();
+    }
+    _isVisible = false;
+    _isClosing = false;
+    notifyListeners();
     BridgeService.instance.closeOverlay();
-    onAnimateHide?.call();
   }
 
   Future<void> toggleOverlay() async {
-    hideOverlay();
+    if (_isVisible && !_isClosing) {
+      await hideOverlay();
+    } else {
+      await showOverlay();
+    }
   }
 }
