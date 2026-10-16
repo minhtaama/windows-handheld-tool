@@ -52,6 +52,15 @@ user32.BringWindowToTop.restype = wintypes.BOOL
 user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 user32.SetForegroundWindow.restype = wintypes.BOOL
 
+user32.GetForegroundWindow.argtypes = []
+user32.GetForegroundWindow.restype = wintypes.HWND
+
+user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+user32.GetClientRect.restype = wintypes.BOOL
+
+user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+user32.GetWindowRect.restype = wintypes.BOOL
+
 user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 user32.GetSystemMetrics.restype = ctypes.c_int
 
@@ -133,10 +142,26 @@ class WindowManager(QObject):
                 logger.debug(f"Lỗi GetWindowBand: {e}")
 
     def _get_screen_dimensions(self) -> tuple[int, int]:
+        # 1. Thử lấy kích thước khung quét thực tế từ cửa sổ Foreground (tiến trình game đang chạy)
+        try:
+            fg_hwnd = user32.GetForegroundWindow()
+            if fg_hwnd and fg_hwnd != self.hwnd:
+                rc = wintypes.RECT()
+                if user32.GetClientRect(fg_hwnd, ctypes.byref(rc)):
+                    w = rc.right - rc.left
+                    h = rc.bottom - rc.top
+                    if w >= 640 and h >= 480:
+                        return w, h
+        except Exception as e:
+            logger.debug(f"Không thể đọc kích thước ForegroundWindow: {e}")
+
+        # 2. Đọc độ phân giải quét vật lý tức thời qua SM_CXSCREEN, SM_CYSCREEN
         sw = user32.GetSystemMetrics(0)  # SM_CXSCREEN (Độ phân giải quét thực tế tức thời)
         sh = user32.GetSystemMetrics(1)  # SM_CYSCREEN
         if sw > 0 and sh > 0:
             return sw, sh
+
+        # 3. Fallback qua màn hình chính của Qt
         screen = QGuiApplication.primaryScreen()
         if screen:
             geo = screen.geometry()
@@ -174,7 +199,7 @@ class WindowManager(QObject):
             logger.warning(f"SetWindowPos thất bại trong update_geometry (Lỗi: {ctypes.get_last_error()})")
 
     def bring_to_front(self):
-        """Đưa cửa sổ lên đỉnh cao nhất của dải Z-Order khi người dùng chạm hoặc click chuột"""
+        """Đưa cửa sổ lên đỉnh cao nhất của dải Z-Order khi người dùng chạm hoặc click chuột mà không cướp focus"""
         if not self.is_visible:
             return
         user32.BringWindowToTop(self.hwnd)
@@ -182,10 +207,8 @@ class WindowManager(QObject):
             self.hwnd,
             HWND_TOPMOST,
             0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE
         )
-        user32.SetForegroundWindow(self.hwnd)
-        self.widget.activateWindow()
 
     def show(self):
         self.is_visible = True

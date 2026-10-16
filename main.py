@@ -70,9 +70,11 @@ def main():
     panel.setWindowFlags(
         Qt.WindowType.FramelessWindowHint |
         Qt.WindowType.WindowStaysOnTopHint |
-        Qt.WindowType.Tool
+        Qt.WindowType.Tool |
+        Qt.WindowType.WindowDoesNotAcceptFocus
     )
     panel.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+    panel.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
     panel.setStyleSheet("background: transparent;")
 
     initial_percent = config.get("overlay", "width_percent", default=35)

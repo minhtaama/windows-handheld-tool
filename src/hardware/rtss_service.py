@@ -1,9 +1,11 @@
 import os
 import sys
+import time
 import struct
 import ctypes
 import mmap
 import winreg
+import subprocess
 from typing import Optional
 from src.core.logger import setup_logger
 
@@ -80,11 +82,83 @@ class RtssService:
             self.is_connected = False
             self.mm = None
 
+    def _ensure_global_profile_osd(self):
+        """Bảo đảm tệp cấu hình Profiles\\Global của RTSS đã bật EnableOSD=1"""
+        if not self.rtss_dir:
+            return
+        profile_path = os.path.join(self.rtss_dir, "Profiles", "Global")
+        try:
+            if not os.path.isfile(profile_path):
+                return
+            with open(profile_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+
+            needs_update = False
+            if "[OSD]" not in content:
+                content = "[OSD]\nEnableOSD=1\n" + content
+                needs_update = True
+            elif "EnableOSD=0" in content:
+                content = content.replace("EnableOSD=0", "EnableOSD=1")
+                needs_update = True
+
+            if needs_update:
+                with open(profile_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                logger.info("Đã cấu hình Global profile của RTSS: EnableOSD=1")
+        except Exception as e:
+            logger.warning(f"Lỗi khi kiểm tra profile Global RTSS: {e}")
+
+    def ensure_running(self) -> bool:
+        """Tự động kiểm tra và khởi chạy ngầm RTSS.exe nếu chưa hoạt động để kết nối Shared Memory"""
+        if self.is_connected and self.mm:
+            return True
+
+        self._init_shared_memory()
+        if self.is_connected and self.mm:
+            return True
+
+        if not self.rtss_dir:
+            return False
+
+        rtss_exe = os.path.join(self.rtss_dir, "RTSS.exe")
+        if not os.path.isfile(rtss_exe):
+            return False
+
+        logger.info(f"Đang kích hoạt tiến trình ngầm RivaTuner Statistics Server: {rtss_exe}")
+        started = False
+        try:
+            subprocess.Popen([rtss_exe], creationflags=0x08000000)
+            started = True
+        except Exception as e:
+            logger.debug(f"subprocess Popen RTSS thất bại: {e}")
+
+        if not started:
+            try:
+                ret = ctypes.windll.shell32.ShellExecuteW(None, "open", rtss_exe, None, None, 0)
+                if ret <= 32:
+                    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", rtss_exe, None, None, 0)
+                if ret > 32:
+                    started = True
+            except Exception as e:
+                logger.error(f"Lỗi khi khởi chạy RTSS qua ShellExecuteW: {e}")
+
+        # Bảo đảm cấu hình Global bật OSD
+        self._ensure_global_profile_osd()
+
+        # Chờ tối đa 3 giây để Kernel tạo đối tượng RTSSSharedMemoryV2
+        for _ in range(15):
+            time.sleep(0.2)
+            self._init_shared_memory()
+            if self.is_connected and self.mm:
+                logger.info("Đã kết nối thành công tới RTSS Shared Memory sau khi khởi động tiến trình.")
+                return True
+
+        return False
+
     def update_osd(self, text: str) -> bool:
         """Ghi chuỗi văn bản OSD vào bộ nhớ chia sẻ của RivaTuner Statistics Server theo chuẩn SDK"""
         if not self.is_connected or not self.mm:
-            self._init_shared_memory()
-            if not self.is_connected or not self.mm:
+            if not self.ensure_running() or not self.mm:
                 return False
 
         try:

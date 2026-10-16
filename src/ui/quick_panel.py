@@ -31,7 +31,7 @@ class QuickPanel(QWidget):
         self._connect_bridge_signals()
 
     def bring_to_front(self):
-        """Kích hoạt và đưa cửa sổ lên đỉnh cao nhất của dải Topmost (đè Taskbar và nhận bàn phím)"""
+        """Đưa cửa sổ lên đỉnh cao nhất của dải Topmost mà KHÔNG cướp focus của game"""
         from ctypes import wintypes
         hwnd = wintypes.HWND(self.winId())
         user32 = ctypes.windll.user32
@@ -40,26 +40,31 @@ class QuickPanel(QWidget):
             ctypes.c_int, ctypes.c_int, wintypes.UINT
         ]
         user32.SetWindowPos.restype = wintypes.BOOL
-        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
-        user32.SetForegroundWindow.restype = wintypes.BOOL
 
         user32.SetWindowPos(
             hwnd,
             wintypes.HWND(-1),  # HWND_TOPMOST
             0, 0, 0, 0,
-            0x0001 | 0x0002 | 0x0040  # SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+            0x0001 | 0x0002 | 0x0040 | 0x0010  # SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE
         )
-        user32.SetForegroundWindow(hwnd)
-        self.activateWindow()
 
     def mousePressEvent(self, event):
         self.bring_to_front()
         super().mousePressEvent(event)
 
     def eventFilter(self, watched, event):
-        if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.FocusIn):
+        if event.type() == QEvent.Type.MouseButtonPress:
             self.bring_to_front()
         return super().eventFilter(watched, event)
+
+    def nativeEvent(self, eventType, message):
+        if eventType == b"windows_generic_MSG":
+            from ctypes import wintypes
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0021:  # WM_MOUSEACTIVATE
+                # MA_NOACTIVATE = 3 (Không kích hoạt cửa sổ, bảo toàn tuyệt đối tiêu điểm của game)
+                return True, 3
+        return super().nativeEvent(eventType, message)
 
     def _on_page_load_finished(self, ok: bool):
         proxy = self.view.focusProxy()
