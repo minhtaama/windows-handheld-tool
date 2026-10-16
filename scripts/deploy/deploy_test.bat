@@ -55,7 +55,7 @@ if %errorlevel% neq 0 (
 set "DIST_DIR=%PROJECT_ROOT%\dist\windows_handheld_tool"
 if exist "%DIST_DIR%" rmdir /S /Q "%DIST_DIR%"
 
-pyinstaller --noconfirm --onedir --windowed --name "windows_handheld_tool" ^
+"%PROJECT_ROOT%\.venv\Scripts\pyinstaller.exe" --noconfirm --onedir --windowed --name "windows_handheld_tool" ^
     --manifest "app.manifest" ^
     --add-data "config.json;." ^
     --add-data "bin;bin" ^

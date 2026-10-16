@@ -38,3 +38,5 @@ windows/bin/
 /dist/
 # Widget Preview related
 .widget_preview/
+.venv/
+

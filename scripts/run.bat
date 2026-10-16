@@ -37,8 +37,8 @@ timeout /t 2 >nul
 goto MENU
 
 :RUN_APP
-echo [*] Starting Windows Handheld Tool via Python...
-python main.py
+echo [*] Starting Windows Handheld Tool via Python (.venv)...
+"%PROJECT_ROOT%\.venv\Scripts\python.exe" main.py
 if %errorlevel% neq 0 (
     echo [ERROR] Application exited with code %errorlevel%
     pause
@@ -49,8 +49,8 @@ exit /b
 echo [*] Khoi dong Flutter Web Server tai port 5173 (Ho tro Hot Reload qua phim r/R)...
 start "Flutter Web Dev Server (Port 5173)" cmd /c "cd /d "%PROJECT_ROOT%" && flutter run -d web-server --web-port 5173"
 timeout /t 2 >nul
-echo [*] Starting Windows Handheld Tool via Python...
-python main.py
+echo [*] Starting Windows Handheld Tool via Python (.venv)...
+"%PROJECT_ROOT%\.venv\Scripts\python.exe" main.py
 if %errorlevel% neq 0 (
     echo [ERROR] Application exited with code %errorlevel%
     pause
