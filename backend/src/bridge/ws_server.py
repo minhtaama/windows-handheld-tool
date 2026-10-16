@@ -26,6 +26,8 @@ class WsServer(QObject):
         self.bridge.telemetryUpdated.connect(self._broadcast_telemetry)
         self.bridge.configUpdated.connect(self._broadcast_config)
         self.bridge.overlayVisibilityChanged.connect(self._broadcast_visibility)
+        self.bridge.hotkeyEvent.connect(self._broadcast_hotkey_event)
+        self.bridge.gamepadButtonEvent.connect(self._broadcast_gamepad_button)
 
     def _on_new_connection(self):
         client = self.server.nextPendingConnection()
@@ -76,6 +78,25 @@ class WsServer(QObject):
         except Exception as e:
             logger.error(f"Lỗi broadcast visibility: {e}")
 
+    def _broadcast_hotkey_event(self, event_json_str: str):
+        if not self.clients:
+            return
+        try:
+            for client in self.clients:
+                client.sendTextMessage(event_json_str)
+        except Exception as e:
+            logger.error(f"Lỗi broadcast hotkey event: {e}")
+
+    def _broadcast_gamepad_button(self, button_name: str):
+        if not self.clients:
+            return
+        try:
+            payload = json.dumps({"type": "gamepadButton", "data": {"button": button_name}})
+            for client in self.clients:
+                client.sendTextMessage(payload)
+        except Exception as e:
+            logger.error(f"Lỗi broadcast gamepad button: {e}")
+
     def _on_message(self, client: QWebSocket, msg: str):
         try:
             req = json.loads(msg)
@@ -110,7 +131,11 @@ class WsServer(QObject):
             elif action == "setPanelScale":
                 self.bridge.setPanelScale(float(req.get("scale", 1.0)))
             elif action == "setHotkey":
-                self.bridge.setHotkey(str(req.get("target", "overlay")), str(req.get("hotkey", "")))
+                self.bridge.setHotkey(
+                    str(req.get("target", "overlay")),
+                    str(req.get("hotkey", "")),
+                    str(req.get("device", "keyboard"))
+                )
             elif action == "setAutostart":
                 self.bridge.setAutostart(bool(req.get("enabled", True)))
             elif action == "bringToFront":
@@ -119,6 +144,16 @@ class WsServer(QObject):
                 self.bridge.closeOverlay()
             elif action == "exitApp":
                 self.bridge.exitApp()
+            elif action == "launchTaskManager":
+                self.bridge.launchTaskManager()
+            elif action == "launchDisplaySettings":
+                self.bridge.launchDisplaySettings()
+            elif action == "trimMemory":
+                self.bridge.trimMemory()
+            elif action == "startCaptureHotkey":
+                self.bridge.startCaptureHotkey(str(req.get("target", "overlay")))
+            elif action == "cancelCaptureHotkey":
+                self.bridge.cancelCaptureHotkey()
             else:
                 logger.warning(f"[WS] Không nhận diện được action: {action}")
         except Exception as e:

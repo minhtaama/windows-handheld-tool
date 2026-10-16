@@ -5,6 +5,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../core/logger.dart';
 import 'overlay_controller.dart';
 import 'system_telemetry_service.dart';
+import '../input/gamepad_service.dart';
 
 /// Dịch vụ cầu nối WebSocket giao tiếp thời gian thực giữa giao diện Flutter Web
 /// và tiến trình dịch vụ hệ thống Python (PySide6 Backend).
@@ -21,8 +22,11 @@ class BridgeService {
   final ValueNotifier<bool> isConnected = ValueNotifier<bool>(false);
   final StreamController<SystemTelemetryData> _telemetryController =
       StreamController<SystemTelemetryData>.broadcast();
+  final StreamController<Map<String, dynamic>> _hotkeyEventsController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   Stream<SystemTelemetryData> get telemetryStream => _telemetryController.stream;
+  Stream<Map<String, dynamic>> get hotkeyEventsStream => _hotkeyEventsController.stream;
 
   // Trạng thái phần cứng phản ánh từ backend
   final ValueNotifier<int> tdp = ValueNotifier<int>(15);
@@ -106,6 +110,19 @@ class BridgeService {
         } else {
           OverlayController.instance.hideOverlay();
         }
+      } else if (type == 'hotkeyProgress' || type == 'hotkeyCaptured' || type == 'hotkeyCancelled') {
+        _hotkeyEventsController.add({
+          'type': type,
+          'target': data['target'],
+          'device': data['device'],
+          'hotkey': data['hotkey'],
+          'isDone': data['isDone'],
+        });
+      } else if (type == 'gamepadButton') {
+        final btn = data['button'] as String?;
+        if (btn != null && btn.isNotEmpty) {
+          GamepadService.dispatchButton(btn);
+        }
       }
     } catch (e) {
       _logger.error('Lỗi phân tích cú pháp gói tin WS: $e');
@@ -183,6 +200,7 @@ class BridgeService {
       ramUsagePercent: ramPct,
       cpuTemp: cpuTemp,
       liveTdp: liveTdp,
+      liveFan: (data['live_fan'] ?? data['fan_speed'] ?? fanSpeed.value) as int,
     );
 
     _telemetryController.add(telemData);
@@ -269,11 +287,12 @@ class BridgeService {
     _send({'action': 'setAutostart', 'enabled': enabled});
   }
 
-  void setHotkey(String target, String hotkey) {
+  void setHotkey(String target, String hotkey, [String device = 'keyboard']) {
     _send({
       'action': 'setHotkey',
       'target': target,
       'hotkey': hotkey,
+      'device': device,
     });
   }
 
@@ -287,6 +306,26 @@ class BridgeService {
 
   void exitApp() {
     _send({'action': 'exitApp'});
+  }
+
+  void launchTaskManager() {
+    _send({'action': 'launchTaskManager'});
+  }
+
+  void launchDisplaySettings() {
+    _send({'action': 'launchDisplaySettings'});
+  }
+
+  void trimMemory() {
+    _send({'action': 'trimMemory'});
+  }
+
+  void startCaptureHotkey(String target) {
+    _send({'action': 'startCaptureHotkey', 'target': target});
+  }
+
+  void cancelCaptureHotkey() {
+    _send({'action': 'cancelCaptureHotkey'});
   }
 
   // --- Chế độ giả lập khi chạy độc lập trên Chrome (Mock Data) ---
@@ -312,6 +351,8 @@ class BridgeService {
         ramTotalGb: 16.0,
         ramUsagePercent: 36,
         cpuTemp: 52,
+        liveTdp: 15,
+        liveFan: 45,
       );
 
       _telemetryController.add(mockData);

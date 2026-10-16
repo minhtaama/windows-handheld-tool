@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
@@ -12,6 +13,7 @@ import 'help_box.dart';
 class HotkeyTile extends StatefulWidget {
   final IconData icon;
   final String title;
+  final String target; // 'overlay' hoặc 'keyboard'
   final String device; // 'keyboard' hoặc 'gamepad'
   final String hotkey;
   final void Function(String device, String hotkey) onHotkeyChanged;
@@ -22,6 +24,7 @@ class HotkeyTile extends StatefulWidget {
     super.key,
     required this.icon,
     required this.title,
+    this.target = "overlay",
     required this.device,
     required this.hotkey,
     required this.onHotkeyChanged,
@@ -39,6 +42,7 @@ class HotkeyTileState extends State<HotkeyTile> {
   String _activeDevice = ''; // 'keyboard' hoặc 'gamepad'
   double _gamepadProgress = 0.0;
   bool _isSuccess = false;
+  StreamSubscription<Map<String, dynamic>>? _hotkeySub;
 
   bool get isRecording => _isRecording;
 
@@ -54,7 +58,49 @@ class HotkeyTileState extends State<HotkeyTile> {
       _isSuccess = false;
     });
 
-    // 1. Lắng nghe Bàn phím PC trực tiếp từ Win32 GetAsyncKeyState phần cứng
+    // 1. Gửi yêu cầu sang Python Backend bắt phím toàn cục (Win32 GetAsyncKeyState & XInput)
+    BridgeService.instance.startCaptureHotkey(widget.target);
+
+    _hotkeySub?.cancel();
+    _hotkeySub = BridgeService.instance.hotkeyEventsStream.listen((event) {
+      if (!mounted || !_isRecording) return;
+      final target = event['target'] as String?;
+      if (target != widget.target) return;
+
+      final type = event['type'] as String?;
+      final device = event['device'] as String? ?? 'keyboard';
+      final hotkey = event['hotkey'] as String? ?? '';
+
+      if (type == 'hotkeyProgress') {
+        setState(() {
+          _activeDevice = device;
+          _capturedKeys = hotkey;
+          if (device == 'gamepad') {
+            _gamepadProgress = 0.5;
+          }
+        });
+      } else if (type == 'hotkeyCaptured') {
+        setState(() {
+          _activeDevice = device;
+          _capturedKeys = hotkey;
+          _isSuccess = true;
+          _gamepadProgress = 1.0;
+        });
+        widget.onHotkeyChanged(device, hotkey);
+        Future.delayed(const Duration(milliseconds: 350), () {
+          if (mounted) {
+            setState(() {
+              _isRecording = false;
+              _isSuccess = false;
+            });
+          }
+        });
+      } else if (type == 'hotkeyCancelled') {
+        cancelRecording();
+      }
+    });
+
+    // 2. Dự phòng: Vẫn giữ lắng nghe Flutter HardwareKeyboard trong trường hợp người dùng click trong cửa sổ
     HotkeyService.startRecordingCombo(
       onCurrentKeysChanged: (keys) {
         if (mounted && _isRecording && !_isSuccess) {
@@ -66,7 +112,7 @@ class HotkeyTileState extends State<HotkeyTile> {
       },
       onRecorded: (recorded) {
         if (mounted && _isRecording && !_isSuccess) {
-          GamepadService.cancelRecordingCombo();
+          BridgeService.instance.cancelCaptureHotkey();
           setState(() {
             _activeDevice = 'keyboard';
             _capturedKeys = recorded;
@@ -89,47 +135,13 @@ class HotkeyTileState extends State<HotkeyTile> {
         }
       },
     );
-
-    // 2. Lắng nghe Tay cầm Gamepad trực tiếp từ XInput
-    GamepadService.startRecordingCombo(
-      onCurrentKeysChanged: (keys) {
-        if (mounted && _isRecording && !_isSuccess) {
-          setState(() {
-            _activeDevice = 'gamepad';
-            _capturedKeys = keys;
-          });
-        }
-      },
-      onProgress: (p) {
-        if (mounted && _isRecording && !_isSuccess) {
-          setState(() => _gamepadProgress = p);
-        }
-      },
-      onRecorded: (recorded) {
-        if (mounted && _isRecording && !_isSuccess) {
-          HotkeyService.cancelRecordingCombo();
-          setState(() {
-            _activeDevice = 'gamepad';
-            _capturedKeys = recorded;
-            _isSuccess = true;
-            _gamepadProgress = 1.0;
-          });
-          widget.onHotkeyChanged('gamepad', recorded);
-          Future.delayed(const Duration(milliseconds: 350), () {
-            if (mounted) {
-              setState(() {
-                _isRecording = false;
-                _isSuccess = false;
-              });
-            }
-          });
-        }
-      },
-    );
   }
 
   /// Hủy bỏ chế độ ghi nhận phím
   void cancelRecording() {
+    _hotkeySub?.cancel();
+    _hotkeySub = null;
+    BridgeService.instance.cancelCaptureHotkey();
     HotkeyService.cancelRecordingCombo();
     GamepadService.cancelRecordingCombo();
     if (mounted) {
@@ -145,7 +157,10 @@ class HotkeyTileState extends State<HotkeyTile> {
 
   @override
   void dispose() {
+    _hotkeySub?.cancel();
+    _hotkeySub = null;
     if (_isRecording) {
+      BridgeService.instance.cancelCaptureHotkey();
       HotkeyService.cancelRecordingCombo();
       GamepadService.cancelRecordingCombo();
     }

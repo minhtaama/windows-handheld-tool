@@ -113,10 +113,20 @@ def main():
         keyboard_hk=keyboard_hk,
     )
 
-    # 6. Khởi tạo Dịch vụ Đọc Tay Cầm (Gamepad XInput BACK+RB)
+    # 6. Khởi tạo Dịch vụ Đọc Tay Cầm (Gamepad XInput)
     gamepad_svc = GamepadService()
+    win_mgr.visibility_changed.connect(gamepad_svc.set_panel_visible)
+
     if config.get("gamepad", "enabled", default=True):
-        gamepad_svc.start(lambda: controller.toggle_requested.emit())
+        overlay_gp = config.get("gamepad", "overlay_combo", default="BACK+RB")
+        keyboard_gp = config.get("gamepad", "keyboard_combo", default="")
+        gamepad_svc.start(
+            toggle_callback=lambda: controller.toggle_requested.emit(),
+            button_callback=lambda btn: panel.bridge.gamepadButtonEvent.emit(btn),
+            keyboard_callback=lambda: VirtualKeyboardService.toggle_keyboard(),
+            overlay_combo=overlay_gp,
+            keyboard_combo=keyboard_gp,
+        )
 
     logger.info("Ứng dụng đã sẵn sàng trên phân lớp ZBID_SYSTEM_TOOLS.")
 

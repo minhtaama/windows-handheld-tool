@@ -10,6 +10,8 @@ from src.hardware.rtss_service import RtssService
 from src.services.system_telemetry import SystemTelemetryService
 from src.services.virtual_keyboard import VirtualKeyboardService
 from src.services.autostart_service import AutostartService
+from src.services.system_optimizer import SystemOptimizerService
+from src.input.hotkey_capture import HotkeyCaptureService
 from src.core.logger import setup_logger
 
 logger = setup_logger("WebBridge")
@@ -19,6 +21,9 @@ class WebBridge(QObject):
     telemetryUpdated = Signal(str)
     configUpdated = Signal(str)
     overlayVisibilityChanged = Signal(bool)
+    hotkeyEvent = Signal(str)
+    gamepadButtonEvent = Signal(str)
+
 
     # Signals to Main Window / Controller
     requestClose = Signal()
@@ -141,7 +146,6 @@ class WebBridge(QObject):
             self.config.set(width, "overlay", "width_percent")
         else:
             self.config.set(width, "overlay", "width")
-        self.requestWidthChange.emit(width)
 
     @Slot(float)
     def setPanelScale(self, scale: float):
@@ -149,18 +153,40 @@ class WebBridge(QObject):
         self.requestScaleChange.emit(scale)
 
     @Slot(str, str)
-    def setHotkey(self, target: str, hotkey: str):
-        """target: 'overlay' hoặc 'keyboard'"""
+    def setHotkey(self, target: str, hotkey: str, device: str = "keyboard"):
+        """target: 'overlay' hoặc 'keyboard'; device: 'keyboard' hoặc 'gamepad'"""
         from src.input.hotkey_service import HotkeyService
+        from src.input.gamepad_service import GamepadService
+
         hotkey_svc = HotkeyService()
-        if target == "overlay":
-            self.config.set(hotkey, "hotkey", "toggle_overlay")
-            hotkey_svc.update_hotkeys(overlay_hk=hotkey)
-            logger.info(f"Đã cập nhật phím tắt Overlay: {hotkey}")
-        elif target == "keyboard":
-            self.config.set(hotkey, "hotkey", "toggle_keyboard")
-            hotkey_svc.update_hotkeys(keyboard_hk=hotkey)
-            logger.info(f"Đã cập nhật phím tắt Bàn phím ảo: {hotkey}")
+        gamepad_svc = GamepadService()
+
+        if device == "gamepad":
+            if target == "overlay":
+                self.config.set(hotkey, "gamepad", "overlay_combo")
+                self.config.set("", "hotkey", "toggle_overlay")
+                gamepad_svc.update_combos(overlay_combo=hotkey)
+                hotkey_svc.update_hotkeys(overlay_hk="")
+                logger.info(f"Đã cập nhật Gamepad Overlay Combo: {hotkey}")
+            elif target == "keyboard":
+                self.config.set(hotkey, "gamepad", "keyboard_combo")
+                self.config.set("", "hotkey", "toggle_keyboard")
+                gamepad_svc.update_combos(keyboard_combo=hotkey)
+                hotkey_svc.update_hotkeys(keyboard_hk="")
+                logger.info(f"Đã cập nhật Gamepad Virtual Keyboard Combo: {hotkey}")
+        else:
+            if target == "overlay":
+                self.config.set(hotkey, "hotkey", "toggle_overlay")
+                self.config.set("", "gamepad", "overlay_combo")
+                hotkey_svc.update_hotkeys(overlay_hk=hotkey)
+                gamepad_svc.update_combos(overlay_combo="")
+                logger.info(f"Đã cập nhật phím tắt Overlay: {hotkey}")
+            elif target == "keyboard":
+                self.config.set(hotkey, "hotkey", "toggle_keyboard")
+                self.config.set("", "gamepad", "keyboard_combo")
+                hotkey_svc.update_hotkeys(keyboard_hk=hotkey)
+                gamepad_svc.update_combos(keyboard_combo="")
+                logger.info(f"Đã cập nhật phím tắt Bàn phím ảo: {hotkey}")
 
     @Slot(bool)
     def setAutostart(self, enabled: bool):
@@ -178,4 +204,39 @@ class WebBridge(QObject):
     @Slot()
     def exitApp(self):
         self.requestExitApp.emit()
+
+    @Slot()
+    def launchTaskManager(self):
+        SystemOptimizerService.launch_task_manager()
+
+    @Slot()
+    def launchDisplaySettings(self):
+        SystemOptimizerService.launch_display_settings()
+
+    @Slot()
+    def trimMemory(self):
+        SystemOptimizerService.trim_working_set()
+
+    @Slot(str)
+    def startCaptureHotkey(self, target: str):
+        def _on_captured(tgt: str, dev: str, combo: str, is_done: bool):
+            event_type = "hotkeyCaptured" if is_done else "hotkeyProgress"
+            if combo == "ESC_CANCEL":
+                event_type = "hotkeyCancelled"
+            payload = json.dumps({
+                "type": event_type,
+                "data": {
+                    "target": tgt,
+                    "device": dev,
+                    "hotkey": combo,
+                    "isDone": is_done
+                }
+            })
+            self.hotkeyEvent.emit(payload)
+
+        HotkeyCaptureService().start_capture(target, _on_captured)
+
+    @Slot()
+    def cancelCaptureHotkey(self):
+        HotkeyCaptureService().stop_capture()
 

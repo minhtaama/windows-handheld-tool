@@ -313,7 +313,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
       final hwTdp = _tdpCtrl.getLiveTdp();
       _liveTdp = hwTdp != null ? hwTdp.round() : _tdp;
-      _liveFan = _fan;
+      _liveFan = _fanAuto ? _telemetryData.liveFan : _fan;
 
       _isRtssRunning = _rtssCtrl.isAvailable();
       if (_isRtssRunning) {
@@ -712,8 +712,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           VirtualKeyboardService.toggleKeyboard(fromGamepad: true);
         } else if (_focusedIndex == 1) {
           OverlayController.instance.hideOverlay();
+          BridgeService.instance.launchTaskManager();
         } else if (_focusedIndex == 2) {
           OverlayController.instance.hideOverlay();
+          BridgeService.instance.launchDisplaySettings();
         } else if (_focusedIndex == 3) {
           SystemOptimizer.trimMemory();
         } else if (_focusedIndex == 4) {
@@ -927,18 +929,19 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       widget.config.set("gamepad.overlay_combo", "");
       HotkeyService.updateHotkeys(overlayHotkey: hotkey);
       GamepadService.updateCombos(overlayCombo: "");
-      BridgeService.instance.setHotkey('overlay', hotkey);
+      BridgeService.instance.setHotkey('overlay', hotkey, 'keyboard');
     } else if (device == 'gamepad') {
       widget.config.set("gamepad.overlay_combo", hotkey);
       widget.config.set("hotkey.toggle_overlay", "");
       GamepadService.updateCombos(overlayCombo: hotkey);
       HotkeyService.updateHotkeys(overlayHotkey: "");
+      BridgeService.instance.setHotkey('overlay', hotkey, 'gamepad');
     } else {
       widget.config.set("hotkey.toggle_overlay", "");
       widget.config.set("gamepad.overlay_combo", "");
       HotkeyService.updateHotkeys(overlayHotkey: "");
       GamepadService.updateCombos(overlayCombo: "");
-      BridgeService.instance.setHotkey('overlay', "");
+      BridgeService.instance.setHotkey('overlay', "", 'keyboard');
     }
   }
 
@@ -953,18 +956,19 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       widget.config.set("gamepad.keyboard_combo", "");
       HotkeyService.updateHotkeys(keyboardHotkey: hotkey);
       GamepadService.updateCombos(keyboardCombo: "");
-      BridgeService.instance.setHotkey('keyboard', hotkey);
+      BridgeService.instance.setHotkey('keyboard', hotkey, 'keyboard');
     } else if (device == 'gamepad') {
       widget.config.set("gamepad.keyboard_combo", hotkey);
       widget.config.set("hotkey.toggle_keyboard", "");
       GamepadService.updateCombos(keyboardCombo: hotkey);
       HotkeyService.updateHotkeys(keyboardHotkey: "");
+      BridgeService.instance.setHotkey('keyboard', hotkey, 'gamepad');
     } else {
       widget.config.set("hotkey.toggle_keyboard", "");
       widget.config.set("gamepad.keyboard_combo", "");
       HotkeyService.updateHotkeys(keyboardHotkey: "");
       GamepadService.updateCombos(keyboardCombo: "");
-      BridgeService.instance.setHotkey('keyboard', "");
+      BridgeService.instance.setHotkey('keyboard', "", 'keyboard');
     }
   }
 
@@ -1167,9 +1171,11 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           },
           onTaskManager: () {
             OverlayController.instance.hideOverlay();
+            BridgeService.instance.launchTaskManager();
           },
           onDisplaySettings: () {
             OverlayController.instance.hideOverlay();
+            BridgeService.instance.launchDisplaySettings();
           },
           onTrimMemory: () {
             SystemOptimizer.trimMemory();

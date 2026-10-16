@@ -19,6 +19,12 @@ set "SCRIPT_DIR=%~dp0"
 set "PROJECT_ROOT=%~dp0..\.."
 cd /d "%PROJECT_ROOT%"
 
+if exist "%PROJECT_ROOT%\.venv\Scripts\pyinstaller.exe" (
+    set "PYINSTALLER_CMD="%PROJECT_ROOT%\.venv\Scripts\pyinstaller.exe""
+) else (
+    set "PYINSTALLER_CMD=pyinstaller"
+)
+
 :: 2. Check and ensure Code Signing Certificate exists
 echo [*] Step 1/6: Checking Code Signing Certificate...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -45,27 +51,35 @@ echo.
 :: 4. Build Standalone Executable via PyInstaller with UIAccess Manifest
 echo [*] Step 3/6: Packaging Frontend and Python Application...
 echo [*] Compiling Flutter Web Frontend...
+pushd "%PROJECT_ROOT%\frontend"
 call flutter build web --release --pwa-strategy=none
-if %errorlevel% neq 0 (
+set "FLUTTER_ERR=!errorlevel!"
+popd
+if !FLUTTER_ERR! neq 0 (
     echo [ERROR] Flutter Web build failed!
     pause
-    exit /b %errorlevel%
+    exit /b !FLUTTER_ERR!
 )
 
 set "DIST_DIR=%PROJECT_ROOT%\dist\windows_handheld_tool"
 if exist "%DIST_DIR%" rmdir /S /Q "%DIST_DIR%"
 
-"%PROJECT_ROOT%\.venv\Scripts\pyinstaller.exe" --noconfirm --onedir --windowed --name "windows_handheld_tool" ^
+pushd "%PROJECT_ROOT%\backend"
+%PYINSTALLER_CMD% --noconfirm --onedir --windowed --name "windows_handheld_tool" ^
+    --distpath "%PROJECT_ROOT%\dist" ^
+    --workpath "%PROJECT_ROOT%\build\windows_handheld_tool" ^
     --manifest "app.manifest" ^
     --add-data "config.json;." ^
     --add-data "bin;bin" ^
-    --add-data "build\web;build\web" ^
+    --add-data "..\frontend\build\web;build\web" ^
     "main.py"
+set "PYINST_ERR=!errorlevel!"
+popd
 
-if %errorlevel% neq 0 (
+if !PYINST_ERR! neq 0 (
     echo [ERROR] PyInstaller packaging failed!
     pause
-    exit /b %errorlevel%
+    exit /b !PYINST_ERR!
 )
 echo [OK] PyInstaller build completed.
 echo.
@@ -81,18 +95,18 @@ for %%F in (
     "WinRing0x64.sys"
     "inpoutx64.dll"
 ) do (
-    if exist "bin\%%~F" (
-        copy /Y "bin\%%~F" "%DIST_DIR%\bin\" >nul
+    if exist "%PROJECT_ROOT%\backend\bin\%%~F" (
+        copy /Y "%PROJECT_ROOT%\backend\bin\%%~F" "%DIST_DIR%\bin\" >nul
     )
 )
 :: Đồng bộ WinRing0 trực tiếp tại thư mục chứa windows_handheld_tool.exe
-if exist "bin\WinRing0x64.sys" copy /Y "bin\WinRing0x64.sys" "%DIST_DIR%\" >nul
-if exist "bin\WinRing0x64.dll" copy /Y "bin\WinRing0x64.dll" "%DIST_DIR%\" >nul
-if exist "config.json" copy /Y "config.json" "%DIST_DIR%\config.json" >nul
+if exist "%PROJECT_ROOT%\backend\bin\WinRing0x64.sys" copy /Y "%PROJECT_ROOT%\backend\bin\WinRing0x64.sys" "%DIST_DIR%\" >nul
+if exist "%PROJECT_ROOT%\backend\bin\WinRing0x64.dll" copy /Y "%PROJECT_ROOT%\backend\bin\WinRing0x64.dll" "%DIST_DIR%\" >nul
+if exist "%PROJECT_ROOT%\backend\config.json" copy /Y "%PROJECT_ROOT%\backend\config.json" "%DIST_DIR%\config.json" >nul
 
-if exist "build\web" (
+if exist "%PROJECT_ROOT%\frontend\build\web" (
     if not exist "%DIST_DIR%\build\web" mkdir "%DIST_DIR%\build\web"
-    robocopy "build\web" "%DIST_DIR%\build\web" /E >nul
+    robocopy "%PROJECT_ROOT%\frontend\build\web" "%DIST_DIR%\build\web" /E >nul
 )
 echo [OK] Driver binaries and web assets synchronized.
 echo.

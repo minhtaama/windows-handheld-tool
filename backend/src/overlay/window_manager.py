@@ -70,6 +70,24 @@ user32.GetWindowLongW.restype = wintypes.LONG
 user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.LONG]
 user32.SetWindowLongW.restype = wintypes.LONG
 
+# Khai báo Win32 Monitor API
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+MONITOR_DEFAULTTONEAREST = 2
+MONITOR_DEFAULTTOPRIMARY = 1
+
+user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+user32.MonitorFromWindow.restype = wintypes.HMONITOR
+
+user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
+user32.GetMonitorInfoW.restype = wintypes.BOOL
+
 # Khai báo nguyên mẫu API nội vi quản lý Window Band
 pfnSetWindowBand = getattr(user32, "SetWindowBand", None)
 if pfnSetWindowBand:
@@ -155,22 +173,25 @@ class WindowManager(QObject):
                 logger.debug(f"Lỗi GetWindowBand: {e}")
 
     def _get_screen_dimensions(self) -> tuple[int, int]:
-        # 1. Thử lấy kích thước khung quét thực tế từ cửa sổ Foreground nếu đó là ứng dụng Toàn màn hình (tọa độ 0, 0)
+        """
+        Xác định độ phân giải quét vật lý thực tế của Monitor chứa cửa sổ hiện hành.
+        Đảm bảo Overlay luôn bao phủ 100% màn hình Desktop (kể cả khi Game đang render 720p/900p trên màn hình 1080p).
+        """
+        # 1. Thử lấy thông số Monitor vật lý bao chứa cửa sổ Game hoặc cửa sổ chính qua MonitorFromWindow
         try:
-            own_hwnd = self.hwnd.value or 0
-            fg_hwnd = user32.GetForegroundWindow()
-            if fg_hwnd and fg_hwnd != own_hwnd:
-                win_rc = wintypes.RECT()
-                client_rc = wintypes.RECT()
-                if user32.GetWindowRect(fg_hwnd, ctypes.byref(win_rc)) and user32.GetClientRect(fg_hwnd, ctypes.byref(client_rc)):
-                    w = client_rc.right - client_rc.left
-                    h = client_rc.bottom - client_rc.top
-                    win_w = win_rc.right - win_rc.left
-                    win_h = win_rc.bottom - win_rc.top
-                    if win_rc.left == 0 and win_rc.top == 0 and win_w == w and win_h == h and w >= 640 and h >= 480:
-                        return w, h
+            target_hwnd = user32.GetForegroundWindow() or self.hwnd
+            if target_hwnd:
+                h_mon = user32.MonitorFromWindow(target_hwnd, MONITOR_DEFAULTTONEAREST)
+                if h_mon:
+                    mi = MONITORINFO()
+                    mi.cbSize = ctypes.sizeof(MONITORINFO)
+                    if user32.GetMonitorInfoW(h_mon, ctypes.byref(mi)):
+                        mon_w = mi.rcMonitor.right - mi.rcMonitor.left
+                        mon_h = mi.rcMonitor.bottom - mi.rcMonitor.top
+                        if mon_w >= 640 and mon_h >= 480:
+                            return mon_w, mon_h
         except Exception as e:
-            logger.debug(f"Không thể đọc kích thước ForegroundWindow: {e}")
+            logger.debug(f"Không thể lấy kích thước từ MonitorFromWindow: {e}")
 
         # 2. Đọc độ phân giải quét vật lý tức thời qua SM_CXSCREEN, SM_CYSCREEN
         sw = user32.GetSystemMetrics(0)  # SM_CXSCREEN (Độ phân giải quét thực tế tức thời)

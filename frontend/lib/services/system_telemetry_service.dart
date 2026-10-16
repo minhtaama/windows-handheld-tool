@@ -16,6 +16,7 @@ class SystemTelemetryData {
   final int ramUsagePercent;
   final int cpuTemp;
   final int liveTdp;
+  final int liveFan;
 
   const SystemTelemetryData({
     required this.timeString,
@@ -31,6 +32,7 @@ class SystemTelemetryData {
     required this.ramUsagePercent,
     this.cpuTemp = 45,
     this.liveTdp = 15,
+    this.liveFan = 50,
   });
 
   factory SystemTelemetryData.initial() {
@@ -48,6 +50,7 @@ class SystemTelemetryData {
       ramUsagePercent: 0,
       cpuTemp: 40,
       liveTdp: 15,
+      liveFan: 50,
     );
   }
 }

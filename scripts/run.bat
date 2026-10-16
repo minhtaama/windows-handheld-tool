@@ -4,6 +4,12 @@ set "SCRIPT_DIR=%~dp0"
 set "PROJECT_ROOT=%~dp0.."
 cd /d "%PROJECT_ROOT%"
 
+if exist "%PROJECT_ROOT%\.venv\Scripts\python.exe" (
+    set "PYTHON_CMD="%PROJECT_ROOT%\.venv\Scripts\python.exe""
+) else (
+    set "PYTHON_CMD=python"
+)
+
 if "%1"=="1" goto RUN_APP
 if "%1"=="2" goto RUN_DEV_HOTRELOAD
 if "%1"=="3" goto RUN_CHROME
@@ -37,29 +43,39 @@ timeout /t 2 >nul
 goto MENU
 
 :RUN_APP
-echo [*] Starting Windows Handheld Tool via Python (.venv)...
-"%PROJECT_ROOT%\.venv\Scripts\python.exe" main.py
+echo [*] Starting Windows Handheld Tool via Python...
+pushd "%PROJECT_ROOT%\backend"
+%PYTHON_CMD% main.py
 if %errorlevel% neq 0 (
     echo [ERROR] Application exited with code %errorlevel%
+    popd
     pause
+) else (
+    popd
 )
 exit /b
 
 :RUN_DEV_HOTRELOAD
 echo [*] Khoi dong Flutter Web Server tai port 5173 (Ho tro Hot Reload qua phim r/R)...
-start "Flutter Web Dev Server (Port 5173)" cmd /c "cd /d "%PROJECT_ROOT%" && flutter run -d web-server --web-port 5173"
+start "Flutter Web Dev Server (Port 5173)" cmd /c "cd /d "%PROJECT_ROOT%\frontend" && flutter run -d web-server --web-port 5173"
 timeout /t 2 >nul
-echo [*] Starting Windows Handheld Tool via Python (.venv)...
-"%PROJECT_ROOT%\.venv\Scripts\python.exe" main.py
+echo [*] Starting Windows Handheld Tool via Python...
+pushd "%PROJECT_ROOT%\backend"
+%PYTHON_CMD% main.py
 if %errorlevel% neq 0 (
     echo [ERROR] Application exited with code %errorlevel%
+    popd
     pause
+) else (
+    popd
 )
 exit /b
 
 :RUN_CHROME
 echo [*] Khoi dong Flutter Web truc tiep tren Google Chrome (UI Inspector & DevTools)...
+pushd "%PROJECT_ROOT%\frontend"
 flutter run -d chrome
+popd
 pause
 exit /b
 

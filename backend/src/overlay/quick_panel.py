@@ -123,8 +123,10 @@ class QuickPanel(QWidget):
             candidates.append(os.path.join(exe_dir, "build", "web"))
             candidates.append(os.path.join(exe_dir, "_internal", "build", "web"))
         else:
-            dev_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            candidates.append(os.path.join(dev_root, "build", "web"))
+            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            project_root = os.path.dirname(backend_dir)
+            candidates.append(os.path.join(project_root, "frontend", "build", "web"))
+            candidates.append(os.path.join(backend_dir, "build", "web"))
 
         found_build_dir = None
         for path in candidates:

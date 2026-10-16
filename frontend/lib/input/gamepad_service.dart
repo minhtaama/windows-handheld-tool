@@ -27,6 +27,20 @@ class GamepadService {
 
   static Stream<GamepadButton> get buttonEvents => _buttonEventsController.stream;
 
+  /// Tiếp nhận sự kiện bấm nút Gamepad từ Python Host qua BridgeService
+  static void dispatchButton(String name) {
+    try {
+      for (final btn in GamepadButton.values) {
+        if (btn.name.toLowerCase() == name.toLowerCase()) {
+          _buttonEventsController.add(btn);
+          break;
+        }
+      }
+    } catch (e) {
+      _logger.warning('Lỗi dispatch button Gamepad: $e');
+    }
+  }
+
   static void start({
     Function()? onToggleOverlay,
     Function()? onToggleKeyboard,
