@@ -78,48 +78,49 @@ class _OverlayScreenState extends State<OverlayScreen>
 
         return Scaffold(
           backgroundColor: AppTheme.transparent,
-          body: isVisible
-              ? FadeTransition(
-                  opacity: _fadeAnim,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // Lớp nền đen mờ toàn màn hình - Nhấn vào vùng trống để đóng Panel
-                      GestureDetector(
+          body: IgnorePointer(
+            ignoring: !isVisible,
+            child: FadeTransition(
+              opacity: _fadeAnim,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Lớp nền đen mờ toàn màn hình - Nhấn vào vùng trống để đóng Panel
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => OverlayController.instance.hideOverlay(),
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.55),
+                    ),
+                  ),
+                  // Bảng điều khiển neo sát lề phải màn hình
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: SlideTransition(
+                      position: _slideAnim,
+                      child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: () => OverlayController.instance.hideOverlay(),
-                        child: Container(
-                          color: Colors.black.withValues(alpha: 0.55),
-                        ),
-                      ),
-                      // Bảng điều khiển neo sát lề phải màn hình
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: SlideTransition(
-                          position: _slideAnim,
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: () {},
-                            child: SizedBox(
-                              width: panelWidth,
-                              height: double.infinity,
-                              child: Padding(
-                                padding: const EdgeInsets.only(
-                                  top: 20,
-                                  bottom: 20,
-                                  right: 16,
-                                  left: 8,
-                                ),
-                                child: QuickSettingsPanel(config: widget.config),
-                              ),
+                        onTap: () {},
+                        child: SizedBox(
+                          width: panelWidth,
+                          height: double.infinity,
+                          child: Padding(
+                            padding: const EdgeInsets.only(
+                              top: 20,
+                              bottom: 20,
+                              right: 16,
+                              left: 8,
                             ),
+                            child: QuickSettingsPanel(config: widget.config),
                           ),
                         ),
                       ),
-                    ],
+                    ),
                   ),
-                )
-              : const SizedBox.shrink(),
+                ],
+              ),
+            ),
+          ),
         );
       },
     );

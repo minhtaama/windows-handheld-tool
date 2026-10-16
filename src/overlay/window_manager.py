@@ -285,10 +285,7 @@ class WindowManager(QObject):
     @Slot()
     def hide(self):
         """Được gọi khi khởi tạo hoặc ngay sau khi Flutter đã hoàn tất hiệu ứng Fade-Out (closeOverlay)"""
-        was_closing = self._is_closing
         self._perform_physical_hide()
-        if not was_closing:
-            self.visibility_changed.emit(False)
 
     @Slot()
     def toggle(self):

@@ -11,7 +11,7 @@ class ConfigManager {
     BridgeService.instance.config.addListener(() {
       if (BridgeService.instance.config.value.isNotEmpty) {
         _data = Map<String, dynamic>.from(BridgeService.instance.config.value);
-        OverlayController.instance.notifyListeners();
+        OverlayController.instance.refreshConfig();
       }
     });
   }

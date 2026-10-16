@@ -45,7 +45,7 @@ echo.
 :: 4. Build Standalone Executable via PyInstaller with UIAccess Manifest
 echo [*] Step 3/6: Packaging Frontend and Python Application...
 echo [*] Compiling Flutter Web Frontend...
-call flutter build web --release
+call flutter build web --release --pwa-strategy=none
 if %errorlevel% neq 0 (
     echo [ERROR] Flutter Web build failed!
     pause

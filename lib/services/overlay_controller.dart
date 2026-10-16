@@ -23,6 +23,10 @@ class OverlayController extends ChangeNotifier {
   AsyncCallback? onAnimateShow;
   AsyncCallback? onAnimateHide;
 
+  void refreshConfig() {
+    notifyListeners();
+  }
+
   void updateWidthPercent(int percent) {
     config?.set("overlay.width_percent", percent);
     BridgeService.instance.setPanelWidth(percent);
@@ -45,7 +49,7 @@ class OverlayController extends ChangeNotifier {
   }
 
   Future<void> hideOverlay() async {
-    if (_isClosing) return;
+    if (!_isVisible || _isClosing) return;
     _isClosing = true;
     if (onAnimateHide != null) {
       await onAnimateHide!();
