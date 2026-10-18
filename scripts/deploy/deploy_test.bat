@@ -44,6 +44,7 @@ taskkill /F /T /IM "windows_handheld_tool.exe" 2>nul
 taskkill /F /T /IM "QtWebEngineProcess.exe" 2>nul
 taskkill /F /IM "python.exe" /FI "WINDOWTITLE eq Windows Handheld Tool*" 2>nul
 net stop "WinRing0_1_2_0" 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-MpPreference -ExclusionPath '%PROJECT_ROOT%' -ErrorAction SilentlyContinue" 2>nul
 timeout /t 1 >nul
 echo [OK] Environment unlocked.
 echo.
@@ -63,11 +64,13 @@ if !FLUTTER_ERR! neq 0 (
 
 set "DIST_DIR=%PROJECT_ROOT%\dist\windows_handheld_tool"
 if exist "%DIST_DIR%" rmdir /S /Q "%DIST_DIR%"
+if exist "%PROJECT_ROOT%\build" rmdir /S /Q "%PROJECT_ROOT%\build"
 
 pushd "%PROJECT_ROOT%\backend"
-%PYINSTALLER_CMD% --noconfirm --onedir --windowed --name "windows_handheld_tool" ^
+if exist "windows_handheld_tool.spec" del /F /Q "windows_handheld_tool.spec"
+%PYINSTALLER_CMD% --noconfirm --clean --onedir --windowed --name "windows_handheld_tool" ^
     --distpath "%PROJECT_ROOT%\dist" ^
-    --workpath "%PROJECT_ROOT%\build\windows_handheld_tool" ^
+    --workpath "%PROJECT_ROOT%\build" ^
     --manifest "app.manifest" ^
     --add-data "config.json;." ^
     --add-data "bin;bin" ^

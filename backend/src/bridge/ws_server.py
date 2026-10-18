@@ -1,6 +1,6 @@
 import json
 from typing import List
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import QObject, Slot, Qt
 from PySide6.QtNetwork import QHostAddress
 from PySide6.QtWebSockets import QWebSocketServer, QWebSocket
 from src.bridge.web_bridge import WebBridge
@@ -23,11 +23,12 @@ class WsServer(QObject):
             logger.error(f"Không thể khởi động WebSocket Server tại cổng {self.port}: {self.server.errorString()}")
 
         # Lắng nghe Signal đẩy dữ liệu cảm biến và trạng thái hiển thị từ WebBridge
-        self.bridge.telemetryUpdated.connect(self._broadcast_telemetry)
-        self.bridge.configUpdated.connect(self._broadcast_config)
-        self.bridge.overlayVisibilityChanged.connect(self._broadcast_visibility)
-        self.bridge.hotkeyEvent.connect(self._broadcast_hotkey_event)
-        self.bridge.gamepadButtonEvent.connect(self._broadcast_gamepad_button)
+        # BẮT BUỘC dùng QueuedConnection để đảm bảo luồng phụ (GamepadService/HotkeyCapture) không gọi trực tiếp QWebSocket ngoài Main Thread
+        self.bridge.telemetryUpdated.connect(self._broadcast_telemetry, Qt.ConnectionType.QueuedConnection)
+        self.bridge.configUpdated.connect(self._broadcast_config, Qt.ConnectionType.QueuedConnection)
+        self.bridge.overlayVisibilityChanged.connect(self._broadcast_visibility, Qt.ConnectionType.QueuedConnection)
+        self.bridge.hotkeyEvent.connect(self._broadcast_hotkey_event, Qt.ConnectionType.QueuedConnection)
+        self.bridge.gamepadButtonEvent.connect(self._broadcast_gamepad_button, Qt.ConnectionType.QueuedConnection)
 
     def _on_new_connection(self):
         client = self.server.nextPendingConnection()
@@ -58,7 +59,7 @@ class WsServer(QObject):
             return
         try:
             payload = json.dumps({"type": "telemetry", "data": json.loads(snap_json_str)})
-            for client in self.clients:
+            for client in list(self.clients):
                 client.sendTextMessage(payload)
         except Exception as e:
             logger.error(f"Lỗi broadcast telemetry: {e}")
@@ -68,7 +69,7 @@ class WsServer(QObject):
             return
         try:
             payload = json.dumps({"type": "config", "data": json.loads(cfg_json_str)})
-            for client in self.clients:
+            for client in list(self.clients):
                 client.sendTextMessage(payload)
         except Exception as e:
             logger.error(f"Lỗi broadcast config: {e}")
@@ -78,7 +79,7 @@ class WsServer(QObject):
             return
         try:
             payload = json.dumps({"type": "visibility", "data": {"visible": bool(is_visible)}})
-            for client in self.clients:
+            for client in list(self.clients):
                 client.sendTextMessage(payload)
         except Exception as e:
             logger.error(f"Lỗi broadcast visibility: {e}")
@@ -87,7 +88,7 @@ class WsServer(QObject):
         if not self.clients:
             return
         try:
-            for client in self.clients:
+            for client in list(self.clients):
                 client.sendTextMessage(event_json_str)
         except Exception as e:
             logger.error(f"Lỗi broadcast hotkey event: {e}")
@@ -97,7 +98,7 @@ class WsServer(QObject):
             return
         try:
             payload = json.dumps({"type": "gamepadButton", "data": {"button": button_name}})
-            for client in self.clients:
+            for client in list(self.clients):
                 client.sendTextMessage(payload)
         except Exception as e:
             logger.error(f"Lỗi broadcast gamepad button: {e}")

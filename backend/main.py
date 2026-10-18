@@ -43,7 +43,7 @@ class AppController(QObject):
         self.panel.request_width_change.connect(self._on_width_changed, Qt.ConnectionType.QueuedConnection)
         self.panel.request_scale_change.connect(self._on_scale_changed, Qt.ConnectionType.QueuedConnection)
         self.panel.bridge.requestBringToFront.connect(self.win_mgr.bring_to_front, Qt.ConnectionType.QueuedConnection)
-        self.win_mgr.visibility_changed.connect(self.panel.bridge.overlayVisibilityChanged.emit)
+        self.win_mgr.visibility_changed.connect(self.panel.bridge.overlayVisibilityChanged.emit, Qt.ConnectionType.QueuedConnection)
 
     @Slot(int)
     def _on_width_changed(self, width: int):
@@ -127,7 +127,7 @@ def main():
 
     # 6. Khởi tạo Dịch vụ Đọc Tay Cầm (Gamepad XInput)
     gamepad_svc = GamepadService()
-    win_mgr.visibility_changed.connect(gamepad_svc.set_panel_visible)
+    win_mgr.visibility_changed.connect(gamepad_svc.set_panel_visible, Qt.ConnectionType.QueuedConnection)
 
     if config.get("gamepad", "enabled", default=True):
         overlay_gp = config.get("gamepad", "overlay_combo", default="BACK+RB")

@@ -71,6 +71,13 @@ user32.GetWindowLongW.restype = wintypes.LONG
 user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.LONG]
 user32.SetWindowLongW.restype = wintypes.LONG
 
+WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+user32.EnumChildWindows.argtypes = [wintypes.HWND, WNDENUMPROC, wintypes.LPARAM]
+user32.EnumChildWindows.restype = wintypes.BOOL
+
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+
 # Khai báo Win32 Monitor API
 class MONITORINFO(ctypes.Structure):
     _fields_ = [
@@ -117,6 +124,7 @@ class WindowManager(QObject):
         super().__init__()
         self.widget = widget
         self.hwnd = wintypes.HWND(0)
+        self.last_foreground_hwnd = wintypes.HWND(0)
         self.is_visible = False
         self._is_closing = False
         self.width_setting = 35
@@ -127,18 +135,19 @@ class WindowManager(QObject):
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self._perform_physical_hide)
 
-        # Khởi tạo cửa sổ cố định 1 lần duy nhất ở tọa độ (0, 0, screen_w, screen_h)
+        # Khởi tạo cửa sổ cố định 1 lần duy nhất ở tọa độ (0, 0, native_w, native_h)
         # Tuyệt đối không bao giờ gọi lại widget.hide() hay widget.show() để tránh Qt can thiệp HWND và làm mất Focus của Game
-        screen_w, screen_h = self._get_screen_dimensions()
-        self.widget.setGeometry(0, 0, screen_w, screen_h)
-        if hasattr(self.widget, "view") and self.widget.view:
-            self.widget.view.setGeometry(0, 0, screen_w, screen_h)
+        self.native_w, self.native_h = self._get_screen_dimensions()
+        self.widget.setGeometry(0, 0, self.native_w, self.native_h)
 
-        self.widget.show()
+        # Ép Qt cấp phát native HWND trước khi hiển thị để gán cứng WS_EX_NOACTIVATE và ZBID_UIACCESS ngay từ đầu
         self.hwnd = wintypes.HWND(self.widget.winId())
         self._init_win32_attributes()
+
+        self.widget.show()
         # Mặc định khi khởi động ở trạng thái đóng (Click-Through xuyên thấu 100%)
         self._set_click_through(True)
+        self.enforce_no_activate_children()
 
     def _init_win32_attributes(self):
         # 1. Thiết lập Extended Window Styles: WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT
@@ -185,34 +194,71 @@ class WindowManager(QObject):
             except Exception as e:
                 logger.debug(f"Lỗi GetWindowBand: {e}")
 
+    def preserve_foreground_window(self):
+        """Lưu lại HWND của cửa sổ đang có tiêu điểm (Game) trước khi nhận click hoặc phím tắt"""
+        try:
+            fg_hwnd = user32.GetForegroundWindow()
+            if fg_hwnd and fg_hwnd != self.hwnd.value:
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(fg_hwnd, ctypes.byref(pid))
+                if pid.value != ctypes.windll.kernel32.GetCurrentProcessId():
+                    self.last_foreground_hwnd = wintypes.HWND(fg_hwnd)
+        except Exception as e:
+            logger.debug(f"Lỗi preserve_foreground_window: {e}")
+
+    def restore_foreground_window(self):
+        """Khôi phục lại tiêu điểm ngay lập tức cho Game nếu phát hiện bị cướp Focus"""
+        try:
+            if self.last_foreground_hwnd and self.last_foreground_hwnd.value:
+                user32.SetForegroundWindow(self.last_foreground_hwnd)
+        except Exception as e:
+            logger.debug(f"Lỗi restore_foreground_window: {e}")
+
+    def enforce_no_activate_children(self):
+        """Khóa cờ WS_EX_NOACTIVATE cho toàn bộ các cửa sổ con (Chromium DirectComposition HWNDs)"""
+        try:
+            def _enum_cb(child_hwnd, lparam):
+                try:
+                    st = user32.GetWindowLongW(child_hwnd, GWL_EXSTYLE)
+                    if not (st & WS_EX_NOACTIVATE):
+                        user32.SetWindowLongW(child_hwnd, GWL_EXSTYLE, st | WS_EX_NOACTIVATE)
+                except Exception:
+                    pass
+                return True
+
+            user32.EnumChildWindows(self.hwnd, WNDENUMPROC(_enum_cb), 0)
+        except Exception as e:
+            logger.debug(f"Lỗi enforce_no_activate_children: {e}")
+
     def _set_click_through(self, click_through: bool):
         """
         Bật/tắt chế độ xuyên thấu chuột & bàn phím (Hardware Click-Through) bằng cờ WS_EX_TRANSPARENT.
-        Cửa sổ luôn giữ nguyên vị trí (0, 0, screen_w, screen_h) trên màn hình để DWM không bao giờ chuyển đổi chế độ hiển thị của Game.
+        Cửa sổ luôn giữ nguyên vị trí trên màn hình. Tuyệt đối không gửi SWP_FRAMECHANGED để tránh kích hoạt Fullscreen Occlusion của DXGI.
         """
         try:
             current_style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
             base_flags = WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED
             if click_through:
                 new_style = (current_style | base_flags) | WS_EX_TRANSPARENT
+                user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, new_style)
             else:
                 new_style = (current_style | base_flags) & ~WS_EX_TRANSPARENT
-
-            user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, new_style)
-            user32.SetWindowPos(
-                self.hwnd,
-                HWND_TOPMOST,
-                0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED
-            )
+                user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, new_style)
+                user32.SetWindowPos(
+                    self.hwnd,
+                    HWND_TOPMOST,
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
+                )
         except Exception as e:
             logger.warning(f"Lỗi khi chuyển trạng thái Click-Through ({click_through}): {e}")
 
     def _get_screen_dimensions(self) -> tuple[int, int]:
         """
         Xác định độ phân giải quét vật lý thực tế của Monitor chứa cửa sổ hiện hành.
-        Đảm bảo Overlay luôn bao phủ 100% màn hình Desktop (kể cả khi Game đang render 720p/900p trên màn hình 1080p).
+        Đảm bảo không bao giờ bị bóp về 720p khi Game đang tạm thời ép màn hình xuống 720p.
         """
+        w, h = 1920, 1080
         # 1. Thử lấy thông số Monitor vật lý bao chứa cửa sổ Game hoặc cửa sổ chính qua MonitorFromWindow
         try:
             target_hwnd = user32.GetForegroundWindow() or self.hwnd
@@ -225,22 +271,31 @@ class WindowManager(QObject):
                         mon_w = mi.rcMonitor.right - mi.rcMonitor.left
                         mon_h = mi.rcMonitor.bottom - mi.rcMonitor.top
                         if mon_w >= 640 and mon_h >= 480:
-                            return mon_w, mon_h
+                            w, h = mon_w, mon_h
         except Exception as e:
             logger.debug(f"Không thể lấy kích thước từ MonitorFromWindow: {e}")
 
         # 2. Đọc độ phân giải quét vật lý tức thời qua SM_CXSCREEN, SM_CYSCREEN
-        sw = user32.GetSystemMetrics(0)  # SM_CXSCREEN (Độ phân giải quét thực tế tức thời)
-        sh = user32.GetSystemMetrics(1)  # SM_CYSCREEN
-        if sw > 0 and sh > 0:
-            return sw, sh
+        if w == 1920 and h == 1080:
+            sw = user32.GetSystemMetrics(0)
+            sh = user32.GetSystemMetrics(1)
+            if sw > 0 and sh > 0:
+                w, h = sw, sh
 
         # 3. Fallback qua màn hình chính của Qt
-        screen = QGuiApplication.primaryScreen()
-        if screen:
-            geo = screen.geometry()
-            return geo.width(), geo.height()
-        return 1920, 1080
+        if w == 1920 and h == 1080:
+            screen = QGuiApplication.primaryScreen()
+            if screen:
+                geo = screen.geometry()
+                w, h = geo.width(), geo.height()
+
+        # Đảm bảo không bao giờ co lại nhỏ hơn kích thước Desktop gốc đã xác định lúc khởi tạo
+        if hasattr(self, "native_w") and hasattr(self, "native_h"):
+            self.native_w = max(self.native_w, w)
+            self.native_h = max(self.native_h, h)
+            return self.native_w, self.native_h
+
+        return w, h
 
     @Slot(int)
     def update_geometry(self, width: int):
@@ -259,8 +314,6 @@ class WindowManager(QObject):
         cur_geo = self.widget.geometry()
         if cur_geo.width() != screen_w or cur_geo.height() != screen_h or cur_geo.x() != 0 or cur_geo.y() != 0:
             self.widget.setGeometry(0, 0, screen_w, screen_h)
-            if hasattr(self.widget, "view") and self.widget.view:
-                self.widget.view.setGeometry(0, 0, screen_w, screen_h)
             user32.SetWindowPos(
                 self.hwnd,
                 HWND_TOPMOST,
@@ -286,9 +339,16 @@ class WindowManager(QObject):
         self._is_closing = False
         self.is_visible = True
 
+        self.preserve_foreground_window()
+        self.enforce_no_activate_children()
+
         self.update_geometry(self.width_setting)
         # Tắt chế độ xuyên thấu (gỡ cờ WS_EX_TRANSPARENT) để Panel và Backdrop nhận tương tác chuột
         self._set_click_through(False)
+
+        # Kiểm tra nếu ForegroundWindow bị lệch sang HWND của chúng ta thì lập tức trả lại cho Game
+        if user32.GetForegroundWindow() == self.hwnd.value:
+            self.restore_foreground_window()
 
         self.visibility_changed.emit(True)
         logger.info(f"Hiển thị thanh điều khiển Handheld (Click-Through=False, Band={self.current_band}).")

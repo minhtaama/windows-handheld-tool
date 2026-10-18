@@ -33,6 +33,7 @@ class QuickPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setStyleSheet("background: transparent;")
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self.bridge = WebBridge(self)
         self.ws_server = WsServer(self.bridge, port=8765, parent=self)
@@ -42,11 +43,20 @@ class QuickPanel(QWidget):
         self._connect_bridge_signals()
 
     def mousePressEvent(self, event):
+        if hasattr(self, "win_mgr") and self.win_mgr:
+            self.win_mgr.preserve_foreground_window()
         self.bridge.requestBringToFront.emit()
         super().mousePressEvent(event)
 
     def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Type.ChildAdded, QEvent.Type.Show, QEvent.Type.FocusIn):
+            if hasattr(self, "view") and self.view:
+                proxy = self.view.focusProxy()
+                if proxy:
+                    proxy.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         if event.type() == QEvent.Type.MouseButtonPress:
+            if hasattr(self, "win_mgr") and self.win_mgr:
+                self.win_mgr.preserve_foreground_window()
             self.bridge.requestBringToFront.emit()
         return super().eventFilter(watched, event)
 
@@ -54,14 +64,25 @@ class QuickPanel(QWidget):
         if eventType == b"windows_generic_MSG":
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == 0x0021:  # WM_MOUSEACTIVATE
+                if hasattr(self, "win_mgr") and self.win_mgr:
+                    self.win_mgr.preserve_foreground_window()
                 # MA_NOACTIVATE = 3 (Không kích hoạt cửa sổ, bảo toàn tuyệt đối tiêu điểm của game)
                 return True, 3
+            elif msg.message == 0x0086 and msg.wParam != 0:  # WM_NCACTIVATE
+                return True, 0
+            elif msg.message == 0x0006 and (msg.wParam & 0xFFFF) != 0:  # WM_ACTIVATE
+                if hasattr(self, "win_mgr") and self.win_mgr:
+                    self.win_mgr.restore_foreground_window()
+                return True, 0
         return super().nativeEvent(eventType, message)
 
     def _on_page_load_finished(self, ok: bool):
         proxy = self.view.focusProxy()
         if proxy:
+            proxy.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             proxy.installEventFilter(self)
+        if hasattr(self, "win_mgr") and self.win_mgr:
+            self.win_mgr.enforce_no_activate_children()
 
     def _setup_ui(self):
         self.installEventFilter(self)
@@ -73,6 +94,7 @@ class QuickPanel(QWidget):
         # 1. Khởi tạo QWebEngineView trong suốt
         self.view = QWebEngineView(self)
         self.view.setStyleSheet("background: transparent;")
+        self.view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.view.page().setBackgroundColor(QColor(0, 0, 0, 0))
         self.view.installEventFilter(self)
         self.view.loadFinished.connect(self._on_page_load_finished)
