@@ -81,18 +81,6 @@ class _OverlayScreenState extends State<OverlayScreen>
           body: Stack(
             fit: StackFit.expand,
             children: [
-              // Điểm neo DWM 1x1 pixel (alpha = 1/255) luôn tồn tại để ép DWM duy trì Composed Flip
-              const Positioned(
-                left: 0,
-                top: 0,
-                width: 1,
-                height: 1,
-                child: IgnorePointer(
-                  child: ColoredBox(
-                    color: Color.fromARGB(1, 0, 0, 0),
-                  ),
-                ),
-              ),
               IgnorePointer(
                 ignoring: !isVisible,
                 child: FadeTransition(

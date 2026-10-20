@@ -99,6 +99,7 @@ for %%F in (
     "WinRing0x64.dll"
     "WinRing0x64.sys"
     "inpoutx64.dll"
+    "dxgi_hook.dll"
 ) do (
     if exist "%PROJECT_ROOT%\backend\bin\%%~F" (
         copy /Y "%PROJECT_ROOT%\backend\bin\%%~F" "%DIST_DIR%\bin\" >nul

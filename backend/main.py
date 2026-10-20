@@ -204,6 +204,7 @@ def main():
     exit_code = app.exec()
 
     # Thu dọn tài nguyên khi thoát
+    win_mgr.cleanup()
     win_mgr.game_compat.uninstall_anti_minimize_hook()
     hotkey_svc.stop()
     gamepad_svc.stop()

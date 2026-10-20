@@ -48,7 +48,7 @@ class QuickPanel(QWidget):
 
     def _on_display_change_timeout(self):
         if hasattr(self, "win_mgr") and self.win_mgr:
-            logger.info("[SEAMLESS-1.2] Kích hoạt cập nhật kích thước Viewport sau Debounce (WM_DISPLAYCHANGE)...")
+            logger.info("[WINDOW-GEOMETRY] Kích hoạt cập nhật kích thước Viewport sau Debounce (WM_DISPLAYCHANGE)...")
             self.win_mgr.update_geometry(self.win_mgr.width_setting)
 
     def mousePressEvent(self, event):
@@ -87,7 +87,7 @@ class QuickPanel(QWidget):
             elif msg.message == 0x007E:  # WM_DISPLAYCHANGE
                 new_w = msg.lParam & 0xFFFF
                 new_h = (msg.lParam >> 16) & 0xFFFF
-                logger.info(f"[SEAMLESS-1.2] Bắt WM_DISPLAYCHANGE: Độ phân giải quét phần cứng đổi sang {new_w}x{new_h} @ {msg.wParam}bpp (Bắt đầu Debounce 100ms)")
+                logger.info(f"[WINDOW-GEOMETRY] Bắt WM_DISPLAYCHANGE: Độ phân giải quét phần cứng đổi sang {new_w}x{new_h} @ {msg.wParam}bpp (Bắt đầu Debounce 100ms)")
                 self._display_change_timer.start(100)
                 return True, 0
         return super().nativeEvent(eventType, message)

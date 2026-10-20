@@ -85,11 +85,42 @@ user32.AttachThreadInput.restype = wintypes.BOOL
 user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
 user32.AllowSetForegroundWindow.restype = wintypes.BOOL
 
+user32.ClipCursor.argtypes = [ctypes.POINTER(wintypes.RECT)]
+user32.ClipCursor.restype = wintypes.BOOL
+
+user32.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t]
+user32.keybd_event.restype = None
+
 ASFW_ANY = 0xFFFFFFFF
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel32.GetCurrentThreadId.argtypes = []
 kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+kernel32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.CreateEventW.restype = wintypes.HANDLE
+
+kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+kernel32.SetEvent.restype = wintypes.BOOL
+
+kernel32.ResetEvent.argtypes = [wintypes.HANDLE]
+kernel32.ResetEvent.restype = wintypes.BOOL
+
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+
+advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+    wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.ULONG)
+]
+advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+
+class SECURITY_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [
+        ("nLength", wintypes.DWORD),
+        ("lpSecurityDescriptor", ctypes.c_void_p),
+        ("bInheritHandle", wintypes.BOOL),
+    ]
 
 # Khai báo Win32 Monitor API
 class MONITORINFO(ctypes.Structure):
@@ -170,12 +201,15 @@ class WindowManager(QObject):
         self.width_setting = 35
         self.panel_width = 380
         self.current_band = ZBID_DESKTOP
+        self._panel_active_event = None
+        self._sec_attr = None
+        self._init_panel_event()
 
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self._perform_physical_hide)
 
-        # 1.2. Khởi tạo Side Dock Viewport Geometry cố định tại mép phải (screen_w - panel_w, 0, panel_w, screen_h)
+        # Khởi tạo Side Dock Viewport Geometry cố định tại mép phải (screen_w - panel_w, 0, panel_w, screen_h)
         self.screen_w, self.screen_h = self._get_screen_dimensions()
         dpr = float(self.widget.devicePixelRatio() or 1.0)
         self.panel_logical_w = max(240, int(round((self.screen_w / dpr) * (self.width_setting / 100.0))))
@@ -183,7 +217,7 @@ class WindowManager(QObject):
         self.panel_logical_x = max(0, int(round(self.screen_w / dpr)) - self.panel_logical_w)
 
         logger.info(
-            f"[SEAMLESS-1.2] Khởi tạo Side Dock Viewport Geometry: "
+            f"[WINDOW-GEOMETRY] Khởi tạo Side Dock Viewport Geometry: "
             f"Screen={self.screen_w}x{self.screen_h}, DPR={dpr}, "
             f"Geometry=({self.panel_logical_x}, 0, {self.panel_logical_w}x{self.panel_logical_h})"
         )
@@ -198,12 +232,35 @@ class WindowManager(QObject):
         self._set_click_through(True)
         self.enforce_no_activate_children()
 
-        # [SEAMLESS-COMPAT] Dịch vụ quản trị tương thích Game (FSO, Borderless, Anti-Minimize)
+        # [SEAMLESS-COMPAT] Dịch vụ quản trị tương thích Game (FSO, Borderless, Anti-Minimize, DXGI Hook Injector)
         self.game_compat = GameCompatService(self)
-        self.game_compat.install_anti_minimize_hook(
+        self.game_compat.install_lifecycle_hooks(
             target_hwnd_getter=lambda: self.last_foreground_hwnd.value if self.last_foreground_hwnd else 0,
-            is_active_getter=lambda: self.is_visible
+            is_active_getter=lambda: self.is_visible,
+            screen_dimensions_getter=lambda: (self.screen_w, self.screen_h)
         )
+
+    def _init_panel_event(self):
+        """Khởi tạo Named Event toàn cục HandheldTool_PanelActive để đồng bộ Gamepad Hook [SEAMLESS-1.10]"""
+        try:
+            p_sd = ctypes.c_void_p()
+            p_sa = None
+            if advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW("D:(A;;GA;;;WD)", 1, ctypes.byref(p_sd), None):
+                self._sec_attr = SECURITY_ATTRIBUTES(ctypes.sizeof(SECURITY_ATTRIBUTES), p_sd.value, False)
+                p_sa = ctypes.byref(self._sec_attr)
+
+            self._panel_active_event = kernel32.CreateEventW(p_sa, True, False, "Global\\HandheldTool_PanelActive")
+            if not self._panel_active_event:
+                err = kernel32.GetLastError()
+                logger.warning(f"[SEAMLESS-1.10] CreateEventW Global\\HandheldTool_PanelActive thất bại (Err={err}), thử session cục bộ...")
+                self._panel_active_event = kernel32.CreateEventW(p_sa, True, False, "HandheldTool_PanelActive")
+
+            if self._panel_active_event:
+                logger.info(f"[SEAMLESS-1.10] Đã khởi tạo Named Event HandheldTool_PanelActive (Handle={self._panel_active_event})")
+            else:
+                logger.error(f"[SEAMLESS-1.10] Không thể tạo Named Event HandheldTool_PanelActive (Err={kernel32.GetLastError()})")
+        except Exception as e:
+            logger.error(f"[SEAMLESS-1.10] Lỗi khởi tạo Named Event: {e}")
 
     def _init_win32_attributes(self):
         # 1.3. Kiểm tra trạng thái DWM Composition
@@ -280,8 +337,6 @@ class WindowManager(QObject):
                     self.last_foreground_hwnd = wintypes.HWND(fg_hwnd)
                     game_title = self._get_window_title(self.last_foreground_hwnd)
                     logger.info(f"[SEAMLESS-1.6] Preserve Foreground Window (Game): HWND={self.last_foreground_hwnd.value}, PID={pid.value}, TID={tid}, Title='{game_title}'")
-                    # Tối ưu hóa FSO Registry và chuẩn hóa Borderless cho Game
-                    self.game_compat.optimize_game(pid.value, self.last_foreground_hwnd.value, self.screen_w, self.screen_h)
         except Exception as e:
             logger.debug(f"[SEAMLESS-1.6] Lỗi preserve_foreground_window: {e}")
 
@@ -292,25 +347,21 @@ class WindowManager(QObject):
                 self.game_compat.restore_if_minimized(self.last_foreground_hwnd.value)
                 game_title = self._get_window_title(self.last_foreground_hwnd)
                 target_pid = wintypes.DWORD()
-                target_tid = user32.GetWindowThreadProcessId(self.last_foreground_hwnd, ctypes.byref(target_pid))
-                cur_tid = kernel32.GetCurrentThreadId()
+                user32.GetWindowThreadProcessId(self.last_foreground_hwnd, ctypes.byref(target_pid))
 
                 if target_pid.value:
                     user32.AllowSetForegroundWindow(target_pid.value)
                 else:
                     user32.AllowSetForegroundWindow(ASFW_ANY)
 
-                attached = False
-                if target_tid and target_tid != cur_tid:
-                    attached = bool(user32.AttachThreadInput(cur_tid, target_tid, True))
-
+                # Giả lập nhấn/nhả phím ALT để gỡ bỏ triệt để Foreground Lock của Windows Kernel
+                # Giúp Game nhận Focus tức thời 100%, triệt tiêu hoàn toàn lỗi phải Double Click mới nhận tín hiệu
+                user32.keybd_event(0x12, 0, 0, 0)      # VK_MENU (ALT) DOWN
                 res = bool(user32.SetForegroundWindow(self.last_foreground_hwnd))
+                user32.keybd_event(0x12, 0, 0x0002, 0) # VK_MENU (ALT) UP (KEYEVENTF_KEYUP = 2)
+
                 last_err = ctypes.get_last_error()
-
-                if attached:
-                    user32.AttachThreadInput(cur_tid, target_tid, False)
-
-                logger.info(f"[SEAMLESS-1.6] Restore Foreground Window (Game): HWND={self.last_foreground_hwnd.value}, Title='{game_title}', Attached={attached}, Result={res}, LastError={last_err}")
+                logger.info(f"[SEAMLESS-1.6] Restore Foreground Window (Game): HWND={self.last_foreground_hwnd.value}, Title='{game_title}', Result={res}, LastError={last_err}")
         except Exception as e:
             logger.debug(f"[SEAMLESS-1.6] Lỗi restore_foreground_window: {e}")
 
@@ -337,7 +388,7 @@ class WindowManager(QObject):
     def _set_click_through(self, click_through: bool):
         """
         Bật/tắt chế độ xuyên thấu chuột & bàn phím (Hardware Click-Through) bằng cờ WS_EX_TRANSPARENT.
-        Cửa sổ luôn giữ nguyên vị trí trên màn hình. Tuyệt đối không gửi SWP_FRAMECHANGED để tránh kích hoạt Fullscreen Occlusion của DXGI.
+        Cửa sổ luôn giữ nguyên vị trí trên màn hình. Duy trì trạng thái hiển thị ổn định không gửi SWP_FRAMECHANGED thừa.
         """
         try:
             cur_style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
@@ -413,16 +464,16 @@ class WindowManager(QObject):
                         mon_w = mi.rcMonitor.right - mi.rcMonitor.left
                         mon_h = mi.rcMonitor.bottom - mi.rcMonitor.top
                         if mon_w >= 640 and mon_h >= 480:
-                            logger.info(f"[SEAMLESS-1.2] Screen Dimensions Query: Result={mon_w}x{mon_h}, Source='MonitorFromWindow (HWND={target_hwnd})'")
+                            logger.info(f"[WINDOW-GEOMETRY] Screen Dimensions Query: Result={mon_w}x{mon_h}, Source='MonitorFromWindow (HWND={target_hwnd})'")
                             return mon_w, mon_h
         except Exception as e:
-            logger.debug(f"[SEAMLESS-1.2] Lỗi MonitorFromWindow: {e}")
+            logger.debug(f"[WINDOW-GEOMETRY] Lỗi MonitorFromWindow: {e}")
 
         # 2. Đọc độ phân giải quét vật lý tức thời qua SM_CXSCREEN, SM_CYSCREEN
         sw = user32.GetSystemMetrics(0)
         sh = user32.GetSystemMetrics(1)
         if sw >= 640 and sh >= 480:
-            logger.info(f"[SEAMLESS-1.2] Screen Dimensions Query: Result={sw}x{sh}, Source='GetSystemMetrics (SM_CXSCREEN)'")
+            logger.info(f"[WINDOW-GEOMETRY] Screen Dimensions Query: Result={sw}x{sh}, Source='GetSystemMetrics (SM_CXSCREEN)'")
             return sw, sh
 
         # 3. Fallback qua màn hình chính của Qt (Nhân lại với devicePixelRatio để ra Physical Pixels)
@@ -432,10 +483,10 @@ class WindowManager(QObject):
             dpr = float(screen.devicePixelRatio() or 1.0)
             pw = int(round(geo.width() * dpr))
             ph = int(round(geo.height() * dpr))
-            logger.info(f"[SEAMLESS-1.2] Screen Dimensions Query: Result={pw}x{ph}, Source='QGuiApplication.primaryScreen * DPR({dpr})'")
+            logger.info(f"[WINDOW-GEOMETRY] Screen Dimensions Query: Result={pw}x{ph}, Source='QGuiApplication.primaryScreen * DPR({dpr})'")
             return pw, ph
 
-        logger.info("[SEAMLESS-1.2] Screen Dimensions Query: Result=1920x1080, Source='Default Fallback'")
+        logger.info("[WINDOW-GEOMETRY] Screen Dimensions Query: Result=1920x1080, Source='Default Fallback'")
         return 1920, 1080
 
     @Slot(int)
@@ -463,7 +514,7 @@ class WindowManager(QObject):
 
         cur_geo = self.widget.geometry()
         logger.info(
-            f"[SEAMLESS-1.2] Side Dock Viewport Check: "
+            f"[WINDOW-GEOMETRY] Side Dock Viewport Check: "
             f"Cur=({cur_geo.x()},{cur_geo.y()},{cur_geo.width()}x{cur_geo.height()}), "
             f"Target=({target_x},{target_y},{target_w}x{target_h}), "
             f"Screen={screen_w}x{screen_h}, DPR={dpr}, WidthSetting={width}%"
@@ -505,6 +556,11 @@ class WindowManager(QObject):
         self.update_geometry(self.width_setting)
         # 1.4. Tắt chế độ xuyên thấu để Panel nhận thao tác chuột
         self._set_click_through(False)
+        # Giải phóng giới hạn con trỏ (ClipCursor) để chuột di chuyển tự do không bị kẹt lệch tọa độ
+        try:
+            user32.ClipCursor(None)
+        except Exception:
+            pass
         if self.last_foreground_hwnd and self.last_foreground_hwnd.value:
             self.game_compat.restore_if_minimized(self.last_foreground_hwnd.value)
 
@@ -525,6 +581,11 @@ class WindowManager(QObject):
             logger.info(f"[SEAMLESS-1.6] Phát hiện Foreground bị chiếm bởi Overlay HWND={cur_fg}, đang khôi phục lại cho Game...")
             self.restore_foreground_window()
 
+        # 1.10. Kích hoạt Named Event để DXGI/XInput Hook trong Game triệt tiêu input gamepad
+        if self._panel_active_event:
+            kernel32.SetEvent(self._panel_active_event)
+            logger.info("[SEAMLESS-1.10] SetEvent(HandheldTool_PanelActive): Bật chặn Gamepad Input ở Game Hook")
+
         self.visibility_changed.emit(True)
         logger.info(f"[SEAMLESS] HOÀN TẤT HIỂN THỊ (Click-Through=False, Band={self.current_band})")
         logger.info("----------------------------------------------------------------")
@@ -538,6 +599,11 @@ class WindowManager(QObject):
         logger.info("[SEAMLESS] ĐÓNG OVERLAY VẬT LÝ (_perform_physical_hide)")
         # 1.4. Bật chế độ xuyên thấu 100% mà KHÔNG ẩn hay di dời cửa sổ
         self._set_click_through(True)
+
+        # 1.10. Tắt Named Event để DXGI/XInput Hook khôi phục input gamepad cho Game
+        if self._panel_active_event:
+            kernel32.ResetEvent(self._panel_active_event)
+            logger.info("[SEAMLESS-1.10] ResetEvent(HandheldTool_PanelActive): Mở lại Gamepad Input cho Game")
 
         # 1.6. Đảm bảo Focus được giữ nguyên ở Game
         self.restore_foreground_window()
@@ -565,3 +631,14 @@ class WindowManager(QObject):
         else:
             self.show()
 
+
+    def cleanup(self):
+        """Dọn dẹp tài nguyên và giải phóng Named Event [SEAMLESS-1.10]"""
+        if self._panel_active_event:
+            try:
+                kernel32.ResetEvent(self._panel_active_event)
+                kernel32.CloseHandle(self._panel_active_event)
+                logger.info("[SEAMLESS-1.10] Đã giải phóng handle Named Event HandheldTool_PanelActive")
+                self._panel_active_event = None
+            except Exception as e:
+                logger.warning(f"[SEAMLESS-1.10] Lỗi CloseHandle Named Event: {e}")

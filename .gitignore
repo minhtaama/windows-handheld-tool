@@ -43,3 +43,8 @@ windows/bin/
 .widget_preview/
 .venv/
 
+GEMINI.md
+backend/native/dxgi_hook/build_obj/
+*.obj
+*.exp
+*.lib
