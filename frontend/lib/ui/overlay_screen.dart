@@ -81,7 +81,7 @@ class _OverlayScreenState extends State<OverlayScreen>
           body: Stack(
             fit: StackFit.expand,
             children: [
-              // Điểm neo DWM 1x1 pixel (alpha = 1/255) luôn tồn tại để ép DWM duy trì Composed Flip 1080p, ngăn DWM nhả về 720p Mode Switch
+              // Điểm neo DWM 1x1 pixel (alpha = 1/255) luôn tồn tại để ép DWM duy trì Composed Flip
               const Positioned(
                 left: 0,
                 top: 0,
@@ -97,42 +97,17 @@ class _OverlayScreenState extends State<OverlayScreen>
                 ignoring: !isVisible,
                 child: FadeTransition(
                   opacity: _fadeAnim,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // Lớp nền đen mờ toàn màn hình - Nhấn vào vùng trống để đóng Panel
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => OverlayController.instance.hideOverlay(),
-                        child: Container(
-                          color: Colors.black.withValues(alpha: 0.55),
-                        ),
+                  child: SlideTransition(
+                    position: _slideAnim,
+                    child: Padding(
+                      padding: const EdgeInsets.only(
+                        top: 20,
+                        bottom: 20,
+                        right: 16,
+                        left: 8,
                       ),
-                      // Bảng điều khiển neo sát lề phải màn hình
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: SlideTransition(
-                          position: _slideAnim,
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: () {},
-                            child: SizedBox(
-                              width: panelWidth,
-                              height: double.infinity,
-                              child: Padding(
-                                padding: const EdgeInsets.only(
-                                  top: 20,
-                                  bottom: 20,
-                                  right: 16,
-                                  left: 8,
-                                ),
-                                child: QuickSettingsPanel(config: widget.config),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                      child: QuickSettingsPanel(config: widget.config),
+                    ),
                   ),
                 ),
               ),

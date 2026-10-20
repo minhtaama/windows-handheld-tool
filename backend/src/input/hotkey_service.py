@@ -18,6 +18,30 @@ HOTKEY_OVERLAY_ID = 1001
 HOTKEY_KEYBOARD_ID = 1002
 
 
+WH_KEYBOARD_LL = 13
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_SYSKEYDOWN = 0x0104
+WM_SYSKEYUP = 0x0105
+
+VK_SHIFT = 0x10
+VK_CONTROL = 0x11
+VK_MENU = 0x12
+VK_LWIN = 0x5B
+VK_RWIN = 0x5C
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", wintypes.DWORD),
+        ("scanCode", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_ulonglong),
+    ]
+
+HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+
+
 class HotkeyService:
     _instance = None
 
@@ -33,10 +57,14 @@ class HotkeyService:
         self.running = False
         self.thread: Optional[threading.Thread] = None
         self.thread_id = 0
+        self.hook_handle = None
+        self._hook_proc_ref = None
         self.on_overlay_toggle: Optional[Callable[[], Any]] = None
         self.on_keyboard_toggle: Optional[Callable[[], Any]] = None
         self.overlay_hk = "Ctrl+Shift+Q"
         self.keyboard_hk = "Ctrl+Alt+K"
+        self._last_overlay_trigger_time = 0.0
+        self._last_keyboard_trigger_time = 0.0
         self._initialized = True
 
     def start(
@@ -109,34 +137,37 @@ class HotkeyService:
 
         return modifiers, vk_code
 
+    def _check_modifiers_match(self, user32, target_mods: int) -> bool:
+        """Kiểm tra trạng thái thực tế của các phím bổ trợ qua GetAsyncKeyState"""
+        ctrl_down = bool((user32.GetAsyncKeyState(VK_CONTROL) & 0x8000))
+        shift_down = bool((user32.GetAsyncKeyState(VK_SHIFT) & 0x8000))
+        alt_down = bool((user32.GetAsyncKeyState(VK_MENU) & 0x8000))
+        win_down = bool((user32.GetAsyncKeyState(VK_LWIN) & 0x8000) or (user32.GetAsyncKeyState(VK_RWIN) & 0x8000))
+
+        req_ctrl = bool(target_mods & MOD_CONTROL)
+        req_shift = bool(target_mods & MOD_SHIFT)
+        req_alt = bool(target_mods & MOD_ALT)
+        req_win = bool(target_mods & MOD_WIN)
+
+        return (
+            ctrl_down == req_ctrl
+            and shift_down == req_shift
+            and alt_down == req_alt
+            and win_down == req_win
+        )
+
     def _register_all(self, user32, kernel32):
-        # 1. Đăng ký phím tắt cho Quick Settings Overlay
         if self.overlay_hk:
             mod1, vk1 = self._parse_hotkey(self.overlay_hk)
             if vk1:
                 res1 = user32.RegisterHotKey(None, HOTKEY_OVERLAY_ID, mod1, vk1)
-                if res1:
-                    logger.info(f"Đã đăng ký phím tắt Overlay: {self.overlay_hk}")
-                else:
-                    err1 = kernel32.GetLastError()
-                    if err1 == 1409:
-                        logger.warning(f"Phím tắt Overlay '{self.overlay_hk}' đang bị chiếm giữ bởi ứng dụng khác (Mã lỗi 1409: ERROR_HOTKEY_ALREADY_REGISTERED).")
-                    else:
-                        logger.warning(f"Không thể đăng ký phím tắt Overlay '{self.overlay_hk}' (Lỗi: {err1})")
+                logger.info(f"[SEAMLESS-HOTKEY] RegisterHotKey Overlay ('{self.overlay_hk}'): Result={bool(res1)}")
 
-        # 2. Đăng ký phím tắt cho Virtual Keyboard (TabTip)
         if self.keyboard_hk:
             mod2, vk2 = self._parse_hotkey(self.keyboard_hk)
             if vk2:
                 res2 = user32.RegisterHotKey(None, HOTKEY_KEYBOARD_ID, mod2, vk2)
-                if res2:
-                    logger.info(f"Đã đăng ký phím tắt Bàn phím ảo: {self.keyboard_hk}")
-                else:
-                    err2 = kernel32.GetLastError()
-                    if err2 == 1409:
-                        logger.warning(f"Phím tắt Bàn phím ảo '{self.keyboard_hk}' đang bị chiếm giữ bởi ứng dụng khác (Mã lỗi 1409: ERROR_HOTKEY_ALREADY_REGISTERED).")
-                    else:
-                        logger.warning(f"Không thể đăng ký phím tắt Bàn phím ảo '{self.keyboard_hk}' (Lỗi: {err2})")
+                logger.info(f"[SEAMLESS-HOTKEY] RegisterHotKey Keyboard ('{self.keyboard_hk}'): Result={bool(res2)}")
 
     def _unregister_all(self, user32):
         user32.UnregisterHotKey(None, HOTKEY_OVERLAY_ID)
@@ -147,7 +178,6 @@ class HotkeyService:
         kernel32 = ctypes.windll.kernel32
         self.thread_id = kernel32.GetCurrentThreadId()
 
-        # Định nghĩa kiểu tham số 64-bit chuẩn cho Win32 HotKey API
         user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
         user32.RegisterHotKey.restype = wintypes.BOOL
 
@@ -166,6 +196,68 @@ class HotkeyService:
         user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
         user32.DispatchMessageW.restype = wintypes.LPARAM
 
+        user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
+        user32.SetWindowsHookExW.restype = wintypes.HHOOK
+
+        user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+        user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+
+        user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+        user32.CallNextHookEx.restype = ctypes.c_longlong
+
+        import time
+
+        def _ll_keyboard_proc(nCode: int, wParam: wintypes.WPARAM, lParam: wintypes.LPARAM) -> int:
+            if nCode >= 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                try:
+                    kb_data = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                    vk = kb_data.vkCode
+                    now = time.time()
+
+                    # 1. Bắt tổ hợp phím Overlay
+                    if self.overlay_hk:
+                        o_mod, o_vk = self._parse_hotkey(self.overlay_hk)
+                        if vk == o_vk and self._check_modifiers_match(user32, o_mod):
+                            if now - self._last_overlay_trigger_time > 0.35:
+                                self._last_overlay_trigger_time = now
+                                logger.info(f"[SEAMLESS-HOTKEY] WH_KEYBOARD_LL bắt thành công Overlay Hotkey ({self.overlay_hk})!")
+                                if self.on_overlay_toggle:
+                                    self.on_overlay_toggle()
+                            return 1  # Nuốt phím để tránh truyền xuống game
+
+                    # 2. Bắt tổ hợp phím Keyboard
+                    if self.keyboard_hk:
+                        k_mod, k_vk = self._parse_hotkey(self.keyboard_hk)
+                        if vk == k_vk and self._check_modifiers_match(user32, k_mod):
+                            if now - self._last_keyboard_trigger_time > 0.35:
+                                self._last_keyboard_trigger_time = now
+                                logger.info(f"[SEAMLESS-HOTKEY] WH_KEYBOARD_LL bắt thành công Keyboard Hotkey ({self.keyboard_hk})!")
+                                if self.on_keyboard_toggle:
+                                    threading.Thread(target=self.on_keyboard_toggle, daemon=True).start()
+                            return 1
+
+                except Exception as ex:
+                    logger.debug(f"Lỗi _ll_keyboard_proc: {ex}")
+
+            return user32.CallNextHookEx(self.hook_handle, nCode, wParam, lParam)
+
+        self._hook_proc_ref = HOOKPROC(_ll_keyboard_proc)
+        # Đối với WH_KEYBOARD_LL toàn cục, hMod = None (0) là chuẩn xác trên Windows 10/11
+        self.hook_handle = user32.SetWindowsHookExW(
+            WH_KEYBOARD_LL,
+            self._hook_proc_ref,
+            None,
+            0
+        )
+        if self.hook_handle:
+            logger.info("[SEAMLESS-HOTKEY] Cài đặt thành công Low-Level Keyboard Hook (WH_KEYBOARD_LL, Handle=%s)" % self.hook_handle)
+        else:
+            logger.warning("[SEAMLESS-HOTKEY] SetWindowsHookExW thất bại (Mã lỗi: %s)" % kernel32.GetLastError())
+
+        # Khởi động luồng phần cứng độc lập GetAsyncKeyState (Hardware Polling) dự phòng kép
+        threading.Thread(target=self._hardware_poll_loop, daemon=True).start()
+        logger.info("[SEAMLESS-HOTKEY] Đã khởi động luồng phần cứng GetAsyncKeyState Polling Thread (20ms).")
+
         self._register_all(user32, kernel32)
 
         msg = wintypes.MSG()
@@ -179,17 +271,54 @@ class HotkeyService:
                 self._unregister_all(user32)
                 self._register_all(user32, kernel32)
             elif msg.message == WM_HOTKEY:
+                now = time.time()
                 if msg.wParam == HOTKEY_OVERLAY_ID:
-                    logger.info(f"Phát hiện nhấn phím nóng Overlay ({self.overlay_hk}).")
-                    if self.on_overlay_toggle:
-                        self.on_overlay_toggle()
+                    if now - self._last_overlay_trigger_time > 0.35:
+                        self._last_overlay_trigger_time = now
+                        logger.info(f"[SEAMLESS-HOTKEY] Phát hiện nhấn phím nóng Overlay ({self.overlay_hk}) qua WM_HOTKEY.")
+                        if self.on_overlay_toggle:
+                            self.on_overlay_toggle()
                 elif msg.wParam == HOTKEY_KEYBOARD_ID:
-                    logger.info(f"Phát hiện nhấn phím nóng Bàn phím ảo ({self.keyboard_hk}).")
-                    if self.on_keyboard_toggle:
-                        threading.Thread(target=self.on_keyboard_toggle, daemon=True).start()
+                    if now - self._last_keyboard_trigger_time > 0.35:
+                        self._last_keyboard_trigger_time = now
+                        logger.info(f"[SEAMLESS-HOTKEY] Phát hiện nhấn phím nóng Bàn phím ảo ({self.keyboard_hk}) qua WM_HOTKEY.")
+                        if self.on_keyboard_toggle:
+                            threading.Thread(target=self.on_keyboard_toggle, daemon=True).start()
 
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))
 
+        if self.hook_handle:
+            user32.UnhookWindowsHookEx(self.hook_handle)
+            self.hook_handle = None
         self._unregister_all(user32)
-        logger.info("Đã hủy toàn bộ phím tắt toàn cục.")
+        logger.info("Đã dọn dẹp và hủy toàn bộ phím tắt toàn cục.")
+
+    def _hardware_poll_loop(self):
+        user32 = ctypes.windll.user32
+        import time
+        while self.running:
+            try:
+                now = time.time()
+                # 1. Thăm dò tổ hợp phím Overlay
+                if self.overlay_hk and (now - self._last_overlay_trigger_time > 0.4):
+                    o_mod, o_vk = self._parse_hotkey(self.overlay_hk)
+                    if o_vk and bool(user32.GetAsyncKeyState(o_vk) & 0x8000):
+                        if self._check_modifiers_match(user32, o_mod):
+                            self._last_overlay_trigger_time = now
+                            logger.info(f"[SEAMLESS-HOTKEY] Hardware Polling bắt thành công Overlay Hotkey ({self.overlay_hk})!")
+                            if self.on_overlay_toggle:
+                                self.on_overlay_toggle()
+
+                # 2. Thăm dò tổ hợp phím Virtual Keyboard
+                if self.keyboard_hk and (now - self._last_keyboard_trigger_time > 0.4):
+                    k_mod, k_vk = self._parse_hotkey(self.keyboard_hk)
+                    if k_vk and bool(user32.GetAsyncKeyState(k_vk) & 0x8000):
+                        if self._check_modifiers_match(user32, k_mod):
+                            self._last_keyboard_trigger_time = now
+                            logger.info(f"[SEAMLESS-HOTKEY] Hardware Polling bắt thành công Keyboard Hotkey ({self.keyboard_hk})!")
+                            if self.on_keyboard_toggle:
+                                threading.Thread(target=self.on_keyboard_toggle, daemon=True).start()
+            except Exception:
+                pass
+            time.sleep(0.02)

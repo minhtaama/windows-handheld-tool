@@ -1,17 +1,21 @@
 import sys
 import os
 import ctypes
+from ctypes import wintypes
 
 # Thiết lập Per-Monitor V2 DPI Awareness trước khi nạp bất kỳ cửa sổ nào
 # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+dpi_set_ok = False
 try:
     user32 = ctypes.windll.user32
     if hasattr(user32, "SetProcessDpiAwarenessContext"):
-        user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        res = user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        dpi_set_ok = bool(res)
     else:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        res = ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        dpi_set_ok = (res == 0)
 except Exception:
-    pass
+    dpi_set_ok = False
 
 # Thiết lập cờ Chromium hỗ trợ trong suốt và tương thích với tiến trình đặc quyền TokenUIAccess trước khi nạp QtWebEngine
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-transparent-visuals --no-sandbox --disable-gpu-sandbox"
@@ -29,6 +33,59 @@ from src.input.hotkey_service import HotkeyService
 from src.input.gamepad_service import GamepadService
 
 logger = setup_logger("Main")
+
+def _log_seamless_environment():
+    """Ghi nhật ký chẩn đoán chi tiết các tiêu chuẩn Seamless Transition tại tầng hệ điều hành"""
+    logger.info("================================================================")
+    logger.info("  KIỂM TRA HIỆN TRẠNG MÔI TRƯỜNG SEAMLESS TRANSITION (OS LEVEL)  ")
+    logger.info("================================================================")
+
+    # 1.1. Per-Monitor V2 DPI Awareness
+    try:
+        cur_dpi_ctx = user32.GetProcessDpiAwarenessContext(ctypes.windll.kernel32.GetCurrentProcess())
+        sys_dpi = user32.GetDpiForSystem() if hasattr(user32, "GetDpiForSystem") else 96
+        logger.info(f"[SEAMLESS-1.1] DPI Awareness: SetOk={dpi_set_ok}, Context={cur_dpi_ctx}, SystemDPI={sys_dpi} (100%=96, 150%=144)")
+    except Exception as e:
+        logger.warning(f"[SEAMLESS-1.1] Lỗi đọc DPI Context: {e}")
+
+    # 1.7. Elevated Administrator Token
+    try:
+        is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        logger.info(f"[SEAMLESS-1.7] Token Elevation: IsAdministrator={is_admin}")
+    except Exception as e:
+        logger.warning(f"[SEAMLESS-1.7] Lỗi kiểm tra IsUserAnAdmin: {e}")
+
+    # 1.8 & 1.9. Secure Directory Execution & TokenUIAccess
+    exe_path = os.path.abspath(sys.executable)
+    is_program_files = "program files" in exe_path.lower()
+    logger.info(f"[SEAMLESS-1.8 & 1.9] Secure Execution: ExePath='{exe_path}', IsProgramFiles={is_program_files}")
+
+    try:
+        advapi32 = ctypes.windll.advapi32
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        advapi32.OpenProcessToken.restype = wintypes.BOOL
+        advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+        advapi32.GetTokenInformation.restype = wintypes.BOOL
+
+        h_process = kernel32.GetCurrentProcess()
+        h_token = wintypes.HANDLE()
+        TOKEN_QUERY = 0x0008
+        TokenUIAccess = 26
+        if advapi32.OpenProcessToken(h_process, TOKEN_QUERY, ctypes.byref(h_token)):
+            ui_access = wintypes.DWORD()
+            ret_len = wintypes.DWORD()
+            if advapi32.GetTokenInformation(h_token, TokenUIAccess, ctypes.byref(ui_access), ctypes.sizeof(ui_access), ctypes.byref(ret_len)):
+                logger.info(f"[SEAMLESS-1.8 & 1.9] TokenUIAccess Flag: {ui_access.value} (1=Đã cấp đặc quyền UIAccess, 0=Chưa có)")
+            else:
+                logger.warning(f"[SEAMLESS-1.8 & 1.9] GetTokenInformation thất bại: {kernel32.GetLastError()}")
+            kernel32.CloseHandle(h_token)
+        else:
+            logger.warning(f"[SEAMLESS-1.8 & 1.9] OpenProcessToken thất bại: {kernel32.GetLastError()}")
+    except Exception as e:
+        logger.warning(f"[SEAMLESS-1.8 & 1.9] Lỗi đọc TokenUIAccess: {e}")
+    logger.info("================================================================")
 
 class AppController(QObject):
     toggle_requested = Signal()
@@ -70,6 +127,7 @@ def create_tray_icon() -> QIcon:
 
 def main():
     logger.info("Khởi động Windows Handheld Tool (Python Host Runtime)...")
+    _log_seamless_environment()
     config = ConfigManager()
 
     # 1. Khởi tạo Qt Application
@@ -146,6 +204,7 @@ def main():
     exit_code = app.exec()
 
     # Thu dọn tài nguyên khi thoát
+    win_mgr.game_compat.uninstall_anti_minimize_hook()
     hotkey_svc.stop()
     gamepad_svc.stop()
     sys.exit(exit_code)

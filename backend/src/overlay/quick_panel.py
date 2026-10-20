@@ -4,7 +4,7 @@ import ctypes
 from ctypes import wintypes
 import urllib.request
 from PySide6.QtWidgets import QWidget, QVBoxLayout
-from PySide6.QtCore import Qt, Signal, QUrl, QCoreApplication, QEvent
+from PySide6.QtCore import Qt, Signal, QUrl, QCoreApplication, QEvent, QTimer
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
 from PySide6.QtWebChannel import QWebChannel
@@ -35,12 +35,21 @@ class QuickPanel(QWidget):
         self.setStyleSheet("background: transparent;")
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
+        self._display_change_timer = QTimer(self)
+        self._display_change_timer.setSingleShot(True)
+        self._display_change_timer.timeout.connect(self._on_display_change_timeout)
+
         self.bridge = WebBridge(self)
         self.ws_server = WsServer(self.bridge, port=8765, parent=self)
         self.static_server = None
         self.dev_tools_view = None
         self._setup_ui()
         self._connect_bridge_signals()
+
+    def _on_display_change_timeout(self):
+        if hasattr(self, "win_mgr") and self.win_mgr:
+            logger.info("[SEAMLESS-1.2] Kích hoạt cập nhật kích thước Viewport sau Debounce (WM_DISPLAYCHANGE)...")
+            self.win_mgr.update_geometry(self.win_mgr.width_setting)
 
     def mousePressEvent(self, event):
         if hasattr(self, "win_mgr") and self.win_mgr:
@@ -66,13 +75,20 @@ class QuickPanel(QWidget):
             if msg.message == 0x0021:  # WM_MOUSEACTIVATE
                 if hasattr(self, "win_mgr") and self.win_mgr:
                     self.win_mgr.preserve_foreground_window()
-                # MA_NOACTIVATE = 3 (Không kích hoạt cửa sổ, bảo toàn tuyệt đối tiêu điểm của game)
+                logger.info("[SEAMLESS-1.6] Bắt WM_MOUSEACTIVATE: Ép trả về MA_NOACTIVATE (3) để triệt tiêu hành vi cướp Focus của Game")
                 return True, 3
             elif msg.message == 0x0086 and msg.wParam != 0:  # WM_NCACTIVATE
                 return True, 0
             elif msg.message == 0x0006 and (msg.wParam & 0xFFFF) != 0:  # WM_ACTIVATE
+                logger.info(f"[SEAMLESS-1.6] Bắt WM_ACTIVATE (wParam={msg.wParam}): Đang khôi phục tiêu điểm cho Game...")
                 if hasattr(self, "win_mgr") and self.win_mgr:
                     self.win_mgr.restore_foreground_window()
+                return True, 0
+            elif msg.message == 0x007E:  # WM_DISPLAYCHANGE
+                new_w = msg.lParam & 0xFFFF
+                new_h = (msg.lParam >> 16) & 0xFFFF
+                logger.info(f"[SEAMLESS-1.2] Bắt WM_DISPLAYCHANGE: Độ phân giải quét phần cứng đổi sang {new_w}x{new_h} @ {msg.wParam}bpp (Bắt đầu Debounce 100ms)")
+                self._display_change_timer.start(100)
                 return True, 0
         return super().nativeEvent(eventType, message)
 

@@ -71,6 +71,8 @@ if exist "windows_handheld_tool.spec" del /F /Q "windows_handheld_tool.spec"
 %PYINSTALLER_CMD% --noconfirm --clean --onedir --windowed --name "windows_handheld_tool" ^
     --distpath "%PROJECT_ROOT%\dist" ^
     --workpath "%PROJECT_ROOT%\build" ^
+    --uac-admin ^
+    --uac-uiaccess ^
     --manifest "app.manifest" ^
     --add-data "config.json;." ^
     --add-data "bin;bin" ^
@@ -172,9 +174,9 @@ echo   Target path: %TARGET_DIR%\windows_handheld_tool.exe
 echo ========================================================
 echo.
 
-:: 8. Launch the deployed application
-echo [*] Launching application from Secure Location...
-start "" "%TARGET_DIR%\windows_handheld_tool.exe"
+:: 8. Launch the deployed application via ShellExecuteEx (Start-Process) so AppInfo service grants TokenUIAccess
+echo [*] Launching application from Secure Location via ShellExecute...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%TARGET_DIR%\windows_handheld_tool.exe' -WorkingDirectory '%TARGET_DIR%'"
 
 echo.
 echo Application is now running in Windows System Z-Band with TokenUIAccess.

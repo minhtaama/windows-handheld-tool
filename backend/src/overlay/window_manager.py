@@ -4,6 +4,7 @@ from PySide6.QtCore import QObject, Signal, Slot, QRect, QTimer
 from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QGuiApplication
 from src.core.logger import setup_logger
+from src.services.game_compat_service import GameCompatService
 
 logger = setup_logger("WindowManager")
 
@@ -78,6 +79,18 @@ user32.EnumChildWindows.restype = wintypes.BOOL
 user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 
+user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+user32.AttachThreadInput.restype = wintypes.BOOL
+
+user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
+user32.AllowSetForegroundWindow.restype = wintypes.BOOL
+
+ASFW_ANY = 0xFFFFFFFF
+
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.GetCurrentThreadId.argtypes = []
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
 # Khai báo Win32 Monitor API
 class MONITORINFO(ctypes.Structure):
     _fields_ = [
@@ -96,6 +109,7 @@ user32.MonitorFromWindow.restype = wintypes.HMONITOR
 user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
 user32.GetMonitorInfoW.restype = wintypes.BOOL
 
+# Khai báo nguyên mẫu API nội vi quản lý Window Band
 # Khai báo nguyên mẫu API nội vi quản lý Window Band
 pfnSetWindowBand = getattr(user32, "SetWindowBand", None)
 if pfnSetWindowBand:
@@ -117,6 +131,32 @@ if pfnCreateWindowInBand:
     ]
     pfnCreateWindowInBand.restype = wintypes.HWND
 
+# Khai báo Win32 DWM API kiểm tra trạng thái Composed Flip
+dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+pfnDwmIsCompositionEnabled = getattr(dwmapi, "DwmIsCompositionEnabled", None)
+if pfnDwmIsCompositionEnabled:
+    pfnDwmIsCompositionEnabled.argtypes = [ctypes.POINTER(wintypes.BOOL)]
+    pfnDwmIsCompositionEnabled.restype = ctypes.c_long
+
+def _decode_swp_flags(flags: int) -> str:
+    parts = []
+    if flags & SWP_NOSIZE: parts.append("NOSIZE")
+    if flags & SWP_NOMOVE: parts.append("NOMOVE")
+    if flags & SWP_NOZORDER: parts.append("NOZORDER")
+    if flags & SWP_NOACTIVATE: parts.append("NOACTIVATE")
+    if flags & SWP_FRAMECHANGED: parts.append("FRAMECHANGED(!)")
+    if flags & SWP_SHOWWINDOW: parts.append("SHOWWINDOW")
+    if flags & SWP_HIDEWINDOW: parts.append("HIDEWINDOW")
+    if flags & SWP_NOOWNERZORDER: parts.append("NOOWNERZORDER")
+    return " | ".join(parts) if parts else hex(flags)
+
+def safe_set_window_pos(hwnd, hwnd_insert_after, x, y, cx, cy, flags: int) -> bool:
+    """Wrapper gọi SetWindowPos có kèm kiểm tra và log chuẩn [SEAMLESS-1.5]"""
+    has_frame_changed = bool(flags & SWP_FRAMECHANGED)
+    flag_str = _decode_swp_flags(flags)
+    logger.info(f"[SEAMLESS-1.5] SetWindowPos: HWND={hwnd}, InsertAfter={hwnd_insert_after}, Rect=({x},{y},{cx},{cy}), Flags={hex(flags)} [{flag_str}], HasFrameChanged={has_frame_changed}")
+    return bool(user32.SetWindowPos(hwnd, hwnd_insert_after, x, y, cx, cy, flags))
+
 class WindowManager(QObject):
     visibility_changed = Signal(bool)
 
@@ -135,12 +175,21 @@ class WindowManager(QObject):
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self._perform_physical_hide)
 
-        # Khởi tạo cửa sổ cố định 1 lần duy nhất ở tọa độ (0, 0, native_w, native_h)
-        # Tuyệt đối không bao giờ gọi lại widget.hide() hay widget.show() để tránh Qt can thiệp HWND và làm mất Focus của Game
-        self.native_w, self.native_h = self._get_screen_dimensions()
-        self.widget.setGeometry(0, 0, self.native_w, self.native_h)
+        # 1.2. Khởi tạo Side Dock Viewport Geometry cố định tại mép phải (screen_w - panel_w, 0, panel_w, screen_h)
+        self.screen_w, self.screen_h = self._get_screen_dimensions()
+        dpr = float(self.widget.devicePixelRatio() or 1.0)
+        self.panel_logical_w = max(240, int(round((self.screen_w / dpr) * (self.width_setting / 100.0))))
+        self.panel_logical_h = max(1, int(round(self.screen_h / dpr)))
+        self.panel_logical_x = max(0, int(round(self.screen_w / dpr)) - self.panel_logical_w)
 
-        # Ép Qt cấp phát native HWND trước khi hiển thị để gán cứng WS_EX_NOACTIVATE và ZBID_UIACCESS ngay từ đầu
+        logger.info(
+            f"[SEAMLESS-1.2] Khởi tạo Side Dock Viewport Geometry: "
+            f"Screen={self.screen_w}x{self.screen_h}, DPR={dpr}, "
+            f"Geometry=({self.panel_logical_x}, 0, {self.panel_logical_w}x{self.panel_logical_h})"
+        )
+        self.widget.setGeometry(self.panel_logical_x, 0, self.panel_logical_w, self.panel_logical_h)
+
+        # Cấp phát native HWND trước khi hiển thị để gán cứng cờ và phân lớp
         self.hwnd = wintypes.HWND(self.widget.winId())
         self._init_win32_attributes()
 
@@ -149,8 +198,24 @@ class WindowManager(QObject):
         self._set_click_through(True)
         self.enforce_no_activate_children()
 
+        # [SEAMLESS-COMPAT] Dịch vụ quản trị tương thích Game (FSO, Borderless, Anti-Minimize)
+        self.game_compat = GameCompatService(self)
+        self.game_compat.install_anti_minimize_hook(
+            target_hwnd_getter=lambda: self.last_foreground_hwnd.value if self.last_foreground_hwnd else 0,
+            is_active_getter=lambda: self.is_visible
+        )
+
     def _init_win32_attributes(self):
-        # 1. Thiết lập Extended Window Styles: WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT
+        # 1.3. Kiểm tra trạng thái DWM Composition
+        if pfnDwmIsCompositionEnabled:
+            try:
+                enabled = wintypes.BOOL()
+                pfnDwmIsCompositionEnabled(ctypes.byref(enabled))
+                logger.info(f"[SEAMLESS-1.3] DWM Composition Anchor: Enabled={bool(enabled.value)} (Composed Flip Active)")
+            except Exception as e:
+                logger.warning(f"[SEAMLESS-1.3] Lỗi kiểm tra DwmIsCompositionEnabled: {e}")
+
+        # 1.4. Thiết lập Extended Window Styles ban đầu
         try:
             current_style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
             new_style = (
@@ -162,37 +227,47 @@ class WindowManager(QObject):
                 | WS_EX_TRANSPARENT
             )
             user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, new_style)
-            logger.info(f"Đã gán cờ WS_EX_NOACTIVATE, WS_EX_LAYERED, WS_EX_TRANSPARENT cho HWND {self.hwnd}.")
+            logger.info(f"[SEAMLESS-1.4] Init Extended Styles: HWND={self.hwnd}, Old={hex(current_style)}, New={hex(new_style)} (HasTransparent={bool(new_style & WS_EX_TRANSPARENT)}, HasNoActivate={bool(new_style & WS_EX_NOACTIVATE)})")
         except Exception as e:
-            logger.warning(f"Lỗi khi gán ExStyle: {e}")
+            logger.warning(f"[SEAMLESS-1.4] Lỗi khi gán ExStyle: {e}")
 
-        # 2. Thử đưa vào phân lớp hệ thống ZBID_UIACCESS = 2 (Đặc quyền UIAccess)
+        # 1.10. Thử đưa vào phân lớp hệ thống ZBID_UIACCESS = 2
         band_applied = False
         if pfnSetWindowBand:
             for target_band in (ZBID_UIACCESS, ZBID_SYSTEM_TOOLS):
                 try:
                     res = pfnSetWindowBand(self.hwnd, 0, target_band)
+                    err = ctypes.get_last_error()
+                    logger.info(f"[SEAMLESS-1.10] SetWindowBand: TargetBand={target_band}, Result={res}, LastError={err}")
                     if res:
                         self.current_band = target_band
                         band_applied = True
-                        logger.info(f"Đã gán thành công cửa sổ vào phân lớp Z-Band: {target_band}.")
                         break
                 except Exception as e:
-                    logger.debug(f"Thử gán Z-Band {target_band}: {e}")
+                    logger.debug(f"[SEAMLESS-1.10] Ngoại lệ SetWindowBand({target_band}): {e}")
 
         if not band_applied:
             err = ctypes.get_last_error()
-            logger.info(f"SetWindowBand bỏ qua (Mã {err}: Cần TokenUIAccess khi chạy từ Program Files đã ký số).")
+            logger.info(f"[SEAMLESS-1.10] SetWindowBand bỏ qua (Mã lỗi {err}: Cần TokenUIAccess khi chạy từ Program Files đã ký số).")
 
-        # 3. Đọc lại phân lớp thực tế qua GetWindowBand
+        # Đọc lại phân lớp thực tế qua GetWindowBand
         if pfnGetWindowBand:
             try:
                 b = wintypes.DWORD()
                 if pfnGetWindowBand(self.hwnd, ctypes.byref(b)):
                     self.current_band = b.value
-                    logger.info(f"Phân lớp Z-Band thực tế hiện tại của cửa sổ: {self.current_band}")
+                    band_name = "ZBID_UIACCESS (Band 2)" if self.current_band == 2 else ("ZBID_SYSTEM_TOOLS (Band 16)" if self.current_band == 16 else f"ZBID_DESKTOP (Band {self.current_band})")
+                    logger.info(f"[SEAMLESS-1.10] Phân lớp Z-Band thực tế của cửa sổ: {band_name}")
             except Exception as e:
-                logger.debug(f"Lỗi GetWindowBand: {e}")
+                logger.debug(f"[SEAMLESS-1.10] Lỗi GetWindowBand: {e}")
+
+    def _get_window_title(self, hwnd: wintypes.HWND) -> str:
+        """Đọc tiêu đề cửa sổ Win32 để nhận diện Game"""
+        if not hwnd or not hwnd.value:
+            return ""
+        buf = ctypes.create_unicode_buffer(512)
+        user32.GetWindowTextW(hwnd, buf, 512)
+        return buf.value
 
     def preserve_foreground_window(self):
         """Lưu lại HWND của cửa sổ đang có tiêu điểm (Game) trước khi nhận click hoặc phím tắt"""
@@ -200,25 +275,53 @@ class WindowManager(QObject):
             fg_hwnd = user32.GetForegroundWindow()
             if fg_hwnd and fg_hwnd != self.hwnd.value:
                 pid = wintypes.DWORD()
-                user32.GetWindowThreadProcessId(fg_hwnd, ctypes.byref(pid))
+                tid = user32.GetWindowThreadProcessId(fg_hwnd, ctypes.byref(pid))
                 if pid.value != ctypes.windll.kernel32.GetCurrentProcessId():
                     self.last_foreground_hwnd = wintypes.HWND(fg_hwnd)
+                    game_title = self._get_window_title(self.last_foreground_hwnd)
+                    logger.info(f"[SEAMLESS-1.6] Preserve Foreground Window (Game): HWND={self.last_foreground_hwnd.value}, PID={pid.value}, TID={tid}, Title='{game_title}'")
+                    # Tối ưu hóa FSO Registry và chuẩn hóa Borderless cho Game
+                    self.game_compat.optimize_game(pid.value, self.last_foreground_hwnd.value, self.screen_w, self.screen_h)
         except Exception as e:
-            logger.debug(f"Lỗi preserve_foreground_window: {e}")
+            logger.debug(f"[SEAMLESS-1.6] Lỗi preserve_foreground_window: {e}")
 
     def restore_foreground_window(self):
         """Khôi phục lại tiêu điểm ngay lập tức cho Game nếu phát hiện bị cướp Focus"""
         try:
             if self.last_foreground_hwnd and self.last_foreground_hwnd.value:
-                user32.SetForegroundWindow(self.last_foreground_hwnd)
+                self.game_compat.restore_if_minimized(self.last_foreground_hwnd.value)
+                game_title = self._get_window_title(self.last_foreground_hwnd)
+                target_pid = wintypes.DWORD()
+                target_tid = user32.GetWindowThreadProcessId(self.last_foreground_hwnd, ctypes.byref(target_pid))
+                cur_tid = kernel32.GetCurrentThreadId()
+
+                if target_pid.value:
+                    user32.AllowSetForegroundWindow(target_pid.value)
+                else:
+                    user32.AllowSetForegroundWindow(ASFW_ANY)
+
+                attached = False
+                if target_tid and target_tid != cur_tid:
+                    attached = bool(user32.AttachThreadInput(cur_tid, target_tid, True))
+
+                res = bool(user32.SetForegroundWindow(self.last_foreground_hwnd))
+                last_err = ctypes.get_last_error()
+
+                if attached:
+                    user32.AttachThreadInput(cur_tid, target_tid, False)
+
+                logger.info(f"[SEAMLESS-1.6] Restore Foreground Window (Game): HWND={self.last_foreground_hwnd.value}, Title='{game_title}', Attached={attached}, Result={res}, LastError={last_err}")
         except Exception as e:
-            logger.debug(f"Lỗi restore_foreground_window: {e}")
+            logger.debug(f"[SEAMLESS-1.6] Lỗi restore_foreground_window: {e}")
 
     def enforce_no_activate_children(self):
         """Khóa cờ WS_EX_NOACTIVATE cho toàn bộ các cửa sổ con (Chromium DirectComposition HWNDs)"""
         try:
+            child_count = 0
             def _enum_cb(child_hwnd, lparam):
+                nonlocal child_count
                 try:
+                    child_count += 1
                     st = user32.GetWindowLongW(child_hwnd, GWL_EXSTYLE)
                     if not (st & WS_EX_NOACTIVATE):
                         user32.SetWindowLongW(child_hwnd, GWL_EXSTYLE, st | WS_EX_NOACTIVATE)
@@ -227,8 +330,9 @@ class WindowManager(QObject):
                 return True
 
             user32.EnumChildWindows(self.hwnd, WNDENUMPROC(_enum_cb), 0)
+            logger.info(f"[SEAMLESS-1.6] Enforce WS_EX_NOACTIVATE: Đã quét và khóa cờ cho {child_count} cửa sổ con Chromium")
         except Exception as e:
-            logger.debug(f"Lỗi enforce_no_activate_children: {e}")
+            logger.debug(f"[SEAMLESS-1.6] Lỗi enforce_no_activate_children: {e}")
 
     def _set_click_through(self, click_through: bool):
         """
@@ -236,29 +340,67 @@ class WindowManager(QObject):
         Cửa sổ luôn giữ nguyên vị trí trên màn hình. Tuyệt đối không gửi SWP_FRAMECHANGED để tránh kích hoạt Fullscreen Occlusion của DXGI.
         """
         try:
-            current_style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
+            cur_style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
             base_flags = WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED
+
+            def _apply_style(h, is_transparent):
+                try:
+                    s = user32.GetWindowLongW(h, GWL_EXSTYLE)
+                    ns = (s | WS_EX_TRANSPARENT) if is_transparent else (s & ~WS_EX_TRANSPARENT)
+                    if ns != s:
+                        user32.SetWindowLongW(h, GWL_EXSTYLE, ns)
+                except Exception:
+                    pass
+
             if click_through:
-                new_style = (current_style | base_flags) | WS_EX_TRANSPARENT
+                new_style = (cur_style | base_flags) | WS_EX_TRANSPARENT
                 user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, new_style)
             else:
-                new_style = (current_style | base_flags) & ~WS_EX_TRANSPARENT
+                new_style = (cur_style | base_flags) & ~WS_EX_TRANSPARENT
                 user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, new_style)
-                user32.SetWindowPos(
+
+            # Đồng bộ đệ quy cho toàn bộ cửa sổ con
+            child_synced = 0
+            def _child_cb(child_h, _):
+                nonlocal child_synced
+                child_synced += 1
+                _apply_style(child_h, click_through)
+                return True
+            user32.EnumChildWindows(self.hwnd, WNDENUMPROC(_child_cb), 0)
+
+            logger.info(f"[SEAMLESS-1.4] Click-Through Toggle: Requested={click_through}, HWND={self.hwnd}, OldStyle={hex(cur_style)}, NewStyle={hex(new_style)}, ChildrenSynced={child_synced}")
+
+            # Chỉ gọi SetWindowPos nếu cửa sổ chưa nằm trên Band 2 (ZBID_UIACCESS).
+            # Khi đã ở Band 2, cửa sổ mặc định nằm trên toàn bộ ứng dụng Band 1 (kể cả Exclusive Fullscreen).
+            # Gọi SetWindowPos trên Band 2 sẽ phát sự kiện hệ thống khiến DXGI đánh văng Game Exclusive Fullscreen!
+            if not click_through and self.current_band < ZBID_UIACCESS:
+                safe_set_window_pos(
                     self.hwnd,
                     HWND_TOPMOST,
                     0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
                 )
         except Exception as e:
-            logger.warning(f"Lỗi khi chuyển trạng thái Click-Through ({click_through}): {e}")
+            logger.warning(f"[SEAMLESS-1.4] Lỗi khi chuyển trạng thái Click-Through ({click_through}): {e}")
+
+    def _get_monitor_dpi_ratio(self, h_mon) -> float:
+        """Đọc hệ số tỉ lệ DPI thực tế trực tiếp từ Monitor qua shcore.GetDpiForMonitor"""
+        try:
+            shcore = ctypes.windll.shcore
+            dpi_x = wintypes.UINT(96)
+            dpi_y = wintypes.UINT(96)
+            # MDT_EFFECTIVE_DPI = 0
+            if shcore.GetDpiForMonitor(h_mon, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)) == 0 and dpi_x.value > 0:
+                return float(dpi_x.value) / 96.0
+        except Exception:
+            pass
+        return float(self.widget.devicePixelRatio() or 1.0)
 
     def _get_screen_dimensions(self) -> tuple[int, int]:
         """
-        Xác định độ phân giải quét vật lý thực tế của Monitor chứa cửa sổ hiện hành.
-        Đảm bảo không bao giờ bị bóp về 720p khi Game đang tạm thời ép màn hình xuống 720p.
+        Xác định độ phân giải quét vật lý thực tế (Physical Pixels) của Monitor chứa cửa sổ hiện hành.
+        Tuyệt đối không dùng QGuiApplication.primaryScreen().geometry() vì hàm đó trả về Logical Pixels (1280x720 thay vì 1920x1080 ở DPI 150%).
         """
-        w, h = 1920, 1080
         # 1. Thử lấy thông số Monitor vật lý bao chứa cửa sổ Game hoặc cửa sổ chính qua MonitorFromWindow
         try:
             target_hwnd = user32.GetForegroundWindow() or self.hwnd
@@ -271,62 +413,76 @@ class WindowManager(QObject):
                         mon_w = mi.rcMonitor.right - mi.rcMonitor.left
                         mon_h = mi.rcMonitor.bottom - mi.rcMonitor.top
                         if mon_w >= 640 and mon_h >= 480:
-                            w, h = mon_w, mon_h
+                            logger.info(f"[SEAMLESS-1.2] Screen Dimensions Query: Result={mon_w}x{mon_h}, Source='MonitorFromWindow (HWND={target_hwnd})'")
+                            return mon_w, mon_h
         except Exception as e:
-            logger.debug(f"Không thể lấy kích thước từ MonitorFromWindow: {e}")
+            logger.debug(f"[SEAMLESS-1.2] Lỗi MonitorFromWindow: {e}")
 
         # 2. Đọc độ phân giải quét vật lý tức thời qua SM_CXSCREEN, SM_CYSCREEN
-        if w == 1920 and h == 1080:
-            sw = user32.GetSystemMetrics(0)
-            sh = user32.GetSystemMetrics(1)
-            if sw > 0 and sh > 0:
-                w, h = sw, sh
+        sw = user32.GetSystemMetrics(0)
+        sh = user32.GetSystemMetrics(1)
+        if sw >= 640 and sh >= 480:
+            logger.info(f"[SEAMLESS-1.2] Screen Dimensions Query: Result={sw}x{sh}, Source='GetSystemMetrics (SM_CXSCREEN)'")
+            return sw, sh
 
-        # 3. Fallback qua màn hình chính của Qt
-        if w == 1920 and h == 1080:
-            screen = QGuiApplication.primaryScreen()
-            if screen:
-                geo = screen.geometry()
-                w, h = geo.width(), geo.height()
+        # 3. Fallback qua màn hình chính của Qt (Nhân lại với devicePixelRatio để ra Physical Pixels)
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            geo = screen.geometry()
+            dpr = float(screen.devicePixelRatio() or 1.0)
+            pw = int(round(geo.width() * dpr))
+            ph = int(round(geo.height() * dpr))
+            logger.info(f"[SEAMLESS-1.2] Screen Dimensions Query: Result={pw}x{ph}, Source='QGuiApplication.primaryScreen * DPR({dpr})'")
+            return pw, ph
 
-        # Đảm bảo không bao giờ co lại nhỏ hơn kích thước Desktop gốc đã xác định lúc khởi tạo
-        if hasattr(self, "native_w") and hasattr(self, "native_h"):
-            self.native_w = max(self.native_w, w)
-            self.native_h = max(self.native_h, h)
-            return self.native_w, self.native_h
-
-        return w, h
+        logger.info("[SEAMLESS-1.2] Screen Dimensions Query: Result=1920x1080, Source='Default Fallback'")
+        return 1920, 1080
 
     @Slot(int)
     def update_geometry(self, width: int):
         self.width_setting = width
         screen_w, screen_h = self._get_screen_dimensions()
+        self.screen_w = screen_w
+        self.screen_h = screen_h
+        dpr = float(self.widget.devicePixelRatio() or 1.0)
 
-        # Nếu giá trị truyền vào là phần trăm (<= 100), tính ra pixel thực tế
+        logical_screen_w = max(1, int(round(screen_w / dpr)))
+        logical_screen_h = max(1, int(round(screen_h / dpr)))
+
+        # Tính toán bề rộng panel theo tỉ lệ % hoặc pixel trực tiếp
         if width <= 100:
-            actual_width = int(screen_w * (width / 100.0))
+            actual_width = int(round(logical_screen_w * (width / 100.0)))
         else:
-            actual_width = width
+            actual_width = int(round(width / dpr))
 
-        self.panel_width = max(300, min(screen_w, actual_width))
+        self.panel_width = max(240, min(logical_screen_w, actual_width))
+        target_x = max(0, logical_screen_w - self.panel_width)
+        target_y = 0
+        target_w = self.panel_width
+        target_h = logical_screen_h
 
-        # Chỉ cập nhật kích thước nếu độ phân giải màn hình vật lý thực sự thay đổi
         cur_geo = self.widget.geometry()
-        if cur_geo.width() != screen_w or cur_geo.height() != screen_h or cur_geo.x() != 0 or cur_geo.y() != 0:
-            self.widget.setGeometry(0, 0, screen_w, screen_h)
-            user32.SetWindowPos(
-                self.hwnd,
-                HWND_TOPMOST,
-                0, 0, screen_w, screen_h,
-                SWP_NOACTIVATE | SWP_NOOWNERZORDER
-            )
+        logger.info(
+            f"[SEAMLESS-1.2] Side Dock Viewport Check: "
+            f"Cur=({cur_geo.x()},{cur_geo.y()},{cur_geo.width()}x{cur_geo.height()}), "
+            f"Target=({target_x},{target_y},{target_w}x{target_h}), "
+            f"Screen={screen_w}x{screen_h}, DPR={dpr}, WidthSetting={width}%"
+        )
+
+        if (
+            abs(cur_geo.width() - target_w) > 2
+            or abs(cur_geo.height() - target_h) > 2
+            or abs(cur_geo.x() - target_x) > 2
+            or cur_geo.y() != target_y
+        ):
+            self.widget.setGeometry(target_x, target_y, target_w, target_h)
 
     @Slot()
     def bring_to_front(self):
-        """Giữ cửa sổ ở đỉnh Z-Order mà tuyệt đối không gọi BringWindowToTop để tránh làm mất Focus của Game"""
-        if not self.is_visible:
+        """Giữ cửa sổ ở đỉnh Z-Order mà tuyệt đối không phát thông điệp thừa khi đã ở ZBID_UIACCESS (Band 2)"""
+        if not self.is_visible or self.current_band >= ZBID_UIACCESS:
             return
-        user32.SetWindowPos(
+        safe_set_window_pos(
             self.hwnd,
             HWND_TOPMOST,
             0, 0, 0, 0,
@@ -339,29 +495,54 @@ class WindowManager(QObject):
         self._is_closing = False
         self.is_visible = True
 
+        logger.info("----------------------------------------------------------------")
+        logger.info("[SEAMLESS] BẮT ĐẦU HIỂN THỊ OVERLAY (SHOW REQUEST)")
         self.preserve_foreground_window()
+        if self.last_foreground_hwnd and self.last_foreground_hwnd.value:
+            self.game_compat.restore_if_minimized(self.last_foreground_hwnd.value)
         self.enforce_no_activate_children()
 
         self.update_geometry(self.width_setting)
-        # Tắt chế độ xuyên thấu (gỡ cờ WS_EX_TRANSPARENT) để Panel và Backdrop nhận tương tác chuột
+        # 1.4. Tắt chế độ xuyên thấu để Panel nhận thao tác chuột
         self._set_click_through(False)
+        if self.last_foreground_hwnd and self.last_foreground_hwnd.value:
+            self.game_compat.restore_if_minimized(self.last_foreground_hwnd.value)
 
-        # Kiểm tra nếu ForegroundWindow bị lệch sang HWND của chúng ta thì lập tức trả lại cho Game
-        if user32.GetForegroundWindow() == self.hwnd.value:
+        # 1.5. Khi cửa sổ đã nằm ở ZBID_UIACCESS (Band 2) và đã gọi widget.show() từ lúc khởi tạo,
+        # TUYỆT ĐỐI KHÔNG gọi lại SetWindowPos(..., SWP_SHOWWINDOW) vì cờ SWP_SHOWWINDOW phát sự kiện
+        # EVENT_OBJECT_SHOW cấp hệ thống làm 4A Engine (Metro Exodus) tự thoát Exclusive Fullscreen!
+        if self.current_band < ZBID_UIACCESS:
+            safe_set_window_pos(
+                self.hwnd,
+                HWND_TOPMOST,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW
+            )
+
+        # 1.6. Kiểm tra nếu ForegroundWindow bị lệch sang HWND của chúng ta thì lập tức trả lại cho Game
+        cur_fg = user32.GetForegroundWindow()
+        if cur_fg == self.hwnd.value:
+            logger.info(f"[SEAMLESS-1.6] Phát hiện Foreground bị chiếm bởi Overlay HWND={cur_fg}, đang khôi phục lại cho Game...")
             self.restore_foreground_window()
 
         self.visibility_changed.emit(True)
-        logger.info(f"Hiển thị thanh điều khiển Handheld (Click-Through=False, Band={self.current_band}).")
+        logger.info(f"[SEAMLESS] HOÀN TẤT HIỂN THỊ (Click-Through=False, Band={self.current_band})")
+        logger.info("----------------------------------------------------------------")
 
     def _perform_physical_hide(self):
         self._hide_timer.stop()
         self._is_closing = False
         self.is_visible = False
 
-        # Bật chế độ xuyên thấu 100% (WS_EX_TRANSPARENT) mà KHÔNG ẩn hay di dời cửa sổ
-        # Giúp DWM giữ nguyên Composed Flip, chuột đi xuyên thẳng vào Game bên dưới, không bao giờ nháy màn hình đen
+        logger.info("----------------------------------------------------------------")
+        logger.info("[SEAMLESS] ĐÓNG OVERLAY VẬT LÝ (_perform_physical_hide)")
+        # 1.4. Bật chế độ xuyên thấu 100% mà KHÔNG ẩn hay di dời cửa sổ
         self._set_click_through(True)
-        logger.info("Đã đóng thanh điều khiển (Click-Through=True, bảo toàn Focus & DWM Flip của Game).")
+
+        # 1.6. Đảm bảo Focus được giữ nguyên ở Game
+        self.restore_foreground_window()
+        logger.info(f"[SEAMLESS] HOÀN TẤT ĐÓNG OVERLAY (Click-Through=True, Bảo toàn Focus & DWM Flip của Game)")
+        logger.info("----------------------------------------------------------------")
 
     @Slot()
     def request_animated_hide(self):
@@ -370,16 +551,15 @@ class WindowManager(QObject):
             return
         self._is_closing = True
         self.visibility_changed.emit(False)
-        # Hẹn giờ dự phòng 240ms phòng trường hợp WebSocket chưa phản hồi lệnh closeOverlay
         self._hide_timer.start(240)
 
     @Slot()
     def hide(self):
-        """Được gọi khi khởi tạo hoặc ngay sau khi Flutter đã hoàn tất hiệu ứng Fade-Out (closeOverlay)"""
         self._perform_physical_hide()
 
     @Slot()
     def toggle(self):
+        logger.info(f"[SEAMLESS] Nhận yêu cầu TOGGLE: is_visible={self.is_visible}, is_closing={self._is_closing}")
         if self.is_visible and not self._is_closing:
             self.request_animated_hide()
         else:
