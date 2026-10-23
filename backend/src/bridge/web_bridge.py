@@ -146,6 +146,7 @@ class WebBridge(QObject):
             self.config.set(width, "overlay", "width_percent")
         else:
             self.config.set(width, "overlay", "width")
+        self.requestWidthChange.emit(width)
 
     @Slot(float)
     def setPanelScale(self, scale: float):

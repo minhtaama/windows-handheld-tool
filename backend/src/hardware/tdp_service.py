@@ -135,6 +135,12 @@ class TdpService:
                 self.lib.get_tctl_temp.restype = c_float
                 self.lib.get_tctl_temp.argtypes = [c_void_p]
 
+            for fn in ["get_socket_power", "get_stapm_value", "get_core_power", "get_tctl_temp_value"]:
+                if hasattr(self.lib, fn):
+                    f = getattr(self.lib, fn)
+                    f.restype = c_float
+                    f.argtypes = [c_void_p]
+
             self.ry_handle = self.lib.init_ryzenadj()
             if self.ry_handle:
                 self.is_active = True
@@ -200,29 +206,50 @@ class TdpService:
         return True
 
     def get_telemetry(self) -> Tuple[float, float, float]:
-        """Trả về (CPU_Temp_C, TDP_Watt, Fast_Limit_Watt) kèm cơ chế ước lượng thông minh chống đóng băng Fan curve"""
+        """Trả về (CPU_Temp_C, Live_TDP_Watt, Fast_Limit_Watt) với cơ chế thả nổi động theo tải hệ thống"""
+        live_power = 0.0
+        temp = 0.0
+        fast = 0.0
+
         if self.is_active and self.ry_handle and self.lib:
             try:
                 if hasattr(self.lib, "refresh_table"):
                     self.lib.refresh_table(self.ry_handle)
                 temp = self.lib.get_tctl_temp(self.ry_handle) if hasattr(self.lib, "get_tctl_temp") else 0.0
-                stapm = self.lib.get_stapm_limit(self.ry_handle) if hasattr(self.lib, "get_stapm_limit") else 0.0
+                if temp <= 0 and hasattr(self.lib, "get_tctl_temp_value"):
+                    temp = self.lib.get_tctl_temp_value(self.ry_handle)
+
+                if hasattr(self.lib, "get_socket_power"):
+                    live_power = float(self.lib.get_socket_power(self.ry_handle))
+                if live_power <= 0.0 and hasattr(self.lib, "get_stapm_value"):
+                    live_power = float(self.lib.get_stapm_value(self.ry_handle))
+                if live_power <= 0.0 and hasattr(self.lib, "get_core_power"):
+                    live_power = float(self.lib.get_core_power(self.ry_handle))
+
                 fast = self.lib.get_fast_limit(self.ry_handle) if hasattr(self.lib, "get_fast_limit") else 0.0
-                if temp > 0:
-                    return float(temp), float(stapm), float(fast)
+                if temp > 0 and live_power > 0.0:
+                    return float(temp), float(round(live_power, 1)), float(fast)
             except Exception:
                 pass
 
-        # Nguồn nhiệt độ dự phòng động (Dynamic Thermal Fallback):
-        # Ước lượng nhiệt độ dựa trên tải thực tế của CPU để Fan curve luôn có dữ liệu sống và điều tốc quạt mượt mà
+        # Nguồn dự phòng động (Dynamic Telemetry Fallback):
+        # Ước lượng nhiệt độ và công suất TDP thả nổi dựa trên % tải CPU thực tế
         try:
             import psutil
             cpu_load = psutil.cpu_percent(interval=None)
-            # Đường cong nhiệt ước lượng: Cơ sở 40°C khi nghỉ, tăng tuyến tính lên tới ~85°C khi full load
             estimated_temp = round(40.0 + (cpu_load * 0.45), 1)
         except Exception:
+            cpu_load = 10.0
             estimated_temp = 45.0
 
-        live_tdp = getattr(self, "last_set_tdp", 15.0)
-        return float(estimated_temp), float(live_tdp), float(live_tdp + 3.0)
+        if temp <= 0:
+            temp = estimated_temp
+
+        # Công suất sàn khi nghỉ (Idle Floor): 4.5W
+        # Công suất trần: last_set_tdp do người dùng cài đặt
+        # Live TDP thả nổi linh hoạt theo tải CPU thực tế, không dính chết vào mức trần
+        cap_tdp = getattr(self, "last_set_tdp", 15.0)
+        idle_tdp = 4.5
+        calculated_live_tdp = round(idle_tdp + (cpu_load / 100.0) * max(1.0, cap_tdp - idle_tdp), 1)
+        return float(temp), float(calculated_live_tdp), float(cap_tdp + 3.0)
 

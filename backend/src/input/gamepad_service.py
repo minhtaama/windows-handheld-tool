@@ -39,6 +39,7 @@ XINPUT_GAMEPAD_A              = 0x1000
 XINPUT_GAMEPAD_B              = 0x2000
 XINPUT_GAMEPAD_X              = 0x4000
 XINPUT_GAMEPAD_Y              = 0x8000
+XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE = 16000
 
 # Ánh xạ tên nút (dạng UPPERCASE) sang Bitmask XInput
 GAMEPAD_NAME_TO_MASK = {
@@ -209,8 +210,21 @@ class GamepadService:
                     # 3. Khi QuickPanel đang mở: Quét các nút điều hướng và chuyển tiếp sang Flutter Web
                     # (Bỏ qua nếu đang bấm bất kỳ tổ hợp phím tắt toàn cục nào để tránh nhảy focus)
                     if self.is_panel_visible and not is_overlay_combo and not is_keyboard_combo:
+                        thumb_lx = state.Gamepad.sThumbLX
+                        thumb_ly = state.Gamepad.sThumbLY
+
                         for mask, btn_name in GAMEPAD_NAV_BUTTONS:
                             is_down = bool(buttons & mask)
+                            # Ánh xạ cần Joystick trái (Left Thumbstick) sang các hướng D-Pad tương ứng
+                            if btn_name == "dpadUp":
+                                is_down = is_down or (thumb_ly > XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE)
+                            elif btn_name == "dpadDown":
+                                is_down = is_down or (thumb_ly < -XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE)
+                            elif btn_name == "dpadLeft":
+                                is_down = is_down or (thumb_lx < -XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE)
+                            elif btn_name == "dpadRight":
+                                is_down = is_down or (thumb_lx > XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE)
+
                             btn_state = self._button_states.get(btn_name)
 
                             if is_down:

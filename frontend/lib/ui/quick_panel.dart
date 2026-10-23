@@ -312,8 +312,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       _telemetryData = SystemTelemetryService.instance.getSnapshot();
 
       final hwTdp = _tdpCtrl.getLiveTdp();
-      _liveTdp = hwTdp != null ? hwTdp.round() : _tdp;
-      _liveFan = _fanAuto ? _telemetryData.liveFan : _fan;
+      _liveTdp = hwTdp != null ? hwTdp.round() : _telemetryData.liveTdp;
+      _liveFan = _telemetryData.liveFan;
 
       _isRtssRunning = _rtssCtrl.isAvailable();
       if (_isRtssRunning) {
@@ -742,7 +742,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     setState(() {
       _tdp = val;
       _tdpAuto = false;
-      _liveTdp = _liveTdp.clamp(_tdpCtrl.minVal, val);
     });
     _tdpCtrl.setValue(val);
     widget.config.set("hardware.tdp.current", val);
@@ -764,7 +763,6 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     setState(() {
       _fan = val;
       _fanAuto = false;
-      _liveFan = val;
     });
     _fanCtrl.setValue(val);
     widget.config.set("hardware.fan.current", val);
