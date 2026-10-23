@@ -8,7 +8,7 @@ import mmap
 import winreg
 import subprocess
 import threading
-from typing import Optional
+from typing import Optional, Tuple
 from src.core.logger import setup_logger
 
 logger = setup_logger("RtssService")
@@ -37,6 +37,9 @@ class RtssService:
             return
         self.is_connected = False
         self.mm: Optional[mmap.mmap] = None
+        self.app_arr_offset: int = 0
+        self.app_arr_size: int = 0
+        self.app_entry_size: int = 0
         self.rtss_dir: Optional[str] = self._detect_rtss_dir()
         self.hooks_dll = None
         self._last_launch_attempt: float = 0.0
@@ -71,6 +74,22 @@ class RtssService:
         if os.path.isfile(dll_path):
             try:
                 self.hooks_dll = ctypes.cdll.LoadLibrary(dll_path)
+                if hasattr(self.hooks_dll, "LoadProfile"):
+                    self.hooks_dll.LoadProfile.argtypes = [ctypes.c_char_p]
+                    self.hooks_dll.LoadProfile.restype = None
+                if hasattr(self.hooks_dll, "SaveProfile"):
+                    self.hooks_dll.SaveProfile.argtypes = [ctypes.c_char_p]
+                    self.hooks_dll.SaveProfile.restype = None
+                if hasattr(self.hooks_dll, "SetProfileProperty"):
+                    self.hooks_dll.SetProfileProperty.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_uint32]
+                    self.hooks_dll.SetProfileProperty.restype = ctypes.c_bool
+                if hasattr(self.hooks_dll, "GetProfileProperty"):
+                    self.hooks_dll.GetProfileProperty.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_uint32]
+                    self.hooks_dll.GetProfileProperty.restype = ctypes.c_bool
+                if hasattr(self.hooks_dll, "UpdateProfiles"):
+                    self.hooks_dll.UpdateProfiles.argtypes = []
+                    self.hooks_dll.UpdateProfiles.restype = None
+                logger.info("Đã nạp và cấu hình chữ ký API RTSSHooks64.dll thành công.")
             except Exception as e:
                 logger.warning(f"Không thể nạp RTSSHooks64.dll: {e}")
 
@@ -95,7 +114,7 @@ class RtssService:
                 self._close_mm()
                 return
 
-            # Mở tạm 40 bytes đầu tiên để đọc Header xác định tổng kích thước vùng nhớ OSD thực tế
+            # Mở tạm 40 bytes đầu tiên để đọc Header xác định tổng kích thước vùng nhớ OSD & AppEntries thực tế
             temp_mm = mmap.mmap(-1, 40, tagname="RTSSSharedMemoryV2", access=mmap.ACCESS_READ)
             header_bytes = temp_mm.read(40)
             temp_mm.close()
@@ -112,10 +131,19 @@ class RtssService:
                 self._close_mm()
                 return
 
-            total_size = max(65536, osd_arr_offset + (osd_arr_size * osd_entry_size))
+            self.app_arr_offset = app_arr_offset
+            self.app_arr_size = app_arr_size
+            self.app_entry_size = app_entry_size
+
+            # Bao phủ toàn bộ cả mảng OSD slots và mảng App entries
+            total_size = max(
+                65536,
+                osd_arr_offset + (osd_arr_size * osd_entry_size),
+                app_arr_offset + (app_arr_size * app_entry_size),
+            )
             self.mm = mmap.mmap(-1, total_size, tagname="RTSSSharedMemoryV2", access=mmap.ACCESS_WRITE)
             self.is_connected = True
-            logger.info(f"Đã kết nối thành công RTSS Shared Memory V2 (Kích thước map: {total_size} bytes).")
+            logger.info(f"Đã kết nối thành công RTSS Shared Memory V2 (Kích thước map: {total_size} bytes, {app_arr_size} app entries).")
         except Exception as e:
             logger.debug(f"Không thể mở RTSS Shared Memory: {e}")
             self._close_mm()
@@ -330,12 +358,107 @@ class RtssService:
         except Exception:
             return False
 
+    _IGNORED_APPS = {
+        "windows_handheld_tool.exe",
+        "python.exe",
+        "rtss.exe",
+        "rivatunerstatisticsserver.exe",
+        "rtsshstig.exe",
+        "cloudflare warp.exe",
+        "amdinstallmanager.exe",
+        "explorer.exe",
+        "taskmgr.exe",
+        "dwmapi.exe",
+    }
+
+    def get_active_game_and_fps(self) -> Tuple[Optional[str], Optional[int]]:
+        """
+        Quét mảng AppEntries trong RTSSSharedMemoryV2 để lấy tên game đang chạy và FPS tức thời.
+        Ưu tiên các ứng dụng 3D thực tế thay vì các tool nền.
+        """
+        if not self.is_connected or not self.mm:
+            if not self.ensure_running() or not self.mm:
+                return None, None
+
+        if self.app_arr_size <= 0 or self.app_entry_size <= 0:
+            return None, None
+
+        try:
+            fallback_candidate = None
+            total_mm_size = self.mm.size()
+
+            for i in range(self.app_arr_size):
+                offset = self.app_arr_offset + (i * self.app_entry_size)
+                if offset + 284 > total_mm_size:
+                    break
+
+                self.mm.seek(offset)
+                data = self.mm.read(284)
+                pid, = struct.unpack("<I", data[0:4])
+                if pid == 0:
+                    continue
+
+                raw_name = data[4:264].split(b"\x00")[0].decode("utf-8", errors="ignore").strip()
+                if not raw_name:
+                    continue
+
+                exe_name = os.path.basename(raw_name)
+                time0, time1, frames, frametime = struct.unpack("<IIII", data[268:284])
+
+                # Tính FPS tức thời từ micro-giây của frame gần nhất (chuẩn RTSS SDK)
+                instant_fps = 0
+                if frametime > 0:
+                    instant_fps = round(1000000.0 / frametime)
+                elif time1 > time0 and frames > 0:
+                    instant_fps = round(1000.0 * frames / (time1 - time0))
+
+                if instant_fps > 0:
+                    if exe_name.lower() not in self._IGNORED_APPS:
+                        # Tìm thấy game 3D thực sự đang render
+                        return exe_name, instant_fps
+                    elif fallback_candidate is None:
+                        fallback_candidate = (exe_name, instant_fps)
+
+            # Nếu không có game 3D ngoài nhưng có app fallback thì trả về None để không nhầm tool là game
+            return None, None
+        except Exception as e:
+            logger.debug(f"Lỗi khi đọc AppEntries từ RTSS Shared Memory: {e}")
+            return None, None
+
+    def get_fps_limit(self) -> int:
+        """Đọc giới hạn FPS hiện tại từ RTSSHooks64 DLL"""
+        if self.hooks_dll and hasattr(self.hooks_dll, "GetProfileProperty"):
+            try:
+                self.hooks_dll.LoadProfile(b"")
+                val = ctypes.c_uint32(0)
+                if self.hooks_dll.GetProfileProperty(b"FramerateLimit", ctypes.byref(val), 4):
+                    return int(val.value)
+            except Exception as e:
+                logger.debug(f"Lỗi đọc FramerateLimit qua RTSSHooks64: {e}")
+        return 0
+
     def set_fps_limit(self, limit: int) -> bool:
-        """Ghi giới hạn FPS vào tệp cấu hình profile Global của RTSS"""
+        """Thiết lập giới hạn FPS qua RTSSHooks64 DLL API hoặc fallback ghi tệp cấu hình profile Global"""
         limit = max(0, min(360, limit))
         logger.info(f"Đặt giới hạn FPS RTSS: {limit} FPS")
 
-        # 1. Thử cập nhật trực tiếp qua tệp cấu hình Global của RTSS
+        # 1. Ưu tiên hàng đầu: Sử dụng API chính thức của RTSSHooks64.dll
+        if self.hooks_dll and hasattr(self.hooks_dll, "SetProfileProperty"):
+            try:
+                self.hooks_dll.LoadProfile(b"")
+                val = ctypes.c_uint32(limit)
+                res = self.hooks_dll.SetProfileProperty(b"FramerateLimit", ctypes.byref(val), 4)
+                if res:
+                    self.hooks_dll.SaveProfile(b"")
+                    self.hooks_dll.UpdateProfiles()
+                    logger.info(f"Đã cập nhật FramerateLimit={limit} qua RTSSHooks64 API thành công.")
+                    return True
+                else:
+                    logger.warning("RTSSHooks64 SetProfileProperty trả về False.")
+            except Exception as e:
+                logger.warning(f"Lỗi khi cập nhật FramerateLimit qua DLL: {e}")
+
+        # 2. Cơ chế Fallback: Ghi trực tiếp vào tệp cấu hình Global của RTSS nếu DLL lỗi
         if self.rtss_dir:
             profile_path = os.path.join(self.rtss_dir, "Profiles", "Global")
             try:
@@ -374,14 +497,13 @@ class RtssService:
                 os.makedirs(os.path.dirname(profile_path), exist_ok=True)
                 with open(profile_path, "w", encoding="utf-8") as f:
                     f.writelines(new_lines)
-                logger.info(f"Đã ghi Framerate Limit={limit} vào {profile_path}")
+                logger.info(f"Đã ghi Framerate Limit={limit} vào {profile_path} (Fallback)")
 
-                # Kích hoạt RTSS tải lại profile nếu có DLL
                 if self.hooks_dll and hasattr(self.hooks_dll, "UpdateProfiles"):
                     self.hooks_dll.UpdateProfiles()
 
                 return True
             except Exception as e:
-                logger.error(f"Lỗi khi ghi profile RTSS: {e}")
+                logger.error(f"Lỗi khi ghi profile RTSS fallback: {e}")
 
         return False

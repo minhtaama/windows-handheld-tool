@@ -71,10 +71,6 @@ class _OverlayScreenState extends State<OverlayScreen>
       listenable: OverlayController.instance,
       builder: (context, _) {
         final isVisible = OverlayController.instance.isVisible;
-        final widthPercent = OverlayController.instance.widthPercent;
-        final screenWidth = MediaQuery.sizeOf(context).width;
-        final panelWidth =
-            (screenWidth * (widthPercent / 100.0)).clamp(320.0, screenWidth);
 
         return Scaffold(
           backgroundColor: AppTheme.transparent,

@@ -17,6 +17,8 @@ class SystemTelemetryData {
   final int cpuTemp;
   final int liveTdp;
   final int liveFan;
+  final int? liveFps;
+  final String? activeGame;
 
   const SystemTelemetryData({
     required this.timeString,
@@ -33,6 +35,8 @@ class SystemTelemetryData {
     this.cpuTemp = 45,
     this.liveTdp = 15,
     this.liveFan = 50,
+    this.liveFps,
+    this.activeGame,
   });
 
   factory SystemTelemetryData.initial() {
@@ -51,6 +55,8 @@ class SystemTelemetryData {
       cpuTemp: 40,
       liveTdp: 15,
       liveFan: 50,
+      liveFps: null,
+      activeGame: null,
     );
   }
 }

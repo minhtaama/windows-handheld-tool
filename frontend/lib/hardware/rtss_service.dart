@@ -1,5 +1,6 @@
 import '../core/logger.dart';
 import '../services/bridge_service.dart';
+import '../services/system_telemetry_service.dart';
 import 'hardware_base.dart';
 
 /// Dịch vụ quản lý kết nối RivaTuner Statistics Server (RTSS) qua BridgeService.
@@ -31,9 +32,9 @@ class RtssService {
     return true;
   }
 
-  int? getInstantaneousFps() => 60;
+  int? getInstantaneousFps() => SystemTelemetryService.instance.latest.liveFps;
 
-  String? getActiveGameName() => null;
+  String? getActiveGameName() => SystemTelemetryService.instance.latest.activeGame;
 
   bool isOsdEnabled() => _osdEnabled;
 

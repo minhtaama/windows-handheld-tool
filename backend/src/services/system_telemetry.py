@@ -2,6 +2,7 @@ import psutil
 from typing import Dict, Any
 from src.hardware.tdp_service import TdpService
 from src.hardware.fan_service import FanService
+from src.hardware.rtss_service import RtssService
 from src.core.logger import setup_logger
 
 logger = setup_logger("SystemTelemetry")
@@ -20,6 +21,7 @@ class SystemTelemetryService:
             return
         self.tdp_service = TdpService()
         self.fan_service = FanService()
+        self.rtss_service = RtssService()
         try:
             psutil.cpu_percent(interval=None)  # Mồi trước để chu kỳ sau trả về đúng % CPU
         except Exception:
@@ -27,7 +29,7 @@ class SystemTelemetryService:
         self._initialized = True
 
     def get_snapshot(self) -> Dict[str, Any]:
-        """Thu thập các chỉ số phần cứng tức thời: CPU, RAM, Pin, Nhiệt độ, TDP, Quạt"""
+        """Thu thập các chỉ số phần cứng tức thời: CPU, RAM, Pin, Nhiệt độ, TDP, Quạt, FPS và Game"""
         cpu_usage = psutil.cpu_percent(interval=None)
         mem = psutil.virtual_memory()
         ram_usage = mem.percent
@@ -41,6 +43,8 @@ class SystemTelemetryService:
         cpu_temp, live_tdp, fast_limit = self.tdp_service.get_telemetry()
         current_fan = self.fan_service.get_speed()
         is_auto_fan = self.fan_service.is_auto
+
+        active_game, live_fps = self.rtss_service.get_active_game_and_fps()
 
         return {
             "cpu_percent": int(cpu_usage),
@@ -58,6 +62,8 @@ class SystemTelemetryService:
             "live_fan": current_fan,
             "is_fan_auto": is_auto_fan,
             "fan_auto": is_auto_fan,
+            "live_fps": live_fps,
+            "active_game": active_game,
         }
 
 

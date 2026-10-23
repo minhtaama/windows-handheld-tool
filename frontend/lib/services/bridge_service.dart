@@ -201,6 +201,8 @@ class BridgeService {
       cpuTemp: cpuTemp,
       liveTdp: liveTdp,
       liveFan: (data['live_fan'] ?? data['fan_speed'] ?? fanSpeed.value) as int,
+      liveFps: data['live_fps'] != null ? (data['live_fps'] as num).toInt() : null,
+      activeGame: data['active_game'] as String?,
     );
 
     _telemetryController.add(telemData);

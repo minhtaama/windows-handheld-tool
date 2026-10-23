@@ -75,6 +75,8 @@ if exist "windows_handheld_tool.spec" del /F /Q "windows_handheld_tool.spec"
     --uac-uiaccess ^
     --manifest "app.manifest" ^
     --add-data "config.json;." ^
+    --icon "assets\app_icon.ico" ^
+    --add-data "assets;assets" ^
     --add-data "bin;bin" ^
     --add-data "..\frontend\build\web;build\web" ^
     "main.py"
@@ -92,6 +94,10 @@ echo.
 :: 5. Copy clean runtime driver binaries, web assets and config.json to Release folder
 echo [*] Step 4/6: Synchronizing driver binaries and web assets to dist folder...
 if not exist "%DIST_DIR%\bin" mkdir "%DIST_DIR%\bin"
+if not exist "%DIST_DIR%\assets" mkdir "%DIST_DIR%\assets"
+if exist "%PROJECT_ROOT%\backend\assets" (
+    robocopy "%PROJECT_ROOT%\backend\assets" "%DIST_DIR%\assets" /E >nul
+)
 for %%F in (
     "ryzenadj.exe"
     "ryzenadj.dll"
@@ -177,7 +183,7 @@ echo.
 
 :: 8. Launch the deployed application via ShellExecuteEx (Start-Process) so AppInfo service grants TokenUIAccess
 echo [*] Launching application from Secure Location via ShellExecute...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%TARGET_DIR%\windows_handheld_tool.exe' -WorkingDirectory '%TARGET_DIR%'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "ie4uinit.exe -show 2>$null; Start-Process -FilePath '%TARGET_DIR%\windows_handheld_tool.exe' -WorkingDirectory '%TARGET_DIR%'"
 
 echo.
 echo Application is now running in Windows System Z-Band with TokenUIAccess.

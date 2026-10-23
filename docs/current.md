@@ -87,6 +87,13 @@
     Code thực tế: Cần kiểm tra lại cấu trúc đọc `AppEntries` trong `RTSSSharedMemoryV2` tại `backend/src/hardware/rtss_service.py`.
     Hiện tượng: FPS counter trong RTSS chưa hoạt động thực tế, đang bị khóa cứng cố định tại số 60 chứ không hiển thị đúng với giá trị FPS thực tế của game.
     Tình trạng: Còn tồn đọng lỗi.
+  + [23/10/2026 23:18] Khắc phục lỗi hardcode và tích hợp đọc AppEntries:
+    Code thực tế:
+      - `backend/src/hardware/rtss_service.py`: Mở rộng kích thước map bộ nhớ chia sẻ lên 5.57 MB bao phủ mảng 256 `AppEntries` (offset 2,396,256). Bổ sung hàm `get_active_game_and_fps()` quét tiến trình game 3D thực tế, đọc thời gian vi mô `dwFrameTime` tính instantaneous FPS (`1000000.0 / dwFrameTime`) và trích xuất tên file thực thi `szName`.
+      - `backend/src/services/system_telemetry.py`: Tích hợp `live_fps` và `active_game` vào snapshot telemetry bắn qua WebSocket IPC mỗi giây.
+      - `frontend/lib/services/system_telemetry_service.dart` & `frontend/lib/services/bridge_service.dart`: Bổ sung phân giải `liveFps` và `activeGame`.
+      - `frontend/lib/hardware/rtss_service.dart`: Xóa bỏ code hardcode trả về 60 trong `getInstantaneousFps()`, lấy trực tiếp từ telemetry sống `SystemTelemetryService.instance.latest.liveFps`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [ ] **Khóa giới hạn khung hình (FPS Limit)**
   + [Initial] Code thực tế: `backend/src/hardware/rtss_service.py` ghi mục `[Framerate] Limit` trong tệp cấu hình profile `Global` của RTSS và gọi cập nhật hồ sơ.
@@ -95,6 +102,11 @@
     Code thực tế: Cần kiểm tra lại quyền ghi file config và lệnh đồng bộ UpdateProfiles xuống RTSS trong `backend/src/hardware/rtss_service.py`.
     Hiện tượng: Chưa rõ tính năng FPS limit có hoạt động được không, nhưng kiểm tra thực tế có vẻ chưa hoạt động (game không bị giới hạn khung hình theo mức FPS đã đặt).
     Tình trạng: Còn tồn đọng lỗi.
+  + [23/10/2026 23:18] Tích hợp Profile API native của RTSSHooks64.dll:
+    Code thực tế:
+      - `backend/src/hardware/rtss_service.py`: Khai báo và gọi trực tiếp các API native từ `RTSSHooks64.dll` (`LoadProfile`, `SetProfileProperty`, `SaveProfile`, `UpdateProfiles`). Thiết lập thuộc tính `FramerateLimit` dạng `DWORD` cho profile `Global`, kích hoạt cờ `APPFLAG_PROFILE_UPDATE_REQUESTED` để toàn bộ tiến trình game đang nạp hook hãm FPS tức thì mà không bị chặn bởi phân quyền thư mục UAC của Windows.
+      - Duy trì cơ chế ghi file cấu hình fallback phòng trường hợp DLL hook chưa sẵn sàng.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [x] **Tùy chỉnh thông số hiển thị & Bố cục OSD**
   + [Initial] Code thực tế: `frontend/lib/hardware/rtss_osd_formatter.dart` định dạng chuỗi thẻ màu RTSS markup, cho phép bật/tắt độc lập các thông số (FPS, TDP, Temp, CPU load, RAM, Pin, Fan) và chuyển đổi 2 kiểu layout (1 dòng hoặc nhiều dòng).
@@ -122,11 +134,32 @@
 
 ---
 
-## 6. Khởi động app cùng Windows (Autostart)
+## 6. Khởi động app cùng Windows (Autostart) & Khay hệ thống (System Tray)
 
 - [x] **Đăng ký tự khởi chạy ngầm**
   + [Initial] Code thực tế: `backend/src/services/autostart_service.py` ghi đường dẫn vào Registry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Khởi chạy ứng dụng ở chế độ thu nhỏ vào khay hệ thống (System Tray).
     Tình trạng: Hoạt động ổn định.
+
+- [ ] **Biểu tượng ứng dụng & Khay hệ thống (App & Tray Icon)**
+  + [Initial] Code thực tế: `backend/main.py` hàm `create_tray_icon()` đang vẽ tạm một hình tròn màu tím có chữ "H" bằng `QPainter`, file `.exe` chưa được gán tệp icon `.ico` riêng.
+    Tình trạng: Chưa hoàn thiện nhận diện thương hiệu.
+  + [23/10/2026 23:22] Yêu cầu đổi sang icon Gamepad của Google Fonts:
+    Kế hoạch kỹ thuật:
+      - Tải asset vector SVG biểu tượng gamepad (`sports_esports` / `gamepad`) từ Google Fonts Material Symbols.
+      - Xuất bộ icon đa kích thước: `app_icon.png` (dùng cho `QSystemTrayIcon` và cửa sổ) và `app_icon.ico` (16x16, 32x32, 48x48, 64x64, 128x128, 256x256) đặt trong thư mục `backend/assets/`.
+      - Cập nhật `backend/main.py`: Nạp trực tiếp `app_icon.ico` hoặc `app_icon.png` cho `app.setWindowIcon()` và `QSystemTrayIcon`.
+      - Cấu hình cờ `--icon backend/assets/app_icon.ico` trong quy trình đóng gói PyInstaller để file `.exe` hiển thị đúng icon gamepad trên File Explorer và Taskbar của Windows.
+    Tình trạng: Đã ghi nhận kế hoạch (Chờ triển khai).
+  + [23/10/2026 23:27] Triển khai icon Gamepad Google Fonts:
+    Code thực tế:
+      - Đã sinh và lưu `backend/assets/app_icon.png` và `backend/assets/app_icon.ico` chuẩn 7 kích thước Win32 (16, 24, 32, 48, 64, 128, 256 px) dựa trên vector `sports_esports` từ Google Fonts Material Symbols với nền chuyển sắc hiện đại.
+      - `backend/main.py`: Bổ sung hàm `get_app_icon()` ưu tiên nạp icon gamepad từ `backend/assets/`, tự động gán cho cả `app.setWindowIcon()` và `QSystemTrayIcon()`. Đồng thời file `backend/assets/app_icon.ico` đã sẵn sàng để truyền vào cờ `--icon` khi đóng gói file `.exe`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 01:13] Khắc phục lỗi hiển thị icon cũ sau khi build:
+    Code thực tế:
+      - `scripts/deploy/deploy_test.bat`: Bổ sung tham số `--icon "assets\app_icon.ico"` và `--add-data "assets;assets"` vào lệnh PyInstaller; sao chép thư mục `backend\assets` sang thư mục phát hành `%DIST_DIR%\assets`; bổ sung lệnh làm mới cache icon Windows Explorer `ie4uinit.exe -show` sau khi triển khai.
+      - `backend/main.py`: Cập nhật hàm `get_app_icon()` hỗ trợ quét thư mục `assets` qua `sys._MEIPASS` và `sys.executable` trong môi trường PyInstaller; nâng cấp cơ chế fallback vẽ trực tiếp vector Google Fonts `sports_esports` qua `QSvgRenderer` nếu tệp đĩa bị thiếu (loại bỏ hoàn toàn hình tròn chữ "H" cũ).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 ---
 
