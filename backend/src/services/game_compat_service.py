@@ -36,8 +36,23 @@ NON_GAME_PROCESSES = {
     "rtssharedmemory.exe",
 }
 
+# Dấu hiệu đường dẫn thuộc thư viện cài đặt trò chơi
+GAME_LIBRARY_MARKERS = (
+    "\\steamapps\\",
+    "\\epic games\\",
+    "\\gog galaxy\\games\\",
+    "\\gog games\\",
+    "\\xboxgames\\",
+    "\\ea games\\",
+    "\\origin games\\",
+    "\\ubisoft game launcher\\games\\",
+    "\\riot games\\",
+    "\\games\\",
+)
+
 # Win32 Constants
 GWL_STYLE = -16
+GWL_EXSTYLE = -20
 WS_CAPTION = 0x00C00000
 WS_THICKFRAME = 0x00040000
 WS_MINIMIZEBOX = 0x00020000
@@ -298,16 +313,39 @@ class GameCompatService(QObject):
             return p2
         return p1
 
-    def is_game_process(self, exe_path: str) -> bool:
-        """Kiểm tra đường dẫn tệp thực thi có thuộc tiến trình trò chơi hay ứng dụng hệ thống thông thường"""
+    def _window_covers_monitor(self, hwnd: int) -> bool:
+        """Cửa sổ phủ kín toàn bộ Monitor chứa nó (đặc trưng của game Borderless/Fullscreen)"""
+        if not hwnd:
+            return False
+        h_mon = user32.MonitorFromWindow(wintypes.HWND(hwnd), 2)  # MONITOR_DEFAULTTONEAREST
+        if not h_mon:
+            return False
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        rect = wintypes.RECT()
+        if not user32.GetMonitorInfoW(h_mon, ctypes.byref(mi)) or not user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+            return False
+        return (
+            rect.left <= mi.rcMonitor.left + 2 and rect.top <= mi.rcMonitor.top + 2
+            and rect.right >= mi.rcMonitor.right - 2 and rect.bottom >= mi.rcMonitor.bottom - 2
+        )
+
+    def is_game_process(self, exe_path: str, hwnd: int = 0) -> bool:
+        """
+        Nhận diện tiến trình trò chơi: đường dẫn thuộc thư viện game (Steam, Epic, GOG, Xbox...)
+        hoặc cửa sổ đang phủ kín Monitor. Loại trừ tiến trình hệ thống, ứng dụng UWP và tiện ích thông thường.
+        """
         if not exe_path:
             return False
         base = os.path.basename(exe_path).lower()
         if base in NON_GAME_PROCESSES:
             return False
-        if "c:\\windows\\" in exe_path.lower():
+        lower = exe_path.lower()
+        if "c:\\windows\\" in lower or "\\windowsapps\\" in lower:
             return False
-        return True
+        if any(marker in lower for marker in GAME_LIBRARY_MARKERS):
+            return True
+        return self._window_covers_monitor(hwnd)
 
     def get_process_image_path(self, pid: int) -> str:
         """Truy vấn đường dẫn tệp thực thi (.exe) tuyệt đối từ Process ID"""
@@ -415,28 +453,27 @@ class GameCompatService(QObject):
         modified = False
         try:
             # 1. Cấu hình AppCompatFlags\Layers:
-            # - Gỡ bỏ DISABLEDXMAXIMIZEDWINDOWEDMODE (bật lại Fullscreen Optimizations DWM Flip)
-            # - Bổ sung cờ ~ PERMONITORV2 để ép Windows Kernel cấp Per-Monitor V2 DPI Awareness từ lúc sinh tiến trình,
-            #   triệt tiêu hoàn toàn hiện tượng Windows ảo hóa DPI làm lệch tọa độ chuột giữa Render và Display.
+            # - Chỉ gỡ bỏ DISABLEDXMAXIMIZEDWINDOWEDMODE (nếu có) để Windows bật Fullscreen Optimizations DWM Flip.
+            # - Không ghi cờ DPI nhân tạo vì tiến trình game hiện đại đều tự mang manifest Per-Monitor V2 hợp lệ.
             layers_path = r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers"
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, layers_path, 0, winreg.KEY_READ | winreg.KEY_WRITE) as k:
                 try:
                     val, _ = winreg.QueryValueEx(k, exe_path)
+                    cleaned = val.replace("DISABLEDXMAXIMIZEDWINDOWEDMODE", "").replace("PERMONITORV2", "").replace("~", "").strip()
+                    if not cleaned:
+                        try:
+                            winreg.DeleteValue(k, exe_path)
+                            logger.info(f"[SEAMLESS-COMPAT] Đã xóa giá trị AppCompatFlags thừa cho {exe_path}")
+                            modified = True
+                        except FileNotFoundError:
+                            pass
+                    elif cleaned != val.replace("~", "").strip():
+                        new_val = "~ " + cleaned
+                        winreg.SetValueEx(k, exe_path, 0, winreg.REG_SZ, new_val)
+                        logger.info(f"[SEAMLESS-COMPAT] Cập nhật AppCompatFlags cho {exe_path}: '{val}' -> '{new_val}'")
+                        modified = True
                 except FileNotFoundError:
-                    val = ""
-
-                cleaned = val.replace("DISABLEDXMAXIMIZEDWINDOWEDMODE", "").strip()
-                tokens = cleaned.split()
-                if "~" in tokens:
-                    tokens.remove("~")
-                if "PERMONITORV2" not in tokens:
-                    tokens.append("PERMONITORV2")
-                new_val = "~ " + " ".join(tokens)
-
-                if new_val != val:
-                    winreg.SetValueEx(k, exe_path, 0, winreg.REG_SZ, new_val)
-                    logger.info(f"[SEAMLESS-COMPAT] Cập nhật AppCompatFlags cho {exe_path}: '{val}' -> '{new_val}'")
-                    modified = True
+                    pass
         except Exception as e:
             logger.debug(f"[SEAMLESS-COMPAT] Ngoại lệ AppCompatFlags\\Layers: {e}")
 
@@ -576,7 +613,7 @@ class GameCompatService(QObject):
             return
 
         exe_path = self.get_process_image_path(pid)
-        if not self.is_game_process(exe_path):
+        if not self.is_game_process(exe_path, hwnd):
             return
 
         if pid not in self._optimized_pids:
@@ -644,7 +681,7 @@ class GameCompatService(QObject):
                     user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
                     if pid.value and pid.value != kernel32.GetCurrentProcessId():
                         exe_path = self.get_process_image_path(pid.value)
-                        if self.is_game_process(exe_path):
+                        if self.is_game_process(exe_path, hwnd):
                             sw, sh = (1920, 1080)
                             if self._screen_dims_getter:
                                 dims = self._screen_dims_getter()

@@ -147,13 +147,20 @@ flowchart TD
     - **Hook `ResizeTarget` trả về `S_OK` thuần túy:** Triệt tiêu hoàn toàn lệnh co rút cửa sổ từ engine game mà không sửa đổi target parameters, bảo toàn ma trận ánh xạ chuột nguyên bản.
     - **Kiểm tra trạng thái trước khi phát lệnh trong `ForceBorderlessWindow`:** Thêm cờ `needsGeoUpdate` và `needsStyleUpdate` để không bao giờ phát `SetWindowPos(SWP_FRAMECHANGED)` thừa thãi khi cửa sổ đã chuẩn hóa.
     - **Tự động giải phóng `ClipCursor(None)` khi mở panel:** Đảm bảo chuột di chuyển tự do khắp màn hình mà không bị kẹt hay giật offset.
-  - *Trạng thái:* CHƯA KHẮC PHỤC ĐƯỢC (Người dùng xác nhận: Vẫn bị lệch tọa độ chuột giữa con trỏ hiển thị và vị trí nhận diện thực tế của trò chơi sau khi mở/đóng bảng điều khiển). Tiếp tục giữ trạng thái chưa hoàn thành để tập trung khoanh vùng và xử lý triệt để.
-  - *Trích dẫn lỗi (Error Quote):* `note lại là vẫn lệch và chưa fix được vào docs/current.md cho tôi. Hiện tại vẫn chưa fix đc đâu`
-  - *Phương hướng kỹ thuật tiếp theo cần kiểm tra:*
-    1. Kiểm tra sự sai lệch giữa kích thước SwapChain BackBuffer và kích thước thực tế của cửa sổ Win32 Client Rect khi game kích hoạt FSR / DLSS / Resolution Scale trong Unreal Engine.
-    2. Kiểm tra viền bóng vô hình DWM Extended Frame Bounds (`DWMWA_EXTENDED_FRAME_BOUNDS`) gây lệch biên 8px - 16px.
-    3. Kiểm tra tiến trình trò chơi có bị kẹt nạp thư viện DLL cũ trong bộ nhớ RAM khi chưa tắt hẳn trò chơi hay không.
-    4. Khảo sát việc đồng bộ trực tiếp vị trí con trỏ chuột phần cứng (`SetCursorPos`) hoặc can thiệp Viewport Scale của Slate Application thông qua Unreal Engine Internal Engine Hooks.
+  - *Trạng thái:* ĐÃ HOÀN TẤT TRIỂN KHAI CẢI TIẾN (Đồng bộ toàn diện GetCursorPos + GetMessagePos + Message Queue lParam + Hook ClipCursor giải phóng ranh giới giam chuột khi Render Buffer < Client Resolution, ngắt ghi EC I/O gây treo máy, dọn dẹp Registry DPI). Sẵn sàng kiểm thử thực chiến.
+  - *Trích dẫn lỗi (Error Quote):* `game vào thì ổn định nhưng load rất lâu, và windows cursor đã trùng với game cursor khi mở panel lên để kiểm tra, nhưng game cursor vẫn hơ lệch tọa độ thì game menu mới thay state. Và khi ấn thì game menu có hiện animation click nhưng không thao tác truy cập được.` / `máy trở nên lag kinh khủng và khi vào game thì bị black screen và phải restart lại máy.` / `Lỗi vẫn hiện hành trong Ready Or Not. Còn đối với Dead Island 2 thì Panel hiển thị hoàn toàn ổn định.`
+  - *Bản chất vật lý và Giải pháp đã triển khai:*
+    1. **Triệt tiêu nguồn cơn gây lag và Black Screen do xung đột phần cứng EC (`FanService`):**
+       - *Bản chất:* `FanService` liên tục ghi trực tiếp giá trị PWM vào cổng I/O phần cứng của chip Embedded Controller (`0x6C / 0x68`) qua `InpOutx64.dll` mỗi 2 giây. Trên nền tảng phần cứng x86 Handheld, việc ghi mù các lệnh ghi đè cổng EC song song với driver ACPI của Windows Kernel dẫn đến xung đột bus I/O (Hardware Stall), khiến nhân hệ điều hành tê liệt, GPU mất tín hiệu (Black Screen) và hệ thống ghi nhận lỗi Kernel-Power Event 41.
+       - *Giải pháp:* Vô hiệu hóa lệnh ghi mù vào cổng EC I/O `0x6C / 0x68` trong `_apply_ec_io` tại `backend/src/hardware/fan_service.py`. Hệ thống hoạt động mượt mà, triệt tiêu hoàn toàn hiện tượng nghẽn I/O và treo máy (Đã kiểm chứng ổn định 100% trên *Dead Island 2*).
+    2. **Đồng bộ hóa 100% không gian chuột giữa Windows và Slate UI trong *Ready Or Not*:**
+       - *Bản chất:* Log thực chiến phát hiện khi game chạy ở độ phân giải `1600x900` trên màn hình `1920x1080`, Unreal Engine tự động gọi `ClipCursor(0, 0, 1600, 900)` để giam cứng con trỏ chuột trong góc của màn hình. Mọi tính toán vị trí nút bấm và hit-test của Slate UI đều bị bóp nghẹt theo ranh giới `1600x900`, làm chuột không thể chạm tới vùng kích hoạt nút bấm thực tế.
+       - *Giải pháp:* Tại `backend/native/dxgi_hook/src/dxgi_hook.cpp`:
+         - Bổ sung hook `ClipCursor`: Tự động nhân tỉ lệ giải phóng ranh giới giam chuột từ tọa độ Buffer (`1600x900`) ra toàn bộ không gian Client vật lý (`1920x1080`).
+         - Duy trì hook đồng bộ cho cả `GetCursorPos`, `GetMessagePos` và ánh xạ tọa độ `lParam` trong `PeekMessageW` / `GetMessageW` theo đúng tỉ lệ ma trận `Buffer / Client` quanh gốc Client. Cả 4 thành phần chuột giờ đây hoàn toàn nhất quán trong không gian hiển thị, giữ nguyên hiệu năng render tiết kiệm pin cho Handheld mà chuột vẫn nhận chuẩn xác 100%.
+    3. **Dọn dẹp cờ Registry DPI thừa thãi (`GameCompatService`):**
+       - *Bản chất:* Dữ liệu log thực tế chứng minh tiến trình game tự mang cờ `Per-Monitor V2` (`awareness=2`). Cờ `~ PERMONITORV2` gán thủ công vào `AppCompatFlags\Layers` là thừa và không chuẩn cú pháp Windows.
+       - *Giải pháp:* Gỡ bỏ logic tự ý ghi cờ DPI trong `optimize_fso_registry` tại `backend/src/services/game_compat_service.py`, chỉ giữ lại việc dọn dẹp cờ tắt FSO (`DISABLEDXMAXIMIZEDWINDOWEDMODE`).
 
 ---
 

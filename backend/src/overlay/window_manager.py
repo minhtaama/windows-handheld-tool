@@ -235,7 +235,7 @@ class WindowManager(QObject):
         # [SEAMLESS-COMPAT] Dịch vụ quản trị tương thích Game (FSO, Borderless, Anti-Minimize, DXGI Hook Injector)
         self.game_compat = GameCompatService(self)
         self.game_compat.install_lifecycle_hooks(
-            target_hwnd_getter=lambda: self.last_foreground_hwnd.value if self.last_foreground_hwnd else 0,
+            target_hwnd_getter=lambda: (self.last_foreground_hwnd.value or 0) if self.last_foreground_hwnd else 0,
             is_active_getter=lambda: self.is_visible,
             screen_dimensions_getter=lambda: (self.screen_w, self.screen_h)
         )
@@ -334,6 +334,9 @@ class WindowManager(QObject):
                 pid = wintypes.DWORD()
                 tid = user32.GetWindowThreadProcessId(fg_hwnd, ctypes.byref(pid))
                 if pid.value != ctypes.windll.kernel32.GetCurrentProcessId():
+                    exe_path = self.game_compat.get_process_image_path(pid.value)
+                    if not self.game_compat.is_game_process(exe_path, fg_hwnd):
+                        return
                     self.last_foreground_hwnd = wintypes.HWND(fg_hwnd)
                     game_title = self._get_window_title(self.last_foreground_hwnd)
                     logger.info(f"[SEAMLESS-1.6] Preserve Foreground Window (Game): HWND={self.last_foreground_hwnd.value}, PID={pid.value}, TID={tid}, Title='{game_title}'")

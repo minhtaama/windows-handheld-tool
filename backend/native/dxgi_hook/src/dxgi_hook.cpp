@@ -101,6 +101,123 @@ static bool IsPanelActive() {
     return false;
 }
 
+// Con trỏ hàm gốc của API vị trí chuột màn hình và hàng đợi thông điệp
+typedef BOOL (WINAPI* PFN_GetCursorPos)(LPPOINT lpPoint);
+typedef BOOL (WINAPI* PFN_SetCursorPos)(int X, int Y);
+typedef DWORD (WINAPI* PFN_GetMessagePos)(VOID);
+typedef BOOL (WINAPI* PFN_PeekMessageW)(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax, UINT wRemoveMsg);
+typedef BOOL (WINAPI* PFN_GetMessageW)(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax);
+
+static PFN_GetCursorPos g_pOrigGetCursorPos = nullptr;
+static PFN_SetCursorPos g_pOrigSetCursorPos = nullptr;
+static PFN_GetMessagePos g_pOrigGetMessagePos = nullptr;
+static PFN_PeekMessageW g_pOrigPeekMessageW = nullptr;
+static PFN_GetMessageW g_pOrigGetMessageW = nullptr;
+
+// Lấy hệ số Client/Buffer và gốc Client của cửa sổ game. Trả về false nếu không cần ánh xạ (tỉ lệ 1:1)
+static bool GetCursorMappingParams(double& ratioX, double& ratioY, POINT& origin) {
+    HWND hGame = g_hGameWnd.load();
+    UINT bufW = g_uBufferWidth.load(), bufH = g_uBufferHeight.load();
+    if (!hGame || bufW == 0 || bufH == 0 || !IsWindow(hGame)) return false;
+
+    RECT rcClient;
+    if (!GetClientRect(hGame, &rcClient)) return false;
+    int clientW = rcClient.right - rcClient.left;
+    int clientH = rcClient.bottom - rcClient.top;
+    if (clientW <= 0 || clientH <= 0) return false;
+    if (clientW == (int)bufW && clientH == (int)bufH) return false;
+
+    origin = { 0, 0 };
+    if (!ClientToScreen(hGame, &origin)) return false;
+    ratioX = (double)bufW / (double)clientW;
+    ratioY = (double)bufH / (double)clientH;
+    return true;
+}
+
+// Vị trí chuột vật lý thực (không ánh xạ), dùng cho chẩn đoán
+static BOOL RawGetCursorPos(LPPOINT lpPoint) {
+    return g_pOrigGetCursorPos ? g_pOrigGetCursorPos(lpPoint) : GetCursorPos(lpPoint);
+}
+
+// Hook GetCursorPos: Game nhìn thấy chuột theo không gian Buffer (vd 1760x990) thay vì Client (1920x1080)
+BOOL WINAPI Hooked_GetCursorPos(LPPOINT lpPoint) {
+    if (!g_pOrigGetCursorPos) return FALSE;
+    BOOL res = g_pOrigGetCursorPos(lpPoint);
+    if (res && lpPoint) {
+        double rx, ry; POINT o;
+        if (GetCursorMappingParams(rx, ry, o)) {
+            lpPoint->x = o.x + (LONG)round((double)(lpPoint->x - o.x) * rx);
+            lpPoint->y = o.y + (LONG)round((double)(lpPoint->y - o.y) * ry);
+        }
+    }
+    return res;
+}
+
+// Hook SetCursorPos: Phép ngược lại, đưa tọa độ không gian Buffer của game về tọa độ vật lý
+BOOL WINAPI Hooked_SetCursorPos(int X, int Y) {
+    if (!g_pOrigSetCursorPos) return FALSE;
+    double rx, ry; POINT o;
+    if (GetCursorMappingParams(rx, ry, o)) {
+        X = o.x + (int)round((double)(X - o.x) / rx);
+        Y = o.y + (int)round((double)(Y - o.y) / ry);
+    }
+    return g_pOrigSetCursorPos(X, Y);
+}
+
+// Hook GetMessagePos: Đảm bảo bộ đệm vị trí chuột của Windows khớp chuẩn xác với GetCursorPos
+DWORD WINAPI Hooked_GetMessagePos(VOID) {
+    if (!g_pOrigGetMessagePos) return GetMessagePos();
+    DWORD pos = g_pOrigGetMessagePos();
+    double rx, ry; POINT o;
+    if (GetCursorMappingParams(rx, ry, o)) {
+        short rawX = (short)LOWORD(pos);
+        short rawY = (short)HIWORD(pos);
+        short scaledX = (short)(o.x + (LONG)round((double)(rawX - o.x) * rx));
+        short scaledY = (short)(o.y + (LONG)round((double)(rawY - o.y) * ry));
+        return MAKELPARAM(scaledX, scaledY);
+    }
+    return pos;
+}
+
+// Ánh xạ tọa độ chuột client trong lParam của các thông điệp chuột (WM_MOUSEMOVE, WM_LBUTTONDOWN...)
+static void ScaleMouseMessageLParam(LPMSG lpMsg) {
+    if (!lpMsg || !lpMsg->hwnd) return;
+    HWND hGame = g_hGameWnd.load();
+    if (!hGame || lpMsg->hwnd != hGame) return;
+
+    UINT msg = lpMsg->message;
+    if (msg == WM_MOUSEMOVE || msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP || msg == WM_LBUTTONDBLCLK ||
+        msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_RBUTTONDBLCLK ||
+        msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP || msg == WM_MBUTTONDBLCLK) {
+        double rx, ry; POINT o;
+        if (GetCursorMappingParams(rx, ry, o)) {
+            short rawX = (short)LOWORD(lpMsg->lParam);
+            short rawY = (short)HIWORD(lpMsg->lParam);
+            short scaledX = (short)round((double)rawX * rx);
+            short scaledY = (short)round((double)rawY * ry);
+            lpMsg->lParam = MAKELPARAM(scaledX, scaledY);
+        }
+    }
+}
+
+BOOL WINAPI Hooked_PeekMessageW(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax, UINT wRemoveMsg) {
+    if (!g_pOrigPeekMessageW) return FALSE;
+    BOOL res = g_pOrigPeekMessageW(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg);
+    if (res && lpMsg) {
+        ScaleMouseMessageLParam(lpMsg);
+    }
+    return res;
+}
+
+BOOL WINAPI Hooked_GetMessageW(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax) {
+    if (!g_pOrigGetMessageW) return -1;
+    BOOL res = g_pOrigGetMessageW(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax);
+    if (res > 0 && lpMsg) {
+        ScaleMouseMessageLParam(lpMsg);
+    }
+    return res;
+}
+
 // Cưỡng bức chuyển cửa sổ sang Borderless Fullscreen triệt để (Chuẩn hóa cả Style, ExStyle và Scaling)
 void ForceBorderlessWindow(HWND hWnd) {
     if (!hWnd || !IsWindow(hWnd)) return;
@@ -546,7 +663,7 @@ static void DiagSnapshot(const char* tag, bool force, char* lastSnapshot, size_t
     GetWindowRect(hWnd, &wr);
     BOOL hasClip = GetClipCursor(&clip);
     POINT pt = {0};
-    GetCursorPos(&pt);
+    RawGetCursorPos(&pt);
     POINT ptClient = pt;
     ScreenToClient(hWnd, &ptClient);
 
@@ -654,6 +771,31 @@ bool InitDxgiHook() {
     if (MH_Initialize() != MH_OK) {
         LogDebug("[DXGI_HOOK] MH_Initialize failed!\n");
         return false;
+    }
+
+    // Ánh xạ tọa độ chuột màn hình giữa không gian Client (cửa sổ) và Buffer (độ phân giải game render)
+    HMODULE hUser32Mouse = GetModuleHandleW(L"user32.dll");
+    if (hUser32Mouse) {
+        void* pGetCursorPos = (void*)GetProcAddress(hUser32Mouse, "GetCursorPos");
+        if (pGetCursorPos) {
+            MH_CreateHook(pGetCursorPos, (LPVOID)&Hooked_GetCursorPos, (LPVOID*)&g_pOrigGetCursorPos);
+        }
+        void* pSetCursorPos = (void*)GetProcAddress(hUser32Mouse, "SetCursorPos");
+        if (pSetCursorPos) {
+            MH_CreateHook(pSetCursorPos, (LPVOID)&Hooked_SetCursorPos, (LPVOID*)&g_pOrigSetCursorPos);
+        }
+        void* pGetMessagePos = (void*)GetProcAddress(hUser32Mouse, "GetMessagePos");
+        if (pGetMessagePos) {
+            MH_CreateHook(pGetMessagePos, (LPVOID)&Hooked_GetMessagePos, (LPVOID*)&g_pOrigGetMessagePos);
+        }
+        void* pPeekMsg = (void*)GetProcAddress(hUser32Mouse, "PeekMessageW");
+        if (pPeekMsg) {
+            MH_CreateHook(pPeekMsg, (LPVOID)&Hooked_PeekMessageW, (LPVOID*)&g_pOrigPeekMessageW);
+        }
+        void* pGetMsg = (void*)GetProcAddress(hUser32Mouse, "GetMessageW");
+        if (pGetMsg) {
+            MH_CreateHook(pGetMsg, (LPVOID)&Hooked_GetMessageW, (LPVOID*)&g_pOrigGetMessageW);
+        }
     }
 
     // 1. Tạo Dummy Window để lấy con trỏ VMT tức thời

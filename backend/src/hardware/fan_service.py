@@ -131,28 +131,12 @@ class FanService:
         return False
 
     def _apply_ec_io(self, percent: int) -> bool:
-        """Ghi giá trị điều tốc xuống thanh ghi của chip Embedded Controller (EC) qua cổng I/O 0x6C / 0x68"""
-        if not self.inpout:
-            return False
-        try:
-            # Kiểm tra trạng thái driver InpOut
-            is_open = getattr(self.inpout, "IsInpOutDriverOpen", lambda: True)()
-            if not is_open:
-                return False
-
-            from ctypes import c_ushort, c_ubyte
-            write_port = getattr(self.inpout, "DlPortWritePortUchar", None)
-            if write_port:
-                write_port.argtypes = [c_ushort, c_ubyte]
-                # Ghi lệnh điều khiển (0x2E/0x2D tùy thiết bị Handheld EC tiêu chuẩn)
-                # Chuyển đổi phần trăm (0-100) sang dải giá trị PWM EC (0-255)
-                pwm_val = int((percent / 100.0) * 255)
-                write_port(0x6C, 0x2E)
-                write_port(0x68, pwm_val)
-                logger.info(f"[EC I/O] Đã ghi giá trị PWM = {pwm_val} ({percent}%) vào thanh ghi EC.")
-                return True
-        except Exception as e:
-            logger.debug(f"Không thể ghi cổng EC: {e}")
+        """
+        Ghi giá trị điều tốc xuống thanh ghi của chip Embedded Controller (EC) qua cổng I/O 0x6C / 0x68.
+        CHÚ Ý: Cổng 0x6C/0x68 là cổng ACPI EC dùng chung của Kernel. Việc ghi bừa bãi mã lệnh cố định (0x2E)
+        sẽ làm xung đột ACPI bus, gây treo cứng hệ điều hành (Hardware Stall) dẫn đến sập nguồn/Black Screen.
+        Tạm thời vô hiệu hóa việc ghi mù xuống cổng này trừ khi có handshake định danh thiết bị cụ thể.
+        """
         return False
 
     def _apply_hardware_speed(self, percent: int):
