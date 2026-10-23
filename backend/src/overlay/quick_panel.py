@@ -108,6 +108,16 @@ class QuickPanel(QWidget):
         layout.setSpacing(0)
 
         # 1. Khởi tạo QWebEngineView trong suốt
+        # Đưa cache/storage của QtWebEngine vào %LOCALAPPDATA%\WindowsHandheldTools\cache (chung thư mục với logs)
+        try:
+            from PySide6.QtWebEngineCore import QWebEngineProfile
+            from src.core.logger import get_cache_dir
+            _profile = QWebEngineProfile.defaultProfile()
+            _cache_dir = get_cache_dir()
+            _profile.setCachePath(_cache_dir)
+            _profile.setPersistentStoragePath(_cache_dir)
+        except Exception:
+            pass
         self.view = QWebEngineView(self)
         self.view.setStyleSheet("background: transparent;")
         self.view.setFocusPolicy(Qt.FocusPolicy.NoFocus)

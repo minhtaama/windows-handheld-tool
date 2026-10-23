@@ -56,6 +56,8 @@ static PFN_XInputGetState g_pOrigXInputGetState = nullptr;
 static HANDLE g_hPanelActiveEvent = nullptr;
 
 // Ép nhận thức Per-Monitor V2 DPI cho tiến trình Game để triệt tiêu việc Windows ảo hóa tọa độ chuột
+static int g_dpiSetResult = -1; // 1 = OK, >1 = mã lỗi Win32 (5 = đã bị khóa DPI), -1 = chưa gọi
+
 static void InitDpiAwareness() {
     HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
     if (hUser32) {
@@ -64,7 +66,10 @@ static void InitDpiAwareness() {
             (PFN_SetProcessDpiAwarenessContext)GetProcAddress(hUser32, "SetProcessDpiAwarenessContext");
         if (pfnSetDpiContext) {
             // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
-            pfnSetDpiContext((void*)-4);
+            BOOL dpiOk = pfnSetDpiContext((void*)-4);
+            DWORD dpiErr = dpiOk ? 0 : GetLastError();
+            g_dpiSetResult = dpiOk ? 1 : (int)dpiErr;
+            LogDebug("[DXGI_HOOK] SetProcessDpiAwarenessContext(PMv2) ok=%d, err=%lu\n", dpiOk, dpiErr);
             LogDebug("[DXGI_HOOK] Đã kích hoạt Per-Monitor V2 DPI Awareness cho tiến trình Game\n");
             return;
         }
@@ -486,12 +491,165 @@ HRESULT WINAPI Hooked_CreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFacto
     return hr;
 }
 
+// ===== CHẨN ĐOÁN 1.11: Ghi log hình học / chuột / DPI ra file =====
+// File: %LOCALAPPDATA%\WindowsHandheldTools\logs\dxgi_diag.log (ghi nối tiếp, mọi tiến trình game đều ghi được)
+static void DiagWrite(const char* format, ...) {
+    char msg[1024];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(msg, sizeof(msg), format, args);
+    va_end(args);
+
+    char line[1200];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    int n = snprintf(line, sizeof(line), "%02d:%02d:%02d.%03d [PID %lu] %s\r\n",
+        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, GetCurrentProcessId(), msg);
+    if (n <= 0) return;
+
+    // Gộp chung thư mục dữ liệu ứng dụng: %LOCALAPPDATA%\WindowsHandheldTools\logs\dxgi_diag.log
+    static char logPath[MAX_PATH] = {0};
+    if (!logPath[0]) {
+        char base[MAX_PATH] = {0};
+        DWORD len = GetEnvironmentVariableA("LOCALAPPDATA", base, MAX_PATH);
+        if (len == 0 || len >= MAX_PATH) strncpy_s(base, "C:\\Users\\Public", _TRUNCATE);
+        char dir1[MAX_PATH], dir2[MAX_PATH];
+        snprintf(dir1, sizeof(dir1), "%s\\WindowsHandheldTools", base);
+        snprintf(dir2, sizeof(dir2), "%s\\logs", dir1);
+        CreateDirectoryA(dir1, NULL);
+        CreateDirectoryA(dir2, NULL);
+        snprintf(logPath, sizeof(logPath), "%s\\dxgi_diag.log", dir2);
+    }
+    HANDLE hFile = CreateFileA(logPath, FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(hFile, line, (DWORD)n, &written, NULL);
+        CloseHandle(hFile);
+    }
+    OutputDebugStringA(line);
+}
+
+// Chụp ảnh trạng thái và so sánh: BackBuffer vs ClientRect vs WindowRect vs DWM Frame vs DPI vs ClipCursor vs CursorPos
+static void DiagSnapshot(const char* tag, bool force, char* lastSnapshot, size_t lastSize) {
+    HWND hWnd = g_hGameWnd.load();
+    if (!hWnd || !IsWindow(hWnd)) {
+        hWnd = GetForegroundWindow();
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hWnd, &pid);
+        if (pid != GetCurrentProcessId()) hWnd = nullptr;
+    }
+    if (!hWnd) return;
+
+    RECT cr = {0}, wr = {0}, clip = {0}, dwmR = {0};
+    GetClientRect(hWnd, &cr);
+    GetWindowRect(hWnd, &wr);
+    BOOL hasClip = GetClipCursor(&clip);
+    POINT pt = {0};
+    GetCursorPos(&pt);
+    POINT ptClient = pt;
+    ScreenToClient(hWnd, &ptClient);
+
+    int dwmOk = -1;
+    HMODULE hDwm = LoadLibraryW(L"dwmapi.dll");
+    if (hDwm) {
+        typedef HRESULT (WINAPI* PFN_DwmGetWindowAttribute)(HWND, DWORD, PVOID, DWORD);
+        auto pfn = (PFN_DwmGetWindowAttribute)GetProcAddress(hDwm, "DwmGetWindowAttribute");
+        if (pfn) dwmOk = SUCCEEDED(pfn(hWnd, 9 /*DWMWA_EXTENDED_FRAME_BOUNDS*/, &dwmR, sizeof(dwmR))) ? 1 : 0;
+    }
+
+    UINT winDpi = 0, sysDpi = 0;
+    int awareness = -1;
+    HMODULE hUser = GetModuleHandleW(L"user32.dll");
+    if (hUser) {
+        typedef UINT (WINAPI* PFN_GetDpiForWindow)(HWND);
+        typedef UINT (WINAPI* PFN_GetDpiForSystem)(void);
+        typedef void* (WINAPI* PFN_GetThreadDpiAwarenessContext)(void);
+        typedef int (WINAPI* PFN_GetAwarenessFromDpiAwarenessContext)(void*);
+        auto pGetDpiWnd = (PFN_GetDpiForWindow)GetProcAddress(hUser, "GetDpiForWindow");
+        auto pGetDpiSys = (PFN_GetDpiForSystem)GetProcAddress(hUser, "GetDpiForSystem");
+        auto pGetCtx = (PFN_GetThreadDpiAwarenessContext)GetProcAddress(hUser, "GetThreadDpiAwarenessContext");
+        auto pGetAw = (PFN_GetAwarenessFromDpiAwarenessContext)GetProcAddress(hUser, "GetAwarenessFromDpiAwarenessContext");
+        if (pGetDpiWnd) winDpi = pGetDpiWnd(hWnd);
+        if (pGetDpiSys) sysDpi = pGetDpiSys();
+        if (pGetCtx && pGetAw) awareness = pGetAw(pGetCtx()); // 0=Unaware, 1=System, 2=PerMonitor
+    }
+
+    HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    GetMonitorInfo(hMon, &mi);
+
+    UINT bw = g_uBufferWidth.load(), bh = g_uBufferHeight.load();
+    int cw = cr.right - cr.left, ch = cr.bottom - cr.top;
+    int mw = mi.rcMonitor.right - mi.rcMonitor.left, mh = mi.rcMonitor.bottom - mi.rcMonitor.top;
+    double sx = (cw > 0 && bw > 0) ? (double)cw / bw : 0.0;
+    double sy = (ch > 0 && bh > 0) ? (double)ch / bh : 0.0;
+
+    char snap[900];
+    snprintf(snap, sizeof(snap),
+        "HWND=0x%p Buffer=%ux%u Client=%dx%d Window=(%ld,%ld,%ld,%ld) DwmFrame[%d]=(%ld,%ld,%ld,%ld) Monitor=%dx%d@(%ld,%ld) "
+        "Scale(Client/Buffer)=%.3fx%.3f DPI(win=%u,sys=%u,awareness=%d,setResult=%d) Clip[%d]=(%ld,%ld,%ld,%ld) "
+        "Cursor=(%ld,%ld) CursorClient=(%ld,%ld) Fg=%d PanelActive=%d",
+        hWnd, bw, bh, cw, ch, wr.left, wr.top, wr.right, wr.bottom,
+        dwmOk, dwmR.left, dwmR.top, dwmR.right, dwmR.bottom, mw, mh, mi.rcMonitor.left, mi.rcMonitor.top,
+        sx, sy, winDpi, sysDpi, awareness, g_dpiSetResult,
+        hasClip, clip.left, clip.top, clip.right, clip.bottom,
+        pt.x, pt.y, ptClient.x, ptClient.y,
+        (GetForegroundWindow() == hWnd) ? 1 : 0, IsPanelActive() ? 1 : 0);
+
+    // So sánh bỏ phần vị trí chuột (luôn đổi) để chỉ log khi hình học/trạng thái đổi
+    char key[900];
+    strncpy_s(key, sizeof(key), snap, _TRUNCATE);
+    char* cur = strstr(key, " Cursor=");
+    if (cur) *cur = '\0';
+
+    if (force || strcmp(key, lastSnapshot) != 0) {
+        strncpy_s(lastSnapshot, lastSize, key, _TRUNCATE);
+        DiagWrite("[%s] %s", tag, snap);
+        if (sx > 0 && sy > 0 && (fabs(sx - 1.0) > 0.01 || fabs(sy - 1.0) > 0.01)) {
+            DiagWrite("[%s] !!! LỆCH TỈ LỆ: Client/Buffer = %.3f x %.3f -> chuột sẽ lệch nếu engine dùng tọa độ buffer", tag, sx, sy);
+        }
+        if (hasClip && (clip.right - clip.left) != mw && (clip.right - clip.left) != cw) {
+            DiagWrite("[%s] !!! ClipCursor khác kích thước Client/Monitor: %ldx%ld", tag, clip.right - clip.left, clip.bottom - clip.top);
+        }
+    }
+}
+
+static DWORD WINAPI DiagThreadProc(LPVOID) {
+    DiagWrite("===== DXGI Hook Diagnostic thread started (exe pid=%lu) =====", GetCurrentProcessId());
+    char last[900] = {0};
+    bool lastPanel = false;
+    int tick = 0;
+    for (; g_bInitialized.load();) {
+        bool panel = IsPanelActive();
+        if (panel != lastPanel) {
+            lastPanel = panel;
+            // Chụp ngay tại thời điểm chuyển trạng thái, và thêm 1 mẫu sau 300ms để thấy game phản ứng
+            DiagSnapshot(panel ? "PANEL_OPEN" : "PANEL_CLOSE", true, last, sizeof(last));
+            Sleep(300);
+            DiagSnapshot(panel ? "PANEL_OPEN+300ms" : "PANEL_CLOSE+300ms", true, last, sizeof(last));
+            Sleep(1200);
+            DiagSnapshot(panel ? "PANEL_OPEN+1.5s" : "PANEL_CLOSE+1.5s", true, last, sizeof(last));
+            continue;
+        }
+        // Mỗi 1s kiểm tra thay đổi; mỗi 10s ghi một mẫu định kỳ để đối chiếu vị trí chuột
+        DiagSnapshot((tick % 10 == 0) ? "PERIODIC" : "CHANGE", (tick % 10 == 0), last, sizeof(last));
+        tick++;
+        Sleep(1000);
+    }
+    return 0;
+}
+
 // Khởi tạo Bootstrap bằng Dummy Window
 bool InitDxgiHook() {
     if (g_bInitialized.exchange(true)) return true;
 
     // Kích hoạt nhận thức Per-Monitor V2 DPI cho tiến trình Game
     InitDpiAwareness();
+
+    // Luồng chẩn đoán 1.11 (ghi log hình học/chuột ra %LOCALAPPDATA%\WindowsHandheldTools\logs\dxgi_diag.log)
+    HANDLE hDiag = CreateThread(NULL, 0, DiagThreadProc, NULL, 0, NULL);
+    if (hDiag) CloseHandle(hDiag);
 
     if (MH_Initialize() != MH_OK) {
         LogDebug("[DXGI_HOOK] MH_Initialize failed!\n");

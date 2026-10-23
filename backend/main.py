@@ -132,6 +132,9 @@ def main():
 
     # 1. Khởi tạo Qt Application
     app = QApplication(sys.argv)
+    # Gộp toàn bộ dữ liệu Qt (QtWebEngine cache, storage...) vào đúng 1 thư mục %LOCALAPPDATA%\WindowsHandheldTools
+    app.setApplicationName("WindowsHandheldTools")
+    app.setOrganizationName("")
     app.setQuitOnLastWindowClosed(False)
 
     # 2. Khởi tạo Panel Giao diện
