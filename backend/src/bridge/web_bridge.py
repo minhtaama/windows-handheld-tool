@@ -124,6 +124,7 @@ class WebBridge(QObject):
     def toggleMute(self) -> bool:
         return self.audio_svc.toggle_mute()
 
+
     @Slot(int)
     def setBrightness(self, percent: int):
         self.bright_svc.set_brightness(percent)

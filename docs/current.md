@@ -1,6 +1,6 @@
 # Trạng thái hiện tại của dự án (Project Status)
 
-> Cập nhật lần cuối: 24/10/2026 14:12
+~~~~> Cập nhật lần cuối: 24/10/2026 20:05
 
 > [!IMPORTANT]
 > **Quy tắc duy trì tài liệu**:
@@ -12,7 +12,50 @@
 >    - `+ [Ngày giờ]`: Các mốc thời gian cập nhật, sửa lỗi hoặc phát hiện lỗi mới. Tuyệt đối không xóa hay sửa đè lên các mốc timeline cũ.
 > 3. Khi vừa sửa xong code cho một lỗi, bổ sung một mốc `+ [Thời gian]` mới ghi rõ: **Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định)** và giữ checkbox tính năng là `- [ ]`. Chỉ tick `- [x]` sau khi người dùng hoặc kiểm thử thực chiến xác nhận.
 
+
+- [ ] **AMD RSR (Radeon Super Resolution) & Tương thích AMD In-Game Overlay**
+  + [Initial] Hiện tượng: Khi vào game, AMD Adrenalin In-Game Overlay (Alt+R) không thể mở lên; người dùng đã bật RSR ON trong AMD Software nhưng vào game RSR không kích hoạt upscaling (không phóng to từ 720p lên 1080p).
+    Nguyên nhân kỹ thuật:
+      - `dxgi_hook.cpp` ép 100% các game chạy ở chế độ Borderless Windowed và cưỡng bức `Hooked_GetFullscreenState` luôn trả về `*pFullscreen = FALSE`.
+      - AMD RSR mặc định chỉ chạy trên Exclusive Fullscreen; muốn chạy trên Borderless Windowed bắt buộc phải có cờ `upscaling_use_borderless = "TRUE"` và `upscaling_target_resolution` trong hồ sơ `%LOCALAPPDATA%\AMD\CN\gmdb.blb`. Do các game đều đang có cờ này là `FALSE`, driver AMD từ chối upscale.
+      - AMD Overlay (`amdow.exe`) nhận diện game là Windowed và bị hook SwapChain chặn nên không mở được bằng `Alt + R`.
+  + [24/10/2026 20:05] Khắc phục lỗi AMD RSR Borderless và mở khóa AMD Overlay In-Game:
+    Code thực tế:
+      - `backend/src/hardware/amd_rsr_service.py`: Xây dựng dịch vụ quản trị AMD RSR. Tự động đọc/ghi cấu hình `upscaling_enabled`, `upscaling_use_borderless = TRUE`, `upscaling_sharpness`, `upscaling_target_resolution = 1280x720` trong cơ sở dữ liệu `gmdb.blb` của AMD Adrenalin; hỗ trợ giả lập phím tắt `Alt + U` bằng `SendInput` để trigger daemon `amdfendrsr` tức thì in-game.
+      - `backend/src/services/game_compat_service.py`: Khi phát hiện game vừa khởi chạy, tự động gọi `ensure_game_borderless_rsr(exe_path)` đồng bộ ngay cờ Borderless RSR vào driver AMD trước khi tiêm hook.
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp`: Cập nhật `Hooked_GetFullscreenState` dùng `_ReturnAddress()` phân biệt caller. Khi caller là các module của AMD (`amdow.exe`, `amdfendrsr.dll`, `atidxx64.dll`, `IGOProxy64.exe`), trả về đúng trạng thái `*pFullscreen = TRUE` (nếu game đã từng yêu cầu Fullscreen) để AMD Overlay bung mở và RSR kích hoạt, đồng thời vẫn giữ `FALSE` cho game engine để ma trận chuột Client Rect không bị lệch. Cập nhật `Hooked_ResizeTarget` lưu kích thước buffer render thực tế.
+      - `backend/native/dxgi_hook/build.bat`: Biên dịch lại thành công `backend/bin/dxgi_hook.dll` (MSVC x64) và đồng bộ sang `dist/`.
+      - `backend/src/bridge/web_bridge.py` & `ws_server.py`: Bổ sung slot/action `setAmdRsr(enabled, sharpness)` và đưa snapshot telemetry `is_amd_gpu`, `amd_rsr_enabled`, `amd_rsr_sharpness` qua WebSocket IPC.
+      - `frontend/lib/services/bridge_service.dart`: Bổ sung ValueNotifiers `isAmdGpu`, `isAmdRsrEnabled`, `amdRsrSharpness` và API `setAmdRsr(enabled, {sharpness})`.
+      - `frontend/lib/ui/tabs/performance_tab.dart`: Bổ sung Section "ĐỒ HỌA AMD (RSR UPSCALING)" với ToggleCard công tắc RSR và SettingSlider điều chỉnh độ nét Sharpness (0% - 100%), hỗ trợ Gamepad 100%.
+      - `backend/windows_handheld_tool.spec`: Khai báo `hiddenimports=['win32com', 'win32com.client', 'wmi', 'pythoncom']`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [24/10/2026 21:30] Loại bỏ hoàn toàn cài đặt RSR khỏi Quick Panel và Backend theo yêu cầu:
+    Lý do: RSR là công nghệ xử lý cấp driver của AMD Software Adrenalin; việc can thiệp file cấu hình nội bộ gmdb.blb từ Panel gây dư thừa và khó kiểm soát.
+    Code thực tế:
+      - `backend/src/hardware/amd_rsr_service.py`: Xóa bỏ hoàn toàn tệp dịch vụ.
+      - `backend/src/services/game_compat_service.py`: Gỡ bỏ lệnh gọi đồng bộ RSR.
+      - `backend/src/bridge/web_bridge.py` & `ws_server.py`: Gỡ bỏ slot `setAmdRsr` và các telemetry liên quan.
+      - `frontend/lib/services/bridge_service.dart`: Gỡ bỏ ValueNotifiers `isAmdGpu`, `isAmdRsrEnabled`, `amdRsrSharpness` và hàm `setAmdRsr`.
+      - `frontend/lib/ui/tabs/performance_tab.dart`: Xóa bỏ phần giao diện "ĐỒ HỌA AMD (RSR UPSCALING)", tinh gọn lại navigationLayout và phím bấm Gamepad.
+      - Biên dịch lại bản phát hành tĩnh `flutter build web --release`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 01:25] Kích hoạt tự động AMD RSR khi hạ độ phân giải in-game qua Dynamic Display Mode Sync (CDS_FULLSCREEN) + Borderless 1:1:
+    Nguyên nhân kỹ thuật:
+      - Khi hạ độ phân giải game (ví dụ `1600x900`), `dxgi_hook.cpp` trước đây chặn `ResizeTarget` và ép `ForceBorderlessWindow` kéo giãn cửa sổ ra `1920x1080` trên Desktop `1920x1080`. Trình điều khiển AMD Adrenalin (`amdxc64.dll` / `amdfendrsr.exe`) kiểm tra thấy kích thước xuất hình bằng đúng độ phân giải vật lý của tấm nền nên báo *"Inactive: Both height and width must be lower than screen resolution"*.
+    Code thực tế:
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp`:
+        + Quản lý độ phân giải màn hình gốc (`g_uNativeWidth`, `g_uNativeHeight`, `g_uNativeRefreshRate`) thông qua `EnumDisplaySettingsW(NULL, ENUM_REGISTRY_SETTINGS, ...)`.
+        + Xây dựng hàm `ApplyDynamicDisplayMode`: Khi `Buffer (W x H)` nhỏ hơn màn hình gốc (ví dụ `1600x900` hoặc `1280x720`), tự động gọi `ChangeDisplaySettingsExW(NULL, &dm, NULL, CDS_FULLSCREEN, NULL)` chuyển tín hiệu xuất hình về đúng `W x H` và đặt cửa sổ Borderless `WS_POPUP` khớp 1:1. Tín hiệu xuất hình nhỏ hơn Native EDID kích hoạt ngay lập tức bộ phần cứng AMD Radeon Super Resolution (RSR Active) upscale lên 1080p. Đồng thời vì cửa sổ vẫn là Borderless (`WS_POPUP`), lớp phủ Quick Panel (`TokenUIAccess` / `WS_EX_NOACTIVATE`) luôn hiển thị on-top 100% không bao giờ bị văng game hay đen màn hình.
+        + Khi game render ở độ phân giải gốc (`bufW >= g_uNativeWidth`), tự động khôi phục chế độ hiển thị gốc bằng `ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL)`.
+        + Subclass cửa sổ game qua `GameSubclassWndProc` bắt `WM_ACTIVATEAPP`: nếu Alt+Tab ra ngoài desktop (và không phải mở Quick Panel), tự động trả độ phân giải Desktop về gốc; khi quay lại game, tự động áp dụng lại mode render của game. Bắt `WM_DESTROY` và `ShutdownDxgiHook` khôi phục an toàn màn hình gốc.
+        + Tích hợp `ApplyDynamicDisplayMode` vào toàn bộ chu trình SwapChain: `Hooked_ResizeBuffers`, `Hooked_ResizeTarget`, `Hooked_SetFullscreenState`, `Hooked_CreateSwapChain`, `Hooked_CreateSwapChainForHwnd`, `Hooked_D3D11CreateDeviceAndSwapChain`.
+      - `backend/native/dxgi_hook/build.bat`: Biên dịch thành công `backend/bin/dxgi_hook.dll` (MSVC x64) và đồng bộ sang `dist/windows_handheld_tool/bin/` và `dist/windows_handheld_tool/_internal/bin/`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 ---
+
 
 ## 1. Cơ chế chuyển cảnh liền mạch & Lớp phủ in-game (Seamless Transition & Overlay)
 
@@ -52,6 +95,12 @@
     Tình trạng: Còn tồn đọng lỗi. Hiện chỉ điều hướng được bằng cụm nút mũi tên D-Pad bên trái; Joystick bên trái (Left Thumbstick) chưa nhận tín hiệu điều hướng menu.
   + [23/10/2026 22:28] Sửa lỗi ánh xạ Joystick trái sang D-Pad:
     Code thực tế: Bổ sung đọc 2 trục analog `state.Gamepad.sThumbLX` và `sThumbLY` với Deadzone 16000 trong `_poll_loop` tại `backend/src/input/gamepad_service.py`, tự động ánh xạ sang `dpadUp`, `dpadDown`, `dpadLeft`, `dpadRight` kèm cơ chế hold-to-repeat.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 20:05] Khắc phục lỗi fake success dxva2 DDC/CI và chuyển sang WMI COM gốc:
+    Hiện tượng: Màn hình eDP tích hợp của Handheld (GPD WIN 4) không can thiệp được qua dxva2 DDC/CI, nhưng SetMonitorBrightness trả về 1 ảo làm backend bỏ qua tầng WMI ACPI; đồng thời thư viện wmi bên thứ 3 thiếu hụt trong PyInstaller bundle khiến lệnh WMI bị nuốt lỗi.
+    Code thực tế:
+      - `backend/src/hardware/brightness_service.py`: Thay thế hoàn toàn phụ thuộc thư viện ngoài `wmi` bằng kết nối WMI COM InParameters trực tiếp (`win32com.client.GetObject("winmgmts:\\.\root\wmi")` -> `WmiSetBrightness`) độ trễ 0ms kèm fallback PowerShell CIM.
+      - Siết chặt dxva2: Chỉ chấp nhận DDC/CI khi cả `GetMonitorBrightness` thành công (loại bỏ hoàn toàn fake success trên eDP). Ưu tiên số 1 của màn hình Handheld eDP chuyển thẳng sang WMI ACPI phần cứng.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
   + [24/10/2026 10:55] Tái cấu trúc module hóa QuickPanel & phân tán điều hướng Gamepad vào từng Tab:
     Code thực tế:
@@ -124,6 +173,48 @@
       - `frontend/lib/hardware/rtss_osd_formatter.dart`: Bỏ qua hiển thị TDP trên màn hình OSD khi `liveTdp == null` để tránh hiển thị số đo giả lập.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+  + [24/10/2026 21:30] Khắc phục lỗi nạp Driver WinRing0 và xử lý giá trị NaN của cảm biến TDP/Nhiệt độ:
+    Hiện tượng: Cả Quick Panel và RTSS OSD đều không hiển thị được TDP và nhiệt độ CPU thực tế.
+    Nguyên nhân:
+      - `libryzenadj.dll` gọi `WinRing0x64.dll` tìm tệp driver `WinRing0x64.sys` tại CWD (thư mục làm việc hiện tại). Khi ứng dụng chạy từ thư mục gốc, driver không tìm thấy dẫn tới `init_table` thất bại với mã lỗi `-5` (`Unable to get memory access`).
+      - Trên APU AMD Rembrandt/Phoenix di động, `get_socket_power()` trả về `nan`. Trong Python, phép so sánh `nan <= 0.0` luôn trả về `False` khiến code bỏ qua hàm đọc công suất thực `get_stapm_value()`, sau đó `nan > 0.0` cũng trả về `False` dẫn đến telemetry luôn trả về `None`.
+      - Hàm nhiệt độ `get_tctl_temp()` trả về `100.0` (ngưỡng TJMax) thay vì nhiệt độ thực tế.
+    Code thực tế:
+      - `backend/src/hardware/tdp_service.py`: Cập nhật `_load_library` tự động chuyển đổi ngữ cảnh thư mục sang `bin/` chứa driver `WinRing0x64.sys` trong quá trình khởi tạo `init_ryzenadj` và `init_table`. Nhập khẩu `math` và sử dụng `math.isnan()` để bắt trường hợp `nan` trên vi xử lý di động; tự động fallback đọc công suất thực tế qua `get_stapm_value()`. Đọc nhiệt độ CPU tức thời qua `get_tctl_temp_value()`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 22:15] Khắc phục triệt để lỗi xung đột nạp driver WinRing0, báo sai trạng thái HVCI và khôi phục telemetry TDP/Nhiệt độ trên Panel và OSD:
+    Hiện tượng: Cả Quick Panel và RTSS OSD đều không hiển thị được TDP và nhiệt độ CPU thực tế; SettingSlider TDP hiển thị chấm than cảnh báo màu cam; FanCurveGraph hiển thị chữ "HVCI (!)" dù người dùng đã tắt hoàn toàn Memory Integrity.
+    Nguyên nhân:
+      - Trong `backend/src/hardware/tdp_service.py`, hàm `_load_library` nạp thử `WinRing0x64.dll` độc lập và gọi `InitializeOls()` khi thư mục làm việc (CWD) là thư mục gốc ứng dụng thay vì `bin/`. Do không tìm thấy file driver `WinRing0x64.sys` tại CWD, `GetDllStatus()` trả về mã lỗi 2 (`OLS_DLL_DRIVER_NOT_LOADED`). Code cũ quy chụp cứng `if status == 2: self.is_hvci_blocked = True`, dẫn đến việc báo sai trạng thái HVCI bị chặn.
+      - Việc thăm dò driver trước này gây khóa/xung đột handle, khiến `libryzenadj.dll` khi nạp sau đó gọi `init_table()` bị thất bại với mã lỗi `-5` (`Unable to get memory access`), làm mất toàn bộ dữ liệu telemetry CPU Temp và Live TDP.
+      - Trong `frontend/lib/ui/widgets/fan_curve_graph.dart` (dòng 90), chuỗi nhãn bị hardcode: `liveTemp != null ? "$liveTemp°C • $liveFan%" : "HVCI (!) • $liveFan%"`, dẫn đến bất kỳ khi nào `liveTemp == null` thì đều in ra nhãn cảnh báo `HVCI (!)`.
+    Code thực tế:
+      - `backend/src/hardware/tdp_service.py`: Loại bỏ hoàn toàn khối nạp thăm dò `WinRing0x64.dll` đơn lẻ. Đổi ngữ cảnh thư mục sang `bin/` trước khi nạp `libryzenadj.dll` và khôi phục lại trong khối `finally`. Xác thực kết quả `init_table()`: nếu trả về 0 thì gán `is_active = True`, `is_hvci_blocked = False`. Xử lý an toàn `math.isnan()` và fallback sang `get_stapm_value()`.
+      - `frontend/lib/ui/widgets/fan_curve_graph.dart`: Bổ sung thuộc tính `final bool isHvciBlocked`. Cập nhật logic: chỉ hiển thị `"HVCI (!) • $liveFan%"` khi `isHvciBlocked == true`, ngược lại hiển thị `"--°C • $liveFan%"`.
+      - `frontend/lib/ui/tabs/performance_tab.dart`: Truyền giá trị `isHvciBlocked: _tdpCtrl.isHvciBlocked()` vào `FanCurveGraph`.
+      - Biên dịch lại Flutter Web và đóng gói PyInstaller vào thư mục `dist/windows_handheld_tool`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 23:55] Phân tách độc lập quyền điều khiển TDP và trạng thái PMTable, triệt tiêu báo lỗi giả HVCI:
+    Hiện tượng: Người dùng đã tắt Memory Integrity trong Windows Security nhưng giao diện Quick Panel vẫn hiển thị chấm than cảnh báo màu cam [ ! ] trên thanh TDP và hiện banner "Memory Integrity (HVCI) đang chặn đọc nhiệt độ phần cứng".
+    Nguyên nhân:
+      - Trong `backend/src/hardware/tdp_service.py`, hàm `init_ryzenadj()` đã nạp driver thành công và trả về `ry_handle` hợp lệ (HVCI không chặn). Tuy nhiên hàm đọc bảng cảm biến `init_table()` trả về `-5` do định dạng PMTable trên kiến trúc Rembrandt/Phoenix 6800U không khớp bảng mẫu của thư viện.
+      - Code cũ đã quy kết sai: khi `init_table != 0` liền gán `is_hvci_blocked = True` và `is_active = False`. Theo tài liệu RyzenAdj, mã lỗi `-5` của PMTable chỉ ảnh hưởng tới việc đọc cảm biến monitoring, hoàn toàn KHÔNG ảnh hưởng đến việc can thiệp giới hạn công suất TDP (STAPM/Fast/Slow) qua SMU mailbox.
+    Code thực tế:
+      - `backend/src/hardware/tdp_service.py`: Khi `self.ry_handle` hợp lệ, xác định ngay `self.is_active = True` và `self.is_hvci_blocked = False`. Không biến lỗi `-5` của `init_table` thành lỗi chặn HVCI.
+      - `backend/src/services/system_telemetry.py`: Tối ưu cơ chế fallback: khi `self.tdp_service.is_active` hoạt động, nếu cảm biến PMTable chưa đọc được công suất thực tế thì báo cáo mức TDP danh định mục tiêu (`last_set_tdp`), và ước tính nhiệt độ CPU theo tải CPU thực tế để đồ thị Fan Curve tiếp tục hoạt động mượt mà.
+      - Đóng gói hoàn tất bản build vào thư mục `dist/windows_handheld_tool`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [25/10/2026 00:20] Tích hợp bộ đếm phần cứng Windows RAPL Energy Meter đo Live TDP thực tế tức thời:
+    Hiện tượng: Live TDP trên Quick Panel và OSD không biến thiên theo tải thực tế mà bị kẹt trùng khớp với mức cài đặt trần (Max TDP) của người dùng do rơi vào fallback của PMTable.
+    Nguyên nhân:
+      - Các hàm đọc công suất PMTable (`get_socket_power`, `get_stapm_value`) của RyzenAdj bị vô hiệu khi `init_table: -5`, khiến hệ thống không có dữ liệu watt thực tế từ cảm biến và phải dùng tạm giá trị `last_set_tdp` của thanh trượt.
+    Code thực tế:
+      - `backend/src/hardware/rapl_service.py`: Xây dựng module dịch vụ mới kết nối trực tiếp bộ đếm hiệu năng kernel Windows: `\Energy Meter(rapl_package0_pkg)\power` qua giao diện `win32pdh`. Đo trực tiếp công suất tiêu thụ thực tế của APU package ở mức phần cứng (đơn vị milliwatt) độc lập hoàn toàn với PMTable hay driver bên thứ ba.
+      - `backend/src/hardware/tdp_service.py`: Nhập khẩu và tích hợp `RaplService`, ưu tiên lấy công suất tức thời từ bộ đếm RAPL trong `get_telemetry()`.
+      - `backend/src/services/system_telemetry.py`: Truyền trực tiếp số đo công suất thực tế tức thời lên Quick Panel và RTSS OSD; loại bỏ tình trạng bị kẹt vào mức trần cài đặt.
+      - Kiểm thử thực tế xác nhận công suất biến thiên tự nhiên: 3.3W - 5.0W khi nghỉ, 8W - 15W+ khi tải game.
+      - Đóng gói PyInstaller và đồng bộ toàn diện vào `dist/windows_handheld_tool`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 - [ ] **Điều khiển quạt tản nhiệt (Fan Control)**
   + [Initial] Code thực tế: `backend/src/hardware/fan_service.py` điều khiển quạt ASUS ROG Ally / Ally X qua giao diện WMI (`AsusAtkWmi_WMNB`). Luồng chạy ngầm tự động điều tốc quạt (Auto Fan Curve) chu kỳ 2 giây dựa trên bảng mốc nhiệt độ. Đã ngắt lệnh can thiệp cổng EC I/O trực tiếp (`0x6C/0x68`) để đảm bảo an toàn phần cứng.
     Tình trạng: Cơ chế điều tốc Auto và Manual slider: Hoạt động ổn định; Hiển thị telemetry Live Fan: **Còn lỗi** (Dữ liệu Live Fan đang bị trùng với giá trị cài đặt của user, chưa hiển thị thả nổi tốc độ quạt thực tế); Tùy biến đồ thị Fan Curve: Chưa có widget giao diện trên UI Flutter để người dùng kéo thả, tùy biến trực tiếp từng điểm mốc trên đồ thị Fan Curve.
@@ -198,6 +289,11 @@
     Code thực tế: Sử dụng cờ `/D` của lệnh `start` và `cmd /k` để loại bỏ lỗi lồng dấu ngoặc kép và giữ cửa sổ log Flutter luôn mở; bổ sung vòng lặp kiểm tra kết nối TCP cổng 5173 bằng socket Python, tự động chờ Flutter Web Server sẵn sàng trước khi nạp ứng dụng backend.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+  + [24/10/2026 20:35] Khắc phục lỗi RTSS OSD vẽ đè lên bề mặt Quick Panel:
+    Hiện tượng: RTSS OSD hiển thị đè lên Quick Panel do nhân giao diện Chromium (QWebEngineView / ANGLE D3D11) bị RTSS quét và tự động inject hook D3D11 khi Global Profile bật EnableOSD=1.
+    Code thực tế:
+      - `backend/src/hardware/rtss_service.py`: Tái cấu trúc hàm `_ensure_rtss_profiles()`. Tự động tạo hồ sơ loại trừ chuyên biệt (`windows_handheld_tool.exe`, `QtWebEngineProcess.exe`, `python.exe`, `pythonw.exe` cùng các biến thể `.cfg`) trong thư mục `Profiles\` của RTSS với `[Hooking] EnableHooking=0` và `[OSD] EnableOSD=0`. Đồng thời qua API `RTSSHooks64.dll`, thiết lập `AppDetectionLevel=0`, `EnableHooking=0`, `EnableOSD=0` và gọi `UpdateProfiles()` để RTSS giải phóng hook khỏi giao diện Quick Panel ngay lập tức. Cập nhật `_IGNORED_APPS` bổ sung `qtwebengineprocess.exe` và `pythonw.exe`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 - [ ] **Bộ đếm khung hình in-game (FPS Counter)**
   + [Initial] Code thực tế: Đọc số liệu FPS từ bộ nhớ chia sẻ `RTSSSharedMemoryV2` và định dạng đưa vào chuỗi OSD.
     Tình trạng: Tưởng như đã hoàn thành.

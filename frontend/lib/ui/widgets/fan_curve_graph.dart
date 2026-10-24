@@ -11,6 +11,7 @@ class FanCurveGraph extends StatelessWidget {
   final int selectedPointIndex;
   final ValueChanged<int>? onSelectPoint;
   final bool isFocused;
+  final bool isHvciBlocked;
 
   const FanCurveGraph({
     super.key,
@@ -21,6 +22,7 @@ class FanCurveGraph extends StatelessWidget {
     this.selectedPointIndex = 0,
     this.onSelectPoint,
     this.isFocused = false,
+    this.isHvciBlocked = false,
   });
 
   @override
@@ -68,34 +70,44 @@ class FanCurveGraph extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: (liveTemp != null ? AppTheme.fan : AppTheme.warning).withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: liveTemp != null ? AppTheme.fan : AppTheme.warning,
-                        shape: BoxShape.circle,
-                      ),
+              Builder(
+                builder: (context) {
+                  final badgeColor = liveTemp != null
+                      ? AppTheme.fan
+                      : (isHvciBlocked ? AppTheme.warning : AppTheme.textSecondary);
+                  final badgeText = liveTemp != null
+                      ? "$liveTemp°C • $liveFan%"
+                      : (isHvciBlocked ? "HVCI (!) • $liveFan%" : "--°C • $liveFan%");
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: badgeColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
                     ),
-                    const SizedBox(width: 5),
-                    Text(
-                      liveTemp != null ? "$liveTemp°C • $liveFan%" : "HVCI (!) • $liveFan%",
-                      style: TextStyle(
-                        fontSize: AppTheme.scaled(10),
-                        fontWeight: FontWeight.w800,
-                        color: liveTemp != null ? AppTheme.fan : AppTheme.warning,
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: badgeColor,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          badgeText,
+                          style: TextStyle(
+                            fontSize: AppTheme.scaled(10),
+                            fontWeight: FontWeight.w800,
+                            color: badgeColor,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  );
+                },
               ),
             ],
           ),

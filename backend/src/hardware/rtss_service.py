@@ -45,6 +45,7 @@ class RtssService:
         self._last_launch_attempt: float = 0.0
         self._is_launching: bool = False
         self._load_hooks_dll()
+        self._ensure_rtss_profiles()
         self._init_shared_memory()
         self._initialized = True
 
@@ -151,31 +152,92 @@ class RtssService:
             if handle:
                 kernel32.CloseHandle(handle)
 
-    def _ensure_global_profile_osd(self):
-        """Bảo đảm tệp cấu hình Profiles\\Global của RTSS đã bật EnableOSD=1"""
+    def _ensure_rtss_profiles(self):
+        """
+        Configure RTSS profiles:
+        1. Enable Global OSD (EnableOSD=1) so in-game overlay works automatically.
+        2. Create exclusion profiles for Handheld Tool and Chromium WebEngine processes
+           (EnableHooking=0, EnableOSD=0) to prevent OSD from rendering on Quick Panel.
+        3. Force RTSS to reload profiles via RTSSHooks64 UpdateProfiles API.
+        """
         if not self.rtss_dir:
             return
-        profile_path = os.path.join(self.rtss_dir, "Profiles", "Global")
+
+        profiles_dir = os.path.join(self.rtss_dir, "Profiles")
+        if not os.path.isdir(profiles_dir):
+            return
+
+        # 1. Ensure Global Profile has EnableOSD=1
+        global_path = os.path.join(profiles_dir, "Global")
         try:
-            if not os.path.isfile(profile_path):
-                return
-            with open(profile_path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-
-            needs_update = False
-            if "[OSD]" not in content:
-                content = "[OSD]\nEnableOSD=1\n" + content
-                needs_update = True
-            elif "EnableOSD=0" in content:
-                content = content.replace("EnableOSD=0", "EnableOSD=1")
-                needs_update = True
-
-            if needs_update:
-                with open(profile_path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                logger.info("Đã cấu hình Global profile của RTSS: EnableOSD=1")
+            if os.path.isfile(global_path):
+                with open(global_path, "r", encoding="utf-8", errors="ignore") as f:
+                    g_content = f.read()
+                needs_update = False
+                if "[OSD]" not in g_content:
+                    g_content = "[OSD]\nEnableOSD=1\n" + g_content
+                    needs_update = True
+                elif "EnableOSD=0" in g_content:
+                    g_content = g_content.replace("EnableOSD=0", "EnableOSD=1")
+                    needs_update = True
+                if needs_update:
+                    with open(global_path, "w", encoding="utf-8") as f:
+                        f.write(g_content)
+                    logger.info("Configured RTSS Global profile: EnableOSD=1")
         except Exception as e:
-            logger.warning(f"Lỗi khi kiểm tra profile Global RTSS: {e}")
+            logger.warning(f"Error checking RTSS Global profile: {e}")
+
+        # 2. Exclude Quick Panel & Tool processes from hooking and OSD
+        exclude_apps = [
+            "windows_handheld_tool.exe",
+            "QtWebEngineProcess.exe",
+            "python.exe",
+            "pythonw.exe",
+        ]
+        profile_content = "[Hooking]\nEnableHooking=0\n\n[OSD]\nEnableOSD=0\n"
+
+        needs_reload = False
+        for app in exclude_apps:
+            for fname in (f"{app}.cfg", app):
+                target_file = os.path.join(profiles_dir, fname)
+                try:
+                    if not os.path.isfile(target_file):
+                        with open(target_file, "w", encoding="utf-8") as f:
+                            f.write(profile_content)
+                        needs_reload = True
+                    else:
+                        with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
+                            existing = f.read()
+                        if "EnableHooking=0" not in existing or "EnableOSD=0" not in existing:
+                            with open(target_file, "w", encoding="utf-8") as f:
+                                f.write(profile_content)
+                            needs_reload = True
+                except PermissionError:
+                    logger.debug(f"Permission denied writing RTSS profile {fname}. App requires elevation.")
+                except Exception as e:
+                    logger.debug(f"Error checking RTSS profile {fname}: {e}")
+
+        # Also apply via RTSSHooks64 DLL API if available
+        if self.hooks_dll and hasattr(self.hooks_dll, "SetProfileProperty"):
+            try:
+                val_0 = ctypes.c_uint32(0)
+                for app in exclude_apps:
+                    app_b = app.encode("utf-8")
+                    self.hooks_dll.LoadProfile(b"")
+                    self.hooks_dll.SetProfileProperty(b"EnableHooking", ctypes.byref(val_0), 4)
+                    self.hooks_dll.SetProfileProperty(b"EnableOSD", ctypes.byref(val_0), 4)
+                    self.hooks_dll.SetProfileProperty(b"AppDetectionLevel", ctypes.byref(val_0), 4)
+                    self.hooks_dll.SaveProfile(app_b)
+                needs_reload = True
+            except Exception as e:
+                logger.debug(f"Error setting RTSS profile properties via DLL: {e}")
+
+        if needs_reload and self.hooks_dll and hasattr(self.hooks_dll, "UpdateProfiles"):
+            try:
+                self.hooks_dll.UpdateProfiles()
+                logger.info("RTSS profiles reloaded successfully via UpdateProfiles().")
+            except Exception as e:
+                logger.debug(f"Error calling RTSSHooks UpdateProfiles: {e}")
 
     def ensure_running(self) -> bool:
         """Kiểm tra kết nối Shared Memory và kích hoạt ngầm RTSS.exe bất đồng bộ (không chặn Main Thread)"""
@@ -202,7 +264,7 @@ class RtssService:
 
         def _bg_launch():
             try:
-                self._ensure_global_profile_osd()
+                self._ensure_rtss_profiles()
                 logger.info(f"Đang kích hoạt tiến trình ngầm RivaTuner Statistics Server: {rtss_exe}")
                 started = False
                 try:
@@ -360,7 +422,9 @@ class RtssService:
 
     _IGNORED_APPS = {
         "windows_handheld_tool.exe",
+        "qtwebengineprocess.exe",
         "python.exe",
+        "pythonw.exe",
         "rtss.exe",
         "rivatunerstatisticsserver.exe",
         "rtsshstig.exe",

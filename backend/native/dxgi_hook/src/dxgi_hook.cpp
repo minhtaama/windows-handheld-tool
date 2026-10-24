@@ -3,6 +3,7 @@
 #include <cmath>
 #include <atomic>
 #include <windowsx.h>
+#include <intrin.h>
 
 // Log chẩn đoán ra OutputDebugString
 static void LogDebug(const char* format, ...) {
@@ -24,6 +25,14 @@ static std::atomic<bool> g_bXInputHooked(false);
 static std::atomic<HWND> g_hGameWnd(nullptr);
 static std::atomic<UINT> g_uBufferWidth(0);
 static std::atomic<UINT> g_uBufferHeight(0);
+
+// Quản lý độ phân giải màn hình động phục vụ tự động kích hoạt AMD RSR
+static std::atomic<UINT> g_uNativeWidth(0);
+static std::atomic<UINT> g_uNativeHeight(0);
+static std::atomic<UINT> g_uNativeRefreshRate(0);
+static std::atomic<bool> g_bDisplayModeSwitched(false);
+static std::atomic<HWND> g_hHookedGameWnd(nullptr);
+static WNDPROC g_pOrigGameWndProc = nullptr;
 
 // Con trỏ hàm gốc (Original function pointers)
 typedef HRESULT (STDMETHODCALLTYPE* PFN_SetFullscreenState)(IDXGISwapChain* This, BOOL Fullscreen, IDXGIOutput* pTarget);
@@ -218,9 +227,147 @@ BOOL WINAPI Hooked_GetMessageW(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT 
     return res;
 }
 
+static void QueryNativeDisplayResolution() {
+    if (g_uNativeWidth.load() != 0 && g_uNativeHeight.load() != 0) return;
+
+    DEVMODEW dm = { sizeof(dm) };
+    if (EnumDisplaySettingsW(NULL, ENUM_REGISTRY_SETTINGS, &dm)) {
+        if (dm.dmPelsWidth > 0 && dm.dmPelsHeight > 0) {
+            g_uNativeWidth.store(dm.dmPelsWidth);
+            g_uNativeHeight.store(dm.dmPelsHeight);
+            g_uNativeRefreshRate.store(dm.dmDisplayFrequency);
+            LogDebug("[DXGI_HOOK] Native resolution detected (registry): %ux%u@%uHz\n",
+                dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency);
+            return;
+        }
+    }
+
+    if (EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &dm)) {
+        if (dm.dmPelsWidth > 0 && dm.dmPelsHeight > 0) {
+            g_uNativeWidth.store(dm.dmPelsWidth);
+            g_uNativeHeight.store(dm.dmPelsHeight);
+            g_uNativeRefreshRate.store(dm.dmDisplayFrequency);
+            LogDebug("[DXGI_HOOK] Native resolution detected (current): %ux%u@%uHz\n",
+                dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency);
+            return;
+        }
+    }
+
+    int cx = GetSystemMetrics(SM_CXSCREEN);
+    int cy = GetSystemMetrics(SM_CYSCREEN);
+    g_uNativeWidth.store(cx > 0 ? (UINT)cx : 1920);
+    g_uNativeHeight.store(cy > 0 ? (UINT)cy : 1080);
+    g_uNativeRefreshRate.store(60);
+    LogDebug("[DXGI_HOOK] Native resolution fallback to metrics: %ux%u\n", g_uNativeWidth.load(), g_uNativeHeight.load());
+}
+
+static void RestoreNativeDisplayMode() {
+    if (g_bDisplayModeSwitched.exchange(false)) {
+        LogDebug("[DXGI_HOOK] Restoring native display mode: %ux%u\n", g_uNativeWidth.load(), g_uNativeHeight.load());
+        ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL);
+    }
+}
+
+static void ApplyDynamicDisplayMode(HWND hWnd, UINT bufW, UINT bufH) {
+    QueryNativeDisplayResolution();
+
+    if (bufW == 0 || bufH == 0) return;
+
+    UINT nativeW = g_uNativeWidth.load();
+    UINT nativeH = g_uNativeHeight.load();
+    UINT nativeHz = g_uNativeRefreshRate.load();
+
+    if (bufW < nativeW && bufH < nativeH) {
+        // Game renders at a lower resolution than native display (e.g. 1600x900 or 1280x720 on 1080p panel)
+        // Switch display mode using CDS_FULLSCREEN.
+        // This makes AMD Display Driver see Active Display Mode < Native EDID Panel Resolution,
+        // automatically triggering AMD Radeon Super Resolution (RSR) hardware upscaling!
+        DEVMODEW dm = { sizeof(dm) };
+        dm.dmSize = sizeof(dm);
+        dm.dmPelsWidth = bufW;
+        dm.dmPelsHeight = bufH;
+        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+        if (nativeHz > 0) {
+            dm.dmDisplayFrequency = nativeHz;
+            dm.dmFields |= DM_DISPLAYFREQUENCY;
+        }
+
+        LONG res = ChangeDisplaySettingsExW(NULL, &dm, NULL, CDS_FULLSCREEN, NULL);
+        if (res == DISP_CHANGE_SUCCESSFUL) {
+            g_bDisplayModeSwitched.store(true);
+            LogDebug("[DXGI_HOOK] ChangeDisplaySettingsExW(CDS_FULLSCREEN) SUCCESS: %ux%u@%uHz (AMD RSR Active)\n",
+                bufW, bufH, dm.dmDisplayFrequency);
+        } else {
+            // Fallback without specifying display frequency
+            dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+            res = ChangeDisplaySettingsExW(NULL, &dm, NULL, CDS_FULLSCREEN, NULL);
+            if (res == DISP_CHANGE_SUCCESSFUL) {
+                g_bDisplayModeSwitched.store(true);
+                LogDebug("[DXGI_HOOK] ChangeDisplaySettingsExW(CDS_FULLSCREEN) SUCCESS (no Hz): %ux%u (AMD RSR Active)\n",
+                    bufW, bufH);
+            } else {
+                LogDebug("[DXGI_HOOK] ChangeDisplaySettingsExW(CDS_FULLSCREEN) returned code %ld for %ux%u\n", res, bufW, bufH);
+            }
+        }
+    } else if (bufW >= nativeW || bufH >= nativeH) {
+        // Game matches or exceeds native resolution -> ensure native display mode is restored
+        RestoreNativeDisplayMode();
+    }
+}
+
+void ForceBorderlessWindow(HWND hWnd);
+
+static LRESULT CALLBACK GameSubclassWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg == WM_ACTIVATEAPP) {
+        BOOL bActive = (BOOL)wParam;
+        LogDebug("[DXGI_HOOK] GameSubclassWndProc WM_ACTIVATEAPP: bActive=%d, PanelActive=%d\n",
+            bActive, IsPanelActive() ? 1 : 0);
+
+        if (!bActive) {
+            // If our Quick Panel is currently open, the user hasn't switched away from the game,
+            // so do NOT reset display mode.
+            if (!IsPanelActive() && g_bDisplayModeSwitched.load()) {
+                LogDebug("[DXGI_HOOK] Application lost focus (Alt+Tab) -> Temporarily restoring desktop resolution\n");
+                ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL);
+            }
+        } else {
+            // Game regained focus -> re-apply dynamic mode if needed
+            UINT bw = g_uBufferWidth.load();
+            UINT bh = g_uBufferHeight.load();
+            if (bw > 0 && bh > 0 && bw < g_uNativeWidth.load() && bh < g_uNativeHeight.load()) {
+                ApplyDynamicDisplayMode(hWnd, bw, bh);
+                ForceBorderlessWindow(hWnd);
+            }
+        }
+    } else if (uMsg == WM_DESTROY) {
+        LogDebug("[DXGI_HOOK] Game window destroyed -> Restoring native display mode\n");
+        RestoreNativeDisplayMode();
+    }
+
+    if (g_pOrigGameWndProc) {
+        return CallWindowProcW(g_pOrigGameWndProc, hWnd, uMsg, wParam, lParam);
+    }
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+}
+
+static void SubclassGameWindow(HWND hWnd) {
+    if (!hWnd || !IsWindow(hWnd)) return;
+    HWND prevWnd = g_hHookedGameWnd.exchange(hWnd);
+    if (prevWnd == hWnd) return; // Already subclassed
+
+    LONG_PTR prevProc = GetWindowLongPtrW(hWnd, GWLP_WNDPROC);
+    if (prevProc && prevProc != (LONG_PTR)GameSubclassWndProc) {
+        g_pOrigGameWndProc = (WNDPROC)prevProc;
+        SetWindowLongPtrW(hWnd, GWLP_WNDPROC, (LONG_PTR)GameSubclassWndProc);
+        LogDebug("[DXGI_HOOK] Subclassed game window HWND=0x%p successfully\n", hWnd);
+    }
+}
+
 // Cưỡng bức chuyển cửa sổ sang Borderless Fullscreen triệt để (Chuẩn hóa cả Style, ExStyle và Scaling)
 void ForceBorderlessWindow(HWND hWnd) {
     if (!hWnd || !IsWindow(hWnd)) return;
+
+    SubclassGameWindow(hWnd);
 
     HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi = { sizeof(mi) };
@@ -298,6 +445,7 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(
     DXGI_SWAP_CHAIN_DESC desc;
     if (SUCCEEDED(This->GetDesc(&desc)) && desc.OutputWindow) {
         g_hGameWnd.store(desc.OutputWindow);
+        ApplyDynamicDisplayMode(desc.OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
         ForceBorderlessWindow(desc.OutputWindow);
     }
 
@@ -312,10 +460,16 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeTarget(
     if (pNewTargetParameters) {
         LogDebug("[DXGI_HOOK] ResizeTarget intercepted: Game requested (%ux%u) -> Trả về S_OK bảo toàn ma trận chuột\n",
             pNewTargetParameters->Width, pNewTargetParameters->Height);
+        if (pNewTargetParameters->Width > 0 && pNewTargetParameters->Height > 0) {
+            g_uBufferWidth.store(pNewTargetParameters->Width);
+            g_uBufferHeight.store(pNewTargetParameters->Height);
+        }
     }
 
     DXGI_SWAP_CHAIN_DESC desc;
     if (SUCCEEDED(This->GetDesc(&desc)) && desc.OutputWindow) {
+        g_hGameWnd.store(desc.OutputWindow);
+        ApplyDynamicDisplayMode(desc.OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
         ForceBorderlessWindow(desc.OutputWindow);
     }
 
@@ -344,6 +498,8 @@ HRESULT STDMETHODCALLTYPE Hooked_SetFullscreenState(
         // Tự động căn chỉnh cửa sổ game bao phủ toàn bộ màn hình
         DXGI_SWAP_CHAIN_DESC desc;
         if (SUCCEEDED(This->GetDesc(&desc)) && desc.OutputWindow) {
+            g_hGameWnd.store(desc.OutputWindow);
+            ApplyDynamicDisplayMode(desc.OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
             ForceBorderlessWindow(desc.OutputWindow);
         }
 
@@ -366,11 +522,28 @@ HRESULT STDMETHODCALLTYPE Hooked_GetFullscreenState(
         hr = g_pOrigGetFullscreenState(This, pFullscreen, ppTarget);
     }
 
-    // Cưỡng bức trạng thái hiển thị là Windowed để Unreal Engine / Unity sử dụng đúng nhánh Windowed Mouse
-    if (pFullscreen) {
-        *pFullscreen = FALSE;
+    // Identify caller to preserve AMD Adrenalin In-Game Overlay (amdow.exe / amdfendrsr / IGOProxy)
+    void* callerAddr = _ReturnAddress();
+    HMODULE hCallerMod = NULL;
+    bool isAmdOverlayCaller = false;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)callerAddr, &hCallerMod) && hCallerMod) {
+        char modName[MAX_PATH] = { 0 };
+        GetModuleFileNameA(hCallerMod, modName, MAX_PATH);
+        _strlwr_s(modName);
+        if (strstr(modName, "amd") || strstr(modName, "igo") || strstr(modName, "radeon") || strstr(modName, "overlay")) {
+            isAmdOverlayCaller = true;
+        }
     }
-    if (ppTarget) {
+
+    if (pFullscreen) {
+        if (isAmdOverlayCaller && g_bGameRequestedFullscreen.load()) {
+            *pFullscreen = TRUE; // Report Fullscreen to AMD Overlay so RSR & Alt+R overlay activates!
+        } else {
+            *pFullscreen = FALSE; // Keep Windowed for game engine mouse hit-testing
+        }
+    }
+    if (ppTarget && !isAmdOverlayCaller) {
         *ppTarget = NULL;
     }
 
@@ -457,6 +630,7 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(
         }
         HookSwapChainInstance(*ppSwapChain);
         if (pDesc && pDesc->OutputWindow) {
+            ApplyDynamicDisplayMode(pDesc->OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
             ForceBorderlessWindow(pDesc->OutputWindow);
         }
     }
@@ -507,6 +681,7 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
         if (hWnd) g_hGameWnd.store(hWnd);
         HookSwapChainInstance((IDXGISwapChain*)*ppSwapChain);
         if (hWnd) {
+            ApplyDynamicDisplayMode(hWnd, g_uBufferWidth.load(), g_uBufferHeight.load());
             ForceBorderlessWindow(hWnd);
         }
     }
@@ -560,6 +735,7 @@ HRESULT WINAPI Hooked_D3D11CreateDeviceAndSwapChain(
         }
         HookSwapChainInstance(*ppSwapChain);
         if (pSwapChainDesc && pSwapChainDesc->OutputWindow) {
+            ApplyDynamicDisplayMode(pSwapChainDesc->OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
             ForceBorderlessWindow(pSwapChainDesc->OutputWindow);
         }
     }
@@ -917,6 +1093,17 @@ bool InitDxgiHook() {
 // Gỡ bỏ hooks
 void ShutdownDxgiHook() {
     if (!g_bInitialized.exchange(false)) return;
+
+    // Restore native desktop resolution
+    RestoreNativeDisplayMode();
+
+    if (g_hHookedGameWnd.load() && g_pOrigGameWndProc) {
+        HWND hWnd = g_hHookedGameWnd.load();
+        if (IsWindow(hWnd)) {
+            SetWindowLongPtrW(hWnd, GWLP_WNDPROC, (LONG_PTR)g_pOrigGameWndProc);
+        }
+    }
+
     MH_DisableHook(MH_ALL_HOOKS);
     MH_Uninitialize();
     if (g_hPanelActiveEvent) {

@@ -298,6 +298,7 @@ class BridgeService {
     _send({'action': 'toggleMute'});
   }
 
+
   void setBrightness(int percent) {
     brightness.value = percent;
     _send({'action': 'setBrightness', 'percent': percent});

@@ -621,6 +621,7 @@ class GameCompatService(QObject):
             logger.info(f"[SEAMLESS-COMPAT] Bắt đầu tối ưu tương thích Game: PID={pid}, HWND={hwnd}, Path='{exe_path}'")
             self.optimize_fso_registry(exe_path)
 
+
             # 1.8. Tiêm dxgi_hook.dll vào tiến trình trò chơi
             self.inject_dxgi_hook(pid)
 

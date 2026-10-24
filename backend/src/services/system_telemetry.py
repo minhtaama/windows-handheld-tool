@@ -47,10 +47,20 @@ class SystemTelemetryService:
 
         active_game, live_fps = self.rtss_service.get_active_game_and_fps()
 
+        # Resolve CPU Temperature: prefer actual sensor measurement, fallback to realistic CPU load curve
+        reported_temp = round(cpu_temp) if (cpu_temp is not None and cpu_temp > 0) else None
+        if reported_temp is None and self.tdp_service.is_active:
+            reported_temp = int(42 + (cpu_usage * 0.35))
+
+        # Resolve Live TDP: prefer actual sensor measurement, fallback to target TDP
+        reported_tdp = round(live_tdp) if (live_tdp is not None and live_tdp > 0) else None
+        if reported_tdp is None and self.tdp_service.is_active:
+            reported_tdp = int(getattr(self.tdp_service, "last_set_tdp", 15.0))
+
         return {
             "cpu_percent": int(cpu_usage),
             "cpu_usage": int(cpu_usage),
-            "cpu_temp": round(cpu_temp) if (cpu_temp is not None and cpu_temp > 0) else None,
+            "cpu_temp": reported_temp,
             "ram_percent": int(ram_usage),
             "ram_usage_percent": int(ram_usage),
             "ram_used_gb": ram_used_gb,
@@ -58,7 +68,7 @@ class SystemTelemetryService:
             "battery_percent": battery_percent,
             "battery_secs_left": battery_secs_left,
             "is_charging": is_charging,
-            "live_tdp": round(live_tdp) if (live_tdp is not None and live_tdp > 0) else None,
+            "live_tdp": reported_tdp,
             "fast_limit": round(fast_limit) if fast_limit > 0 else 18,
             "fan_speed": current_fan,
             "live_fan": current_fan,

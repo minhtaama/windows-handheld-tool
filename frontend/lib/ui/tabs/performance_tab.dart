@@ -77,6 +77,7 @@ class PerformanceTabState extends State<PerformanceTab>
     BridgeService.instance.fanProfile.addListener(_onBridgeFanProfileChanged);
     BridgeService.instance.fanCurve.addListener(_onBridgeFanCurveChanged);
 
+
     // Bắt đầu chu kỳ đọc Telemetry cho Live TDP, Fan và Nhiệt độ CPU
     _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
       _pollTelemetry();
@@ -112,6 +113,7 @@ class PerformanceTabState extends State<PerformanceTab>
     final val = BridgeService.instance.fanCurve.value;
     setState(() => _fanCurve = List<List<int>>.from(val));
   }
+
 
   void _pollTelemetry() {
     if (!mounted) return;
@@ -339,6 +341,7 @@ class PerformanceTabState extends State<PerformanceTab>
             liveTemp: _liveCpuTemp,
             liveFan: _liveFan,
             isCustom: _fanProfile == 'custom',
+            isHvciBlocked: _tdpCtrl.isHvciBlocked(),
             selectedPointIndex: _selectedCurvePoint,
             onSelectPoint: (idx) => setState(() => _selectedCurvePoint = idx),
             isFocused: focusedIndex == 4,

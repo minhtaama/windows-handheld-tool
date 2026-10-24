@@ -3,6 +3,7 @@ import ctypes
 from ctypes import wintypes
 import threading
 import time
+import subprocess
 from typing import Optional
 from src.core.logger import setup_logger
 
@@ -34,27 +35,27 @@ class BrightnessService:
         if self._initialized:
             return
         self.current_brightness = 70
-        self.wmi_methods = None
-        self._is_setting = False
         self._target_brightness = 70
+        self._is_setting = False
         self._lock = threading.Lock()
-        
-        # Thử đọc độ sáng thực tế ban đầu từ phần cứng Windows
+        self._has_dxva2_support = None  # Cache whether external DDC/CI works
+
+        # Query initial brightness from hardware
         init_val = self._read_hardware_brightness()
         if init_val is not None:
             self.current_brightness = init_val
             self._target_brightness = init_val
-            logger.info(f"Đã đọc độ sáng thực tế ban đầu từ phần cứng: {self.current_brightness}%")
+            logger.info(f"Initial hardware brightness detected: {self.current_brightness}%")
         else:
-            logger.info(f"Không thể đọc độ sáng ban đầu, sử dụng mặc định: {self.current_brightness}%")
+            logger.info(f"Could not read initial hardware brightness, fallback to: {self.current_brightness}%")
 
-        # Khởi động luồng worker áp dụng độ sáng (Debounced Background Worker)
+        # Start debounced background worker
         self._apply_event = threading.Event()
         self._stop_event = threading.Event()
         self._worker_thread = threading.Thread(target=self._apply_worker, daemon=True)
         self._worker_thread.start()
 
-        # Khởi động luồng định kỳ đồng bộ độ sáng từ Windows (Sync polling 2s)
+        # Start background sync worker (poll every 2 seconds to match external Windows changes)
         self._sync_thread = threading.Thread(target=self._sync_worker, daemon=True)
         self._sync_thread.start()
 
@@ -81,6 +82,7 @@ class BrightnessService:
             min_b = wintypes.DWORD()
             cur_b = wintypes.DWORD()
             max_b = wintypes.DWORD()
+            # DDC/CI must succeed reading monitor brightness
             if dxva2.GetMonitorBrightness(monitors[0].hPhysicalMonitor, ctypes.byref(min_b), ctypes.byref(cur_b), ctypes.byref(max_b)):
                 res = int(cur_b.value)
         except Exception:
@@ -92,6 +94,12 @@ class BrightnessService:
     def _set_dxva2_brightness(self, percent: int) -> bool:
         if not dxva2:
             return False
+        # If DDC/CI reading fails, do not trust dxva2 for laptop/handheld eDP displays
+        if self._has_dxva2_support is None:
+            self._has_dxva2_support = (self._read_dxva2_brightness() is not None)
+        if not self._has_dxva2_support:
+            return False
+
         h_mon = self._get_primary_hmonitor()
         if not h_mon:
             return False
@@ -107,35 +115,63 @@ class BrightnessService:
                 if dxva2.SetMonitorBrightness(monitors[i].hPhysicalMonitor, percent):
                     success = True
         except Exception as e:
-            logger.debug(f"dxva2.SetMonitorBrightness lỗi: {e}")
+            logger.debug(f"dxva2.SetMonitorBrightness error: {e}")
         finally:
             dxva2.DestroyPhysicalMonitors(count.value, monitors)
         return success
 
     def _read_wmi_brightness(self) -> Optional[int]:
+        """Read brightness via native Windows WMI COM query"""
         try:
-            import wmi
-            w = wmi.WMI(namespace="root/wmi")
-            b_list = w.WmiMonitorBrightness()
-            if b_list and hasattr(b_list[0], "CurrentBrightness"):
-                return int(b_list[0].CurrentBrightness)
+            import win32com.client
+            wmi_obj = win32com.client.GetObject("winmgmts:\\\\.\\root\\wmi")
+            items = wmi_obj.ExecQuery("SELECT * FROM WmiMonitorBrightness")
+            for item in items:
+                if getattr(item, "Active", True):
+                    return int(item.CurrentBrightness)
+        except Exception as e:
+            logger.debug(f"win32com WmiMonitorBrightness query error: {e}")
+
+        # Fallback: PowerShell CIM
+        try:
+            cmd = "(Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorBrightness)[0].CurrentBrightness"
+            out = subprocess.check_output(["powershell", "-NoProfile", "-Command", cmd], text=True, timeout=1.5).strip()
+            if out.isdigit():
+                return int(out)
         except Exception:
             pass
+
         return None
 
     def _set_wmi_brightness(self, percent: int) -> bool:
+        """Set brightness via native WmiMonitorBrightnessMethods COM interface"""
+        percent = max(0, min(100, int(percent)))
+        # Method 1: native win32com InParameters ExecMethod_ (0ms latency)
         try:
-            import wmi
-            w = wmi.WMI(namespace="root/wmi")
-            methods = w.WmiMonitorBrightnessMethods()
-            if methods:
-                methods[0].WmiSetBrightness(Timeout=1, Brightness=percent)
-                return True
-        except Exception:
-            pass
+            import win32com.client
+            wmi_obj = win32com.client.GetObject("winmgmts:\\\\.\\root\\wmi")
+            methods = wmi_obj.ExecQuery("SELECT * FROM WmiMonitorBrightnessMethods")
+            for m in methods:
+                in_params = m.Methods_("WmiSetBrightness").InParameters.SpawnInstance_()
+                in_params.Properties_("Timeout").Value = 1
+                in_params.Properties_("Brightness").Value = percent
+                m.ExecMethod_("WmiSetBrightness", in_params)
+            return True
+        except Exception as e:
+            logger.debug(f"win32com WmiSetBrightness error: {e}")
+
+        # Fallback: PowerShell WMI command
+        try:
+            ps_cmd = f"(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {percent})"
+            ret = subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, timeout=2.0)
+            return ret.returncode == 0
+        except Exception as e:
+            logger.debug(f"PowerShell WmiSetBrightness error: {e}")
+
         return False
 
     def _set_gdi_gamma(self, percent: int) -> bool:
+        """Fallback software dimming via GDI DeviceGammaRamp"""
         try:
             hdc = user32.GetDC(None)
             if not hdc:
@@ -152,36 +188,36 @@ class BrightnessService:
             user32.ReleaseDC(None, hdc)
             return bool(res)
         except Exception as e:
-            logger.debug(f"GDI SetDeviceGammaRamp lỗi: {e}")
+            logger.debug(f"GDI SetDeviceGammaRamp error: {e}")
             return False
 
     def _read_hardware_brightness(self) -> Optional[int]:
-        # Tầng 1: dxva2 DDC/CI
-        val = self._read_dxva2_brightness()
+        # Priority 1: WMI ACPI for Handheld/Laptop internal displays (eDP)
+        val = self._read_wmi_brightness()
         if val is not None:
             return val
-        # Tầng 2: WMI ACPI
-        val = self._read_wmi_brightness()
+        # Priority 2: dxva2 DDC/CI for external monitors
+        val = self._read_dxva2_brightness()
         if val is not None:
             return val
         return None
 
     def _apply_worker(self):
-        """Worker áp dụng độ sáng ngầm có debounce, tránh nghẽn I2C DDC/CI bus"""
+        """Debounced background worker to apply brightness without I2C/ACPI contention"""
         while not self._stop_event.is_set():
             if self._apply_event.wait(timeout=0.5):
                 self._apply_event.clear()
                 with self._lock:
                     target = self._target_brightness
 
-                # 1. Thử Tầng 1: Win32 dxva2 DDC/CI (Ưu tiên số 1)
-                ok = self._set_dxva2_brightness(target)
+                # 1. Primary path for Handheld/Laptop internal display (WMI ACPI)
+                ok = self._set_wmi_brightness(target)
 
-                # 2. Thử Tầng 2: ACPI WMI nếu dxva2 không thành công
+                # 2. Secondary path for external monitor (dxva2 DDC/CI)
                 if not ok:
-                    ok = self._set_wmi_brightness(target)
+                    ok = self._set_dxva2_brightness(target)
 
-                # 3. Fallback Tầng 3: GDI Gamma Ramp nếu cả hai phần cứng không hỗ trợ
+                # 3. Final fallback: Software GDI Gamma Ramp
                 if not ok:
                     ok = self._set_gdi_gamma(target)
 
@@ -191,7 +227,7 @@ class BrightnessService:
                 time.sleep(0.04)  # 40ms debounce
 
     def _sync_worker(self):
-        """Định kỳ 2 giây đồng bộ độ sáng nếu người dùng thay đổi bên ngoài Windows"""
+        """Periodically sync brightness if changed externally from Windows Action Center or hotkeys"""
         while not self._stop_event.is_set():
             time.sleep(2.0)
             if self._is_setting:
@@ -199,7 +235,7 @@ class BrightnessService:
             try:
                 hw_val = self._read_hardware_brightness()
                 if hw_val is not None and abs(hw_val - self.current_brightness) >= 2:
-                    logger.info(f"Đồng bộ độ sáng từ Windows: {self.current_brightness}% -> {hw_val}%")
+                    logger.info(f"Syncing brightness from Windows: {self.current_brightness}% -> {hw_val}%")
                     with self._lock:
                         self.current_brightness = hw_val
                         self._target_brightness = hw_val
@@ -218,7 +254,6 @@ class BrightnessService:
 
         self._apply_event.set()
 
-        # Reset cờ is_setting sau 300ms
         def _clear_is_setting():
             time.sleep(0.3)
             self._is_setting = False
