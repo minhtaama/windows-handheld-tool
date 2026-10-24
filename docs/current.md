@@ -1,6 +1,6 @@
 # Trạng thái hiện tại của dự án (Project Status)
 
-> Cập nhật lần cuối: 23/10/2026 22:45
+> Cập nhật lần cuối: 24/10/2026 10:45
 
 > [!IMPORTANT]
 > **Quy tắc duy trì tài liệu**:
@@ -64,6 +64,22 @@
   + [23/10/2026 22:50] Sửa lỗi Live TDP bị dính chết vào mức trần cài đặt:
     Code thực tế: Bổ sung đọc `get_socket_power` và `get_stapm_value` trong `backend/src/hardware/tdp_service.py`; xây dựng công thức tính Live TDP thả nổi động theo mức tải CPU (sàn 4.5W khi nghỉ đến mức trần cài đặt khi full tải). Xóa bỏ việc gán đè `_liveTdp` theo thanh trượt trong `frontend/lib/ui/quick_panel.dart`.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 10:15] Phát hiện lỗi LiveTDP bị kẹt cố định tại 4W:
+    Code thực tế: `backend/src/hardware/tdp_service.py` hàm fallback tính `idle_tdp = 4.5`, kết hợp `round()` trong `system_telemetry.py` làm tròn theo chuẩn số chẵn thành 4. Khi driver Ring 0 chưa nạp được số đo phần cứng trực tiếp, LiveTDP bị kẹt cứng ở 4W trên mọi thiết bị.
+    Hiện tượng: LiveTDP hiển thị 4W trên mọi thiết bị, không phản ánh đúng công suất APU thực tế.
+    Tình trạng: Còn tồn đọng lỗi.
+  + [24/10/2026 10:30] Sửa lỗi LiveTDP và bổ sung cảnh báo khi WinRing0 bị chặn bởi HVCI:
+    Code thực tế:
+      - `backend/src/hardware/tdp_service.py`: Xóa bỏ hoàn toàn công thức fallback fake 4.5W. Khi driver WinRing0 bị Windows 11 Memory Integrity (HVCI) chặn hoặc không khởi tạo được SMU, hệ thống ghi nhận cờ `is_hvci_blocked = True` và trả về `(temp, None, fast)`.
+      - `backend/src/services/system_telemetry.py`: Truyền `live_tdp: None` khi không có phần cứng, bổ sung `is_tdp_hardware_active` và `is_hvci_blocked` vào telemetry snapshot gửi lên UI.
+      - `frontend/lib/services/system_telemetry_service.dart` & `frontend/lib/services/bridge_service.dart`: Chuyển `liveTdp` sang kiểu `int?` nullable, parse các cờ trạng thái HVCI.
+      - `frontend/lib/hardware/tdp_service.dart`: `getLiveTdp()` trả về `null` khi driver không hoạt động; cung cấp `isHardwareActive()` và `isHvciBlocked()`.
+      - `frontend/lib/ui/widgets/setting_slider.dart`: Thêm cờ `isWarning` và `warningTooltip`. Khi driver bị chặn, thanh trượt hiển thị badge `!` màu vàng cam kế bên mục tiêu kèm tooltip giải thích, không hiển thị số fake.
+      - `frontend/lib/ui/tabs/performance_tab.dart`: Kết nối trạng thái cảnh báo HVCI vào `SettingSlider` TDP.
+      - `frontend/lib/ui/tabs/home_tab.dart`: Khi `liveTdp == null` do bị chặn bởi HVCI, hiển thị nhãn `"Tắt HVCI !"`.
+      - `frontend/lib/ui/tabs/settings_tab.dart`: Thẻ chẩn đoán `RyzenAdj TDP Driver` hiển thị đúng trạng thái cảnh báo màu cam với icon `warning_amber_rounded` và thông báo `"Bị chặn bởi Memory Integrity (HVCI) - Cần tắt HVCI"` thay vì hiển thị xanh lá.
+      - `frontend/lib/hardware/rtss_osd_formatter.dart`: Bỏ qua hiển thị TDP trên màn hình OSD khi `liveTdp == null` để tránh hiển thị số đo giả lập.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [ ] **Điều khiển quạt tản nhiệt (Fan Control)**
   + [Initial] Code thực tế: `backend/src/hardware/fan_service.py` điều khiển quạt ASUS ROG Ally / Ally X qua giao diện WMI (`AsusAtkWmi_WMNB`). Luồng chạy ngầm tự động điều tốc quạt (Auto Fan Curve) chu kỳ 2 giây dựa trên bảng mốc nhiệt độ. Đã ngắt lệnh can thiệp cổng EC I/O trực tiếp (`0x6C/0x68`) để đảm bảo an toàn phần cứng.
@@ -76,9 +92,20 @@
 
 ## 4. Hiển thị OSD thông số in-game qua RivaTuner (RTSS Overlay)
 
-- [x] **Quản lý tiến trình & Kết nối bộ nhớ chia sẻ RTSS**
+- [ ] **Quản lý tiến trình & Kết nối bộ nhớ chia sẻ RTSS**
   + [Initial] Code thực tế: `backend/src/hardware/rtss_service.py` tự động quét registry để khởi chạy ngầm `RTSS.exe`, cấu hình file profile `Global` (`EnableOSD=1`), kết nối ánh xạ bộ nhớ Win32 `RTSSSharedMemoryV2`.
     Tình trạng: Hoạt động ổn định.
+  + [24/10/2026 10:15] Phát hiện thiếu cơ chế tự động cài đặt RTSS khi chạy run.bat:
+    Code thực tế: `scripts/run.bat` và `frontend/lib/services/rtss_installer_service.dart` chưa có quy trình kiểm tra và tự động cài đặt RTSS trên máy mới.
+    Hiện tượng: Chưa tự động cài RTSS trên các máy chưa có khi chạy `scripts/run.bat`. Trên các máy chưa cài đặt sẵn RTSS, ứng dụng khởi chạy sẽ không kích hoạt được OSD và không thể đo FPS / khóa FPS.
+    Tình trạng: Còn tồn đọng lỗi.
+  + [24/10/2026 10:30] Tự động cài đặt RTSS khi chạy run.bat và trong ứng dụng:
+    Code thực tế:
+      - `scripts/run.bat`: Bổ sung đoạn mã `:ENSURE_RTSS` tự động quét sự hiện diện của `RTSS.exe` trong `%ProgramFiles(x86)%` và `%ProgramFiles%`. Nếu chưa có, tự động cài đặt ngầm qua winget (`Guru3D.RTSS`) kèm fallback thực thi installer qua backend. Tích hợp tiền trạm trước khi chạy các lệnh 1 (Gaming Overlay), 2 (Dev Hot Reload), 4 (Deploy).
+      - `backend/src/hardware/rtss_service.py`: Bổ sung hàm `install_rtss_silent()` hỗ trợ cài đặt ngầm bằng winget hoặc tải silent installer từ mirror và chạy `/S`.
+      - `backend/src/bridge/web_bridge.py` & `backend/src/bridge/ws_server.py`: Thêm slot `installRtss` tiếp nhận yêu cầu cài đặt từ frontend qua QWebChannel / WebSocket.
+      - `frontend/lib/services/bridge_service.dart` & `frontend/lib/services/rtss_installer_service.dart`: Kết nối nút bấm cài đặt trực tiếp trên tab Performance đến backend.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [ ] **Bộ đếm khung hình in-game (FPS Counter)**
   + [Initial] Code thực tế: Đọc số liệu FPS từ bộ nhớ chia sẻ `RTSSSharedMemoryV2` và định dạng đưa vào chuỗi OSD.
@@ -120,13 +147,22 @@
 
 ## 5. Điều chỉnh độ sáng, âm lượng, bật/tắt màn hình cảm ứng
 
-- [x] **Độ sáng màn hình (Brightness)**
+- [ ] **Độ sáng màn hình (Brightness)**
   + [Initial] Code thực tế: `backend/src/hardware/brightness_service.py` điều chỉnh qua WMI `WmiMonitorBrightnessMethods` kèm fallback CIM PowerShell.
     Tình trạng: Hoạt động ổn định.
+  + [24/10/2026 10:45] Khắc phục lỗi thanh chỉnh độ sáng và đồng bộ 2 chiều với Windows:
+    Hiện tượng: Thanh chỉnh brightness không hoạt động do WMI root/wmi:WmiMonitorBrightness báo lỗi OLE 0x8004100c (Not Supported). Thanh trượt độ sáng không tự cập nhật khi người dùng thay đổi từ Windows Action Center hoặc phím cứng.
+    Code thực tế:
+      - `backend/src/hardware/brightness_service.py`: Tái cấu trúc theo mô hình Multi-tier 3 tầng: Tầng 1 Win32 Native `dxva2.dll` (VESA DDC/CI) điều khiển trực tiếp phần cứng màn hình; Tầng 2 ACPI WMI cho màn hình Handheld eDP; Tầng 3 Win32 GDI `SetDeviceGammaRamp` (Software Dimming). Tự động đọc độ sáng thực tế ban đầu từ phần cứng; bổ sung worker ngầm có debounce tránh nghẽn I2C bus và luồng định kỳ 2s đồng bộ khi người dùng chỉnh từ Windows.
+      - `frontend/lib/ui/quick_panel.dart`: Đăng ký listener trên `BridgeService.instance.brightness`, tự động cập nhật lại biến state khi nhận tín hiệu từ Windows; đồng bộ ngay lập tức khi mở panel (`_onOverlayVisibilityChanged`) và trong chu kỳ `_updateTelemetry`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
-- [x] **Âm lượng hệ thống & Tắt tiếng (Volume & Mute)**
+- [ ] **Âm lượng hệ thống & Tắt tiếng (Volume & Mute)**
   + [Initial] Code thực tế: `backend/src/hardware/audio_service.py` tương tác Windows CoreAudio qua thư viện `pycaw`.
     Tình trạng: Hoạt động ổn định.
+  + [24/10/2026 10:45] Đồng bộ 2 chiều âm lượng với Windows:
+    Code thực tế: Tự động tái kết nối pycaw trong `backend/src/hardware/audio_service.py` khi thiết bị âm thanh mặc định của Windows thay đổi (cắm/rút tai nghe); bổ sung listener trên `BridgeService.instance.volume` trong `frontend/lib/ui/quick_panel.dart` để thanh trượt âm lượng tự động nhảy theo đúng giá trị khi người dùng bấm phím âm lượng vật lý hoặc chỉnh qua Windows.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [x] **Bật/Tắt màn hình cảm ứng (Touchscreen Toggle)**
   + [Initial] Code thực tế: `backend/src/hardware/touchscreen_service.py` quét và bật/tắt thiết bị HID Touchscreen bằng lệnh `pnputil`.

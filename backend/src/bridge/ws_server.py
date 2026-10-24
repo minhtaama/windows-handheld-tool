@@ -130,6 +130,8 @@ class WsServer(QObject):
                 self.bridge.updateOsdText(str(req.get("text", "")))
             elif action == "clearOsdText":
                 self.bridge.clearOsdText()
+            elif action == "installRtss":
+                self.bridge.installRtss()
             elif action == "setOsdMetric":
                 self.bridge.setOsdMetric(str(req.get("metric", "fps")), bool(req.get("enabled", True)))
             elif action == "setPanelWidth":

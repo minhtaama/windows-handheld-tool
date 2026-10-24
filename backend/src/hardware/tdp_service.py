@@ -24,6 +24,7 @@ class TdpService:
         self.lib = None
         self.ry_handle = None
         self.is_active = False
+        self.is_hvci_blocked = False
         self.cli_path: Optional[str] = None
         self.last_set_tdp: float = 15.0
         self._ensure_winring0_driver()
@@ -81,6 +82,7 @@ class TdpService:
                     init_res = w_dll.InitializeOls() if hasattr(w_dll, "InitializeOls") else 0
                     status = w_dll.GetDllStatus() if hasattr(w_dll, "GetDllStatus") else -1
                     if status == 2:
+                        self.is_hvci_blocked = True
                         logger.warning(
                             "[TDP/WinRing0] Driver WinRing0x64.sys bị Windows chặn bởi tính năng Memory Integrity (Cách ly lõi / HVCI) "
                             "hoặc Vulnerable Driver Blocklist. Vui lòng tắt Memory Integrity trong Windows Security hoặc chạy 'bcdedit /set hypervisorlaunchtype off' để mở khóa phần cứng."
@@ -144,10 +146,13 @@ class TdpService:
             self.ry_handle = self.lib.init_ryzenadj()
             if self.ry_handle:
                 self.is_active = True
+                self.is_hvci_blocked = False
                 if hasattr(self.lib, "init_table"):
                     self.lib.init_table(self.ry_handle)
                 logger.info("RyzenAdj handle khởi tạo thành công.")
             else:
+                self.is_active = False
+                self.is_hvci_blocked = True
                 logger.warning("init_ryzenadj trả về NULL (Yêu cầu quyền Administrator và tắt HVCI). Kích hoạt cơ chế CLI/Mô phỏng.")
         except Exception as e:
             logger.error(f"Lỗi khi ánh xạ hàm RyzenAdj: {e}")
@@ -205,9 +210,10 @@ class TdpService:
         logger.info(f"[Quản lý năng lượng] Thiết lập mức TDP danh định: {watts}W (Đang chờ nạp driver Ring 0)")
         return True
 
-    def get_telemetry(self) -> Tuple[float, float, float]:
-        """Trả về (CPU_Temp_C, Live_TDP_Watt, Fast_Limit_Watt) với cơ chế thả nổi động theo tải hệ thống"""
-        live_power = 0.0
+    def get_telemetry(self) -> Tuple[float, Optional[float], float]:
+        """Trả về (CPU_Temp_C, Live_TDP_Watt, Fast_Limit_Watt).
+        Nếu driver Ring 0 bị HVCI chặn, Live_TDP_Watt trả về None để giao diện hiển thị dấu ! cảnh báo thay vì số ảo.
+        """
         temp = 0.0
         fast = 0.0
 
@@ -219,6 +225,7 @@ class TdpService:
                 if temp <= 0 and hasattr(self.lib, "get_tctl_temp_value"):
                     temp = self.lib.get_tctl_temp_value(self.ry_handle)
 
+                live_power = 0.0
                 if hasattr(self.lib, "get_socket_power"):
                     live_power = float(self.lib.get_socket_power(self.ry_handle))
                 if live_power <= 0.0 and hasattr(self.lib, "get_stapm_value"):
@@ -232,24 +239,17 @@ class TdpService:
             except Exception:
                 pass
 
-        # Nguồn dự phòng động (Dynamic Telemetry Fallback):
-        # Ước lượng nhiệt độ và công suất TDP thả nổi dựa trên % tải CPU thực tế
+        # Khi không có số đo phần cứng trực tiếp, vẫn đọc nhiệt độ thực tế nếu có hoặc ước lượng nhiệt độ
         try:
             import psutil
             cpu_load = psutil.cpu_percent(interval=None)
             estimated_temp = round(40.0 + (cpu_load * 0.45), 1)
         except Exception:
-            cpu_load = 10.0
             estimated_temp = 45.0
 
         if temp <= 0:
             temp = estimated_temp
 
-        # Công suất sàn khi nghỉ (Idle Floor): 4.5W
-        # Công suất trần: last_set_tdp do người dùng cài đặt
-        # Live TDP thả nổi linh hoạt theo tải CPU thực tế, không dính chết vào mức trần
-        cap_tdp = getattr(self, "last_set_tdp", 15.0)
-        idle_tdp = 4.5
-        calculated_live_tdp = round(idle_tdp + (cpu_load / 100.0) * max(1.0, cap_tdp - idle_tdp), 1)
-        return float(temp), float(calculated_live_tdp), float(cap_tdp + 3.0)
+        # TUYỆT ĐỐI KHÔNG FAKE SỐ TDP: Trả về None khi driver phần cứng bị chặn bởi HVCI
+        return float(temp), None, float(getattr(self, "last_set_tdp", 15.0) + 3.0)
 

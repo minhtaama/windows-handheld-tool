@@ -96,7 +96,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   StreamSubscription<GamepadButton>? _gamepadSub;
 
   // Dữ liệu đo cảm biến thực tế tức thời (Hardware Telemetry)
-  late int _liveTdp;
+  int? _liveTdp;
   late int _liveFan;
   int? _liveFps;
   String? _activeGame;
@@ -214,7 +214,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       _virtualKeyboardHotkey = 'Ctrl+Alt+K';
     }
 
-    _liveTdp = _tdp;
+    _liveTdp = _tdpCtrl.getLiveTdp()?.round();
     _liveFan = _fan;
     _isRtssRunning = _rtssCtrl.isAvailable();
     if (RtssInstallerService.isInstalled() && !_isRtssRunning) {
@@ -230,6 +230,10 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
 
     // Lắng nghe đồng bộ cấu hình từ Python WebSocket Server
     BridgeService.instance.config.addListener(_onConfigUpdated);
+
+    // Lắng nghe đồng bộ độ sáng & âm lượng từ Windows qua BridgeService
+    BridgeService.instance.brightness.addListener(_onBrightnessFromWindows);
+    BridgeService.instance.volume.addListener(_onAudioFromWindows);
 
     // Kích hoạt Timer quét cảm biến phần cứng định kỳ 1s
     _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
@@ -269,9 +273,29 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
     });
   }
 
+  void _onBrightnessFromWindows() {
+    if (!mounted) return;
+    final winVal = BridgeService.instance.brightness.value;
+    if (_brightness != winVal) {
+      setState(() => _brightness = winVal);
+    }
+  }
+
+  void _onAudioFromWindows() {
+    if (!mounted) return;
+    final winVal = BridgeService.instance.volume.value;
+    if (_audio != winVal) {
+      setState(() => _audio = winVal);
+    }
+  }
+
   void _onOverlayVisibilityChanged() {
     if (!mounted) return;
     if (OverlayController.instance.isVisible) {
+      setState(() {
+        _brightness = _brightnessCtrl.getValue();
+        _audio = _audioCtrl.getValue();
+      });
       _updateTelemetry();
     }
   }
@@ -297,7 +321,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
         _telemetryData = SystemTelemetryService.instance.getSnapshot();
         if (_rtssOsdMetrics.showTdp) {
           final hwTdp = _tdpCtrl.getLiveTdp();
-          _liveTdp = hwTdp != null ? hwTdp.round() : _tdp;
+          _liveTdp = hwTdp?.round();
         }
         _liveFps = _rtssCtrl.getLiveFps();
         _refreshOsdText();
@@ -314,6 +338,16 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
       final hwTdp = _tdpCtrl.getLiveTdp();
       _liveTdp = hwTdp != null ? hwTdp.round() : _telemetryData.liveTdp;
       _liveFan = _telemetryData.liveFan;
+
+      // Đồng bộ độ sáng & âm lượng từ Windows
+      final curBrightness = _brightnessCtrl.getValue();
+      if (_brightness != curBrightness) {
+        _brightness = curBrightness;
+      }
+      final curAudio = _audioCtrl.getValue();
+      if (_audio != curAudio) {
+        _audio = curAudio;
+      }
 
       _isRtssRunning = _rtssCtrl.isAvailable();
       if (_isRtssRunning) {
@@ -364,6 +398,8 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
   @override
   void dispose() {
     BridgeService.instance.config.removeListener(_onConfigUpdated);
+    BridgeService.instance.brightness.removeListener(_onBrightnessFromWindows);
+    BridgeService.instance.volume.removeListener(_onAudioFromWindows);
     OverlayController.instance.removeListener(_onOverlayVisibilityChanged);
     _gamepadSub?.cancel();
     _telemetryTimer?.cancel();
@@ -1182,6 +1218,7 @@ class _QuickSettingsPanelState extends State<QuickSettingsPanel> {
           isRtssRunning: _isRtssRunning,
           activeGame: _activeGame,
           isTdpHardwareActive: _tdpCtrl.isAvailable(),
+          isHvciBlocked: _tdpCtrl.isHvciBlocked(),
           isZBandActive: true,
           isGamepadConnected: GamepadService.isConnected,
           overlayHotkeyDevice: _overlayHotkeyDevice,

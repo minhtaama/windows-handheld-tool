@@ -10,7 +10,7 @@ class HomeTab extends StatelessWidget {
   final ScrollController scrollController;
   final int focusedIndex;
   final SystemTelemetryData telemetry;
-  final int liveTdp;
+  final int? liveTdp;
   final GlobalKey Function(int index) getItemKey;
 
   const HomeTab({
@@ -322,7 +322,7 @@ class HomeTab extends StatelessWidget {
                 icon: Icons.memory_rounded,
                 title: "CPU",
                 valueText: "${telemetry.cpuUsagePercent}%",
-                subtitle: "$liveTdp W",
+                subtitle: liveTdp != null ? "$liveTdp W" : (telemetry.isHvciBlocked ? "Tắt HVCI !" : "-- W"),
                 progressValue: telemetry.cpuUsagePercent / 100.0,
                 accentColor: cpuColor,
                 isFocused: focusedIndex == 2,

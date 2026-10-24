@@ -19,7 +19,7 @@ class PerformanceTab extends StatelessWidget {
 
   // Cấu hình & Dữ liệu đo TDP
   final int tdp;
-  final int liveTdp;
+  final int? liveTdp;
   final bool tdpAuto;
   final TdpController tdpCtrl;
   final ValueChanged<int> onTdpChanged;
@@ -138,6 +138,10 @@ class PerformanceTab extends StatelessWidget {
           onChanged: onTdpChanged,
           shouldShowSlider: !tdpAuto,
           isFocused: focusedIndex == 1,
+          isWarning: !tdpCtrl.isAvailable() || tdpCtrl.isHvciBlocked(),
+          warningTooltip: tdpCtrl.isHvciBlocked()
+              ? "Driver WinRing0 bị chặn bởi Windows Memory Integrity (HVCI). Vui lòng tắt HVCI trong Windows Security để đo và điều chỉnh TDP."
+              : "Không phát hiện phần cứng điều khiển TDP tương thích.",
           helpText: "Khóa công suất điện tối đa của bộ xử lý (TDP tính bằng Watt). Tăng TDP để có FPS cao hơn, giảm TDP để máy mát hơn và tiết kiệm pin.",
         ),
 

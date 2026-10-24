@@ -15,10 +15,12 @@ class SystemTelemetryData {
   final double ramTotalGb;
   final int ramUsagePercent;
   final int cpuTemp;
-  final int liveTdp;
+  final int? liveTdp;
   final int liveFan;
   final int? liveFps;
   final String? activeGame;
+  final bool isTdpHardwareActive;
+  final bool isHvciBlocked;
 
   const SystemTelemetryData({
     required this.timeString,
@@ -33,10 +35,12 @@ class SystemTelemetryData {
     required this.ramTotalGb,
     required this.ramUsagePercent,
     this.cpuTemp = 45,
-    this.liveTdp = 15,
+    this.liveTdp,
     this.liveFan = 50,
     this.liveFps,
     this.activeGame,
+    this.isTdpHardwareActive = false,
+    this.isHvciBlocked = false,
   });
 
   factory SystemTelemetryData.initial() {
@@ -53,10 +57,12 @@ class SystemTelemetryData {
       ramTotalGb: 16.0,
       ramUsagePercent: 0,
       cpuTemp: 40,
-      liveTdp: 15,
+      liveTdp: null,
       liveFan: 50,
       liveFps: null,
       activeGame: null,
+      isTdpHardwareActive: false,
+      isHvciBlocked: false,
     );
   }
 }

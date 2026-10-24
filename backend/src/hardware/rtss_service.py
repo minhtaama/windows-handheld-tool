@@ -507,3 +507,50 @@ class RtssService:
                 logger.error(f"Lỗi khi ghi profile RTSS fallback: {e}")
 
         return False
+
+    def install_rtss_silent(self) -> bool:
+        """Tự động cài đặt RTSS ngầm qua winget hoặc tải bộ cài đặt chính thức"""
+        logger.info("Bắt đầu tiến trình tự động tải và cài đặt RTSS ngầm...")
+        try:
+            # 1. Thử cài đặt qua winget
+            res = subprocess.run(
+                ["winget", "install", "--id", "Guru3D.RTSS", "-e", "--silent", "--accept-package-agreements", "--accept-source-agreements"],
+                capture_output=True,
+                text=True,
+                creationflags=0x08000000,
+                timeout=180,
+            )
+            if res.returncode == 0:
+                logger.info("Đã cài đặt RTSS thành công qua winget.")
+                self.rtss_dir = self._detect_rtss_dir()
+                self._load_hooks_dll()
+                self.ensure_running()
+                return True
+        except Exception as e:
+            logger.warning(f"Lỗi khi cài RTSS qua winget: {e}")
+
+        # 2. Fallback tải installer qua PowerShell và chạy /S
+        try:
+            ps_script = """
+            $url = 'https://download.guru3d.com/rtss/RTSSSetup737.exe'
+            $out = "$env:TEMP\\RTSSSetup.exe"
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -TimeoutSec 60
+            if (Test-Path $out) {
+                Start-Process -FilePath $out -ArgumentList '/S' -Wait
+                Remove-Item $out -Force -ErrorAction SilentlyContinue
+            }
+            """
+            subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+                capture_output=True,
+                creationflags=0x08000000,
+                timeout=180,
+            )
+            self.rtss_dir = self._detect_rtss_dir()
+            self._load_hooks_dll()
+            self.ensure_running()
+            return bool(self.rtss_dir)
+        except Exception as e:
+            logger.error(f"Lỗi fallback tải RTSS: {e}")
+            return False

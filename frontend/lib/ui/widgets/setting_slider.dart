@@ -34,6 +34,12 @@ class SettingSlider extends StatelessWidget {
   /// Trạng thái đang được trỏ/focus bởi tay cầm Gamepad
   final bool isFocused;
 
+  /// Cờ cảnh báo phần cứng không đo được / bị chặn bởi hệ thống (HVCI)
+  final bool isWarning;
+
+  /// Nội dung tooltip giải thích cảnh báo
+  final String? warningTooltip;
+
   const SettingSlider({
     super.key,
     required this.icon,
@@ -51,6 +57,8 @@ class SettingSlider extends StatelessWidget {
     this.quickPresets,
     this.shouldShowSlider = true,
     this.isFocused = false,
+    this.isWarning = false,
+    this.warningTooltip,
   });
 
   String _formatTargetValue(int val) {
@@ -118,7 +126,41 @@ class SettingSlider extends StatelessWidget {
               // Thông số hiển thị: nếu chế độ thủ công (shouldShowSlider == true) hiển thị "Live / Target"
               // Nếu chế độ tự động (shouldShowSlider == false), chỉ hiển thị thông số đo thực tế (không còn max limit)
               if (shouldShowSlider) ...[
-                if (currentValue != null) ...[
+                if (isWarning) ...[
+                  Tooltip(
+                    message: warningTooltip ?? 'Chức năng bị chặn hoặc không đo được phần cứng',
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: Colors.amber.shade700, width: 1),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.warning_amber_rounded, size: 13, color: Colors.amber.shade400),
+                          const SizedBox(width: 3),
+                          Text(
+                            '!',
+                            style: AppTheme.body.copyWith(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.amber.shade400,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Text(
+                    ' / ',
+                    style: AppTheme.caption.copyWith(
+                      fontSize: 12,
+                      color: AppTheme.textSecondary.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ] else if (currentValue != null) ...[
                   Text(
                     '$currentValue',
                     style: AppTheme.body.copyWith(

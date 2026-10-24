@@ -167,7 +167,9 @@ class BridgeService {
     final ramTotal = ((data['ram_total_gb'] as num?) ?? 16.0).toDouble();
     final ramPct = ((data['ram_usage_percent'] ?? data['ram_percent']) as num?)?.toInt() ?? 0;
     final cpuTemp = (data['cpu_temp'] as num?)?.toInt() ?? 45;
-    final liveTdp = (data['live_tdp'] as num?)?.toInt() ?? tdp.value;
+    final liveTdp = data['live_tdp'] != null ? (data['live_tdp'] as num).toInt() : null;
+    final isTdpHardwareActive = data['is_tdp_hardware_active'] as bool? ?? false;
+    final isHvciBlocked = data['is_hvci_blocked'] as bool? ?? false;
 
     // Đồng bộ lại các trạng thái phần cứng nếu có gửi kèm trong telemetry
     if (data.containsKey('is_touch_enabled')) {
@@ -203,9 +205,15 @@ class BridgeService {
       liveFan: (data['live_fan'] ?? data['fan_speed'] ?? fanSpeed.value) as int,
       liveFps: data['live_fps'] != null ? (data['live_fps'] as num).toInt() : null,
       activeGame: data['active_game'] as String?,
+      isTdpHardwareActive: isTdpHardwareActive,
+      isHvciBlocked: isHvciBlocked,
     );
 
     _telemetryController.add(telemData);
+  }
+
+  void installRtss() {
+    _send({'action': 'installRtss'});
   }
 
   /// Gửi lệnh thao tác sang Python Backend qua WebSocket

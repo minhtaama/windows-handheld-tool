@@ -26,7 +26,7 @@ class TdpController extends HardwareController {
   }
 
   @override
-  bool isAvailable() => true;
+  bool isAvailable() => SystemTelemetryService.instance.latest.isTdpHardwareActive;
 
   @override
   int getValue() => _currentTdp;
@@ -40,10 +40,10 @@ class TdpController extends HardwareController {
     return true;
   }
 
-  /// Đọc TDP đo thực tế tức thời từ cảm biến.
+  /// Đọc TDP đo thực tế tức thời từ cảm biến. Trả về null nếu phần cứng không hoạt động (để UI hiện cảnh báo !)
   double? getLiveTdp() {
     final live = SystemTelemetryService.instance.latest.liveTdp;
-    return live > 0 ? live.toDouble() : _currentTdp.toDouble();
+    return (live != null && live > 0) ? live.toDouble() : null;
   }
 
   /// Đọc nhiệt độ CPU tức thời.
@@ -52,5 +52,6 @@ class TdpController extends HardwareController {
     return temp > 0 ? temp.toDouble() : 45.0;
   }
 
-  bool isHardwareActive() => true;
+  bool isHardwareActive() => SystemTelemetryService.instance.latest.isTdpHardwareActive;
+  bool isHvciBlocked() => SystemTelemetryService.instance.latest.isHvciBlocked;
 }

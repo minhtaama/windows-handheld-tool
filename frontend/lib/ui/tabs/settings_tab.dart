@@ -28,6 +28,7 @@ class SettingsTab extends StatelessWidget {
   final bool isRtssRunning;
   final String? activeGame;
   final bool isTdpHardwareActive;
+  final bool isHvciBlocked;
   final bool isZBandActive;
   final bool isGamepadConnected;
 
@@ -61,6 +62,7 @@ class SettingsTab extends StatelessWidget {
     required this.isRtssRunning,
     required this.activeGame,
     required this.isTdpHardwareActive,
+    this.isHvciBlocked = false,
     required this.isZBandActive,
     required this.isGamepadConnected,
     required this.overlayHotkeyDevice,
@@ -230,11 +232,15 @@ class SettingsTab extends StatelessWidget {
 
         StatusIndicatorCard(
           key: getItemKey(10),
-          icon: Icons.memory_rounded,
+          icon: isTdpHardwareActive
+              ? Icons.memory_rounded
+              : Icons.warning_amber_rounded,
           title: "RyzenAdj TDP Driver",
           statusText: isTdpHardwareActive
               ? "WinRing0 Ring 0 Driver Hoạt động"
-              : "Chế độ mô phỏng an toàn",
+              : (isHvciBlocked
+                  ? "Bị chặn bởi Memory Integrity (HVCI) - Cần tắt HVCI"
+                  : "Chưa nạp được driver Ring 0"),
           isActive: isTdpHardwareActive,
           isFocused: focusedIndex == 10,
         ),

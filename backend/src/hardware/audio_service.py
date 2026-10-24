@@ -30,8 +30,11 @@ class AudioService:
                 logger.warning("Không tìm thấy Audio EndpointVolume.")
         except Exception as e:
             logger.error(f"Lỗi khi khởi tạo pycaw: {e}")
+            self.endpoint_volume = None
 
     def get_volume(self) -> int:
+        if not self.endpoint_volume:
+            self._init_pycaw()
         if not self.endpoint_volume:
             return 50
         try:
@@ -39,10 +42,18 @@ class AudioService:
             return int(round(scalar * 100))
         except Exception as e:
             logger.error(f"Lỗi khi đọc âm lượng: {e}")
+            self._init_pycaw()
+            try:
+                if self.endpoint_volume:
+                    return int(round(self.endpoint_volume.GetMasterVolumeLevelScalar() * 100))
+            except Exception:
+                pass
             return 50
 
     def set_volume(self, percent: int) -> bool:
         percent = max(0, min(100, percent))
+        if not self.endpoint_volume:
+            self._init_pycaw()
         if not self.endpoint_volume:
             logger.info(f"[Mô phỏng] Đặt âm lượng = {percent}%")
             return True
@@ -52,9 +63,19 @@ class AudioService:
             return True
         except Exception as e:
             logger.error(f"Lỗi khi đặt âm lượng: {e}")
+            self._init_pycaw()
+            try:
+                if self.endpoint_volume:
+                    scalar = float(percent) / 100.0
+                    self.endpoint_volume.SetMasterVolumeLevelScalar(scalar, None)
+                    return True
+            except Exception:
+                pass
             return False
 
     def is_muted(self) -> bool:
+        if not self.endpoint_volume:
+            self._init_pycaw()
         if not self.endpoint_volume:
             return False
         try:
@@ -63,6 +84,8 @@ class AudioService:
             return False
 
     def toggle_mute(self) -> bool:
+        if not self.endpoint_volume:
+            self._init_pycaw()
         if not self.endpoint_volume:
             return False
         try:

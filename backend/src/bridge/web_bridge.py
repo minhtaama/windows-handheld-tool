@@ -77,6 +77,8 @@ class WebBridge(QObject):
                     "brightness": self.bright_svc.get_brightness(),
                     "touch_enabled": self.touch_svc.is_enabled,
                     "autostart": AutostartService.is_enabled(),
+                    "is_tdp_hardware_active": self.tdp_svc.is_active,
+                    "is_hvci_blocked": getattr(self.tdp_svc, "is_hvci_blocked", False),
                 }
             }
             return json.dumps(state)
@@ -135,6 +137,11 @@ class WebBridge(QObject):
     @Slot()
     def clearOsdText(self):
         self.rtss_svc.clear_osd()
+
+    @Slot(result=bool)
+    def installRtss(self) -> bool:
+        threading.Thread(target=self.rtss_svc.install_rtss_silent, daemon=True).start()
+        return True
 
     @Slot(str, bool)
     def setOsdMetric(self, metric_key: str, enabled: bool):

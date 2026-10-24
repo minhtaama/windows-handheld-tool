@@ -56,7 +56,7 @@ class SystemTelemetryService:
             "ram_total_gb": ram_total_gb,
             "battery_percent": battery_percent,
             "is_charging": is_charging,
-            "live_tdp": round(live_tdp) if live_tdp > 0 else 15,
+            "live_tdp": round(live_tdp) if (live_tdp is not None and live_tdp > 0) else None,
             "fast_limit": round(fast_limit) if fast_limit > 0 else 18,
             "fan_speed": current_fan,
             "live_fan": current_fan,
@@ -64,6 +64,8 @@ class SystemTelemetryService:
             "fan_auto": is_auto_fan,
             "live_fps": live_fps,
             "active_game": active_game,
+            "is_tdp_hardware_active": self.tdp_service.is_active,
+            "is_hvci_blocked": getattr(self.tdp_service, "is_hvci_blocked", False),
         }
 
 
