@@ -44,6 +44,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "step": 5,
             "current": 50,
             "auto": True,
+            "profile": "balanced",
+            "custom_curve": [
+                [40, 30],
+                [50, 45],
+                [60, 60],
+                [70, 75],
+                [80, 90],
+                [90, 100],
+            ],
         },
         "brightness": {
             "min": 0,
@@ -127,12 +136,31 @@ class ConfigManager:
             return False
 
     def get(self, *keys, default=None) -> Any:
+        if not keys:
+            return default
+
+        key_list = list(keys)
+        actual_default = default
+
+        # Support calling get("a.b.c", fallback_value) with positional default
+        if len(key_list) == 2 and isinstance(key_list[0], str) and "." in key_list[0] and default is None:
+            actual_default = key_list[1]
+            key_list = [key_list[0]]
+
+        # Expand dot-notation strings in keys (e.g. "hardware.fan.current" -> ["hardware", "fan", "current"])
+        expanded_keys = []
+        for k in key_list:
+            if isinstance(k, str) and "." in k:
+                expanded_keys.extend(k.split("."))
+            else:
+                expanded_keys.append(k)
+
         curr = self.data
-        for k in keys:
+        for k in expanded_keys:
             if isinstance(curr, dict) and k in curr:
                 curr = curr[k]
             else:
-                return default
+                return actual_default
         return curr
 
     def set(self, value: Any, *keys) -> None:

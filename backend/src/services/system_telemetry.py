@@ -49,7 +49,7 @@ class SystemTelemetryService:
         return {
             "cpu_percent": int(cpu_usage),
             "cpu_usage": int(cpu_usage),
-            "cpu_temp": round(cpu_temp) if cpu_temp > 0 else 45,
+            "cpu_temp": round(cpu_temp) if (cpu_temp is not None and cpu_temp > 0) else None,
             "ram_percent": int(ram_usage),
             "ram_usage_percent": int(ram_usage),
             "ram_used_gb": ram_used_gb,

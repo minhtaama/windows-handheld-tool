@@ -14,7 +14,7 @@ class SystemTelemetryData {
   final double ramUsedGb;
   final double ramTotalGb;
   final int ramUsagePercent;
-  final int cpuTemp;
+  final int? cpuTemp;
   final int? liveTdp;
   final int liveFan;
   final int? liveFps;
@@ -34,7 +34,7 @@ class SystemTelemetryData {
     required this.ramUsedGb,
     required this.ramTotalGb,
     required this.ramUsagePercent,
-    this.cpuTemp = 45,
+    this.cpuTemp,
     this.liveTdp,
     this.liveFan = 50,
     this.liveFps,
@@ -56,7 +56,7 @@ class SystemTelemetryData {
       ramUsedGb: 0.0,
       ramTotalGb: 16.0,
       ramUsagePercent: 0,
-      cpuTemp: 40,
+      cpuTemp: null,
       liveTdp: null,
       liveFan: 50,
       liveFps: null,

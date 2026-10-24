@@ -49,7 +49,7 @@ class TdpController extends HardwareController {
   /// Đọc nhiệt độ CPU tức thời.
   double? getLiveCpuTemp() {
     final temp = SystemTelemetryService.instance.latest.cpuTemp;
-    return temp > 0 ? temp.toDouble() : 45.0;
+    return (temp != null && temp > 0) ? temp.toDouble() : null;
   }
 
   bool isHardwareActive() => SystemTelemetryService.instance.latest.isTdpHardwareActive;

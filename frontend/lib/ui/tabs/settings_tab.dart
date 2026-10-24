@@ -1,6 +1,16 @@
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
+import '../../core/config.dart';
+import '../../input/gamepad_service.dart';
+import '../../hardware/rtss_service.dart';
+import '../../services/autostart_service.dart';
+import '../../services/bridge_service.dart';
+import '../../services/overlay_controller.dart';
+import '../../services/system_optimizer.dart';
+import '../../services/system_telemetry_service.dart';
+import '../../services/virtual_keyboard_service.dart';
+import '../quick_panel/gamepad_navigable.dart';
 import '../widgets/action_button.dart';
 import '../widgets/hotkey_tile.dart';
 import '../widgets/preset_selector.dart';
@@ -9,79 +19,193 @@ import '../widgets/status_indicator.dart';
 import '../widgets/toggle_card.dart';
 
 /// Tab Cài đặt & Tiện ích: Phím tắt công cụ Windows, Cấu hình khởi động và Tùy chỉnh hiển thị Side Panel.
-class SettingsTab extends StatelessWidget {
-  final ScrollController scrollController;
-  final int focusedIndex;
+class SettingsTab extends StatefulWidget {
+  final ConfigManager? config;
 
-  // Khởi động cùng Windows
-  final bool autoStartEnabled;
-  final ValueChanged<bool> onToggleAutoStart;
+  const SettingsTab({super.key, this.config});
 
-  // Callbacks công cụ hệ thống
-  final VoidCallback onVirtualKeyboard;
-  final VoidCallback onTaskManager;
-  final VoidCallback onDisplaySettings;
-  final VoidCallback onTrimMemory;
-  final VoidCallback onClosePanel;
+  @override
+  State<SettingsTab> createState() => SettingsTabState();
+}
 
-  // Trạng thái kết nối phần cứng
-  final bool isRtssRunning;
-  final String? activeGame;
-  final bool isTdpHardwareActive;
-  final bool isHvciBlocked;
-  final bool isZBandActive;
-  final bool isGamepadConnected;
+class SettingsTabState extends State<SettingsTab>
+    with GamepadNavigableMixin<SettingsTab> {
+  late final RtssFpsController _rtssCtrl;
 
-  // Cấu hình Phím tắt Đơn nhất (Bàn phím PC HOẶC Gamepad)
-  final String overlayHotkeyDevice;
-  final String overlayHotkey;
-  final void Function(String device, String hotkey) onOverlayHotkeyChanged;
+  late bool _autoStartEnabled;
+  late String _overlayHotkeyDevice;
+  late String _overlayHotkey;
+  late String _virtualKeyboardHotkeyDevice;
+  late String _virtualKeyboardHotkey;
+  late double _scale;
+  late int _widthPercent;
 
-  final String virtualKeyboardHotkeyDevice;
-  final String virtualKeyboardHotkey;
-  final void Function(String device, String hotkey)
-  onVirtualKeyboardHotkeyChanged;
+  @override
+  void initState() {
+    super.initState();
+    final cfg = widget.config ?? ConfigManager();
+    _rtssCtrl = RtssFpsController();
 
-  // Tùy chỉnh hiển thị Side Panel
-  final double scale;
-  final ValueChanged<double> onScaleChanged;
-  final int widthPercent;
-  final ValueChanged<int> onWidthPercentChanged;
+    _autoStartEnabled = AutostartService.instance.isEnabled;
 
-  const SettingsTab({
-    super.key,
-    required this.scrollController,
-    required this.focusedIndex,
-    required this.autoStartEnabled,
-    required this.onToggleAutoStart,
-    required this.onVirtualKeyboard,
-    required this.onTaskManager,
-    required this.onDisplaySettings,
-    required this.onTrimMemory,
-    required this.onClosePanel,
-    required this.isRtssRunning,
-    required this.activeGame,
-    required this.isTdpHardwareActive,
-    this.isHvciBlocked = false,
-    required this.isZBandActive,
-    required this.isGamepadConnected,
-    required this.overlayHotkeyDevice,
-    required this.overlayHotkey,
-    required this.onOverlayHotkeyChanged,
-    required this.virtualKeyboardHotkeyDevice,
-    required this.virtualKeyboardHotkey,
-    required this.onVirtualKeyboardHotkeyChanged,
-    required this.scale,
-    required this.onScaleChanged,
-    required this.widthPercent,
-    required this.onWidthPercentChanged,
-    required this.getItemKey,
-  });
+    final kbOverlay = cfg.get("hotkey.toggle_overlay", "Ctrl+Shift+Q");
+    final gpOverlay = cfg.get("gamepad.overlay_combo", "");
+    if (kbOverlay.isNotEmpty) {
+      _overlayHotkeyDevice = 'keyboard';
+      _overlayHotkey = kbOverlay;
+    } else if (gpOverlay.isNotEmpty) {
+      _overlayHotkeyDevice = 'gamepad';
+      _overlayHotkey = gpOverlay;
+    } else {
+      _overlayHotkeyDevice = 'keyboard';
+      _overlayHotkey = 'Ctrl+Shift+Q';
+    }
 
-  final GlobalKey Function(int index) getItemKey;
+    final kbKb = cfg.get("hotkey.toggle_keyboard", "Ctrl+Alt+K");
+    final gpKb = cfg.get("gamepad.keyboard_combo", "");
+    if (kbKb.isNotEmpty) {
+      _virtualKeyboardHotkeyDevice = 'keyboard';
+      _virtualKeyboardHotkey = kbKb;
+    } else if (gpKb.isNotEmpty) {
+      _virtualKeyboardHotkeyDevice = 'gamepad';
+      _virtualKeyboardHotkey = gpKb;
+    } else {
+      _virtualKeyboardHotkeyDevice = 'keyboard';
+      _virtualKeyboardHotkey = 'Ctrl+Alt+K';
+    }
+
+    _scale = (cfg.get("overlay.scale", 1.0) as num).toDouble();
+    _widthPercent = cfg.get("overlay.width_percent", 35);
+
+    BridgeService.instance.autostart.addListener(_onBridgeAutostartChanged);
+  }
+
+  void _onBridgeAutostartChanged() {
+    if (!mounted) return;
+    final val = BridgeService.instance.autostart.value;
+    if (_autoStartEnabled != val) {
+      setState(() => _autoStartEnabled = val);
+    }
+  }
+
+  void _toggleAutoStart(bool val) async {
+    setState(() => _autoStartEnabled = val);
+    await AutostartService.instance.setEnabled(val);
+    if (mounted) {
+      setState(() => _autoStartEnabled = AutostartService.instance.isEnabled);
+    }
+  }
+
+  void _updateOverlayHotkey(String device, String hotkey) {
+    setState(() {
+      _overlayHotkeyDevice = device;
+      _overlayHotkey = hotkey;
+    });
+    if (device == 'keyboard') {
+      widget.config?.set("hotkey.toggle_overlay", hotkey);
+      widget.config?.set("gamepad.overlay_combo", "");
+    } else {
+      widget.config?.set("gamepad.overlay_combo", hotkey);
+      widget.config?.set("hotkey.toggle_overlay", "");
+    }
+  }
+
+  void _updateVirtualKeyboardHotkey(String device, String hotkey) {
+    setState(() {
+      _virtualKeyboardHotkeyDevice = device;
+      _virtualKeyboardHotkey = hotkey;
+    });
+    if (device == 'keyboard') {
+      widget.config?.set("hotkey.toggle_keyboard", hotkey);
+      widget.config?.set("gamepad.keyboard_combo", "");
+    } else {
+      widget.config?.set("gamepad.keyboard_combo", hotkey);
+      widget.config?.set("hotkey.toggle_keyboard", "");
+    }
+  }
+
+  void _updateScale(double val) {
+    setState(() => _scale = val);
+    AppTheme.uiScale = val;
+    widget.config?.set("overlay.scale", val);
+  }
+
+  void _updateWidthPercent(int val) {
+    setState(() => _widthPercent = val);
+    widget.config?.set("overlay.width_percent", val);
+    BridgeService.instance.setPanelWidth(val);
+  }
+
+  @override
+  List<List<int>> get navigationLayout => const [
+        [0, 1],
+        [2, 3],
+        [4],
+        [5],
+        [6],
+        [7],
+        [8],
+        [9],
+        [10],
+        [11],
+        [12],
+        [13],
+      ];
+
+  @override
+  void onGamepadActionA(int focusedIndex) async {
+    switch (focusedIndex) {
+      case 0:
+        await OverlayController.instance.hideOverlay();
+        VirtualKeyboardService.toggleKeyboard();
+        break;
+      case 1:
+        await OverlayController.instance.hideOverlay();
+        BridgeService.instance.launchTaskManager();
+        break;
+      case 2:
+        await OverlayController.instance.hideOverlay();
+        BridgeService.instance.launchDisplaySettings();
+        break;
+      case 3:
+        SystemOptimizer.trimMemory();
+        break;
+      case 4:
+        _toggleAutoStart(!_autoStartEnabled);
+        break;
+      case 7:
+        cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
+        break;
+      case 8:
+        cyclePreset(const [30, 35, 40, 45], _widthPercent, 1, _updateWidthPercent);
+        break;
+    }
+  }
+
+  @override
+  void onGamepadAdjustSlider(int focusedIndex, int direction) {
+    switch (focusedIndex) {
+      case 7:
+        cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, direction, _updateScale);
+        break;
+      case 8:
+        cyclePreset(const [30, 35, 40, 45], _widthPercent, direction, _updateWidthPercent);
+        break;
+    }
+  }
+
+  @override
+  void dispose() {
+    BridgeService.instance.autostart.removeListener(_onBridgeAutostartChanged);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final telem = SystemTelemetryService.instance.latest;
+    final isRtssRunning = _rtssCtrl.isAvailable();
+    final activeGame = _rtssCtrl.getActiveGame();
+
     return ListView(
       key: const ValueKey('tab_settings'),
       controller: scrollController,
@@ -97,7 +221,10 @@ class SettingsTab extends StatelessWidget {
                 icon: Icons.keyboard_alt_rounded,
                 title: "Mở bàn phím ảo",
                 isFocused: focusedIndex == 0,
-                onTap: onVirtualKeyboard,
+                onTap: () async {
+                  await OverlayController.instance.hideOverlay();
+                  VirtualKeyboardService.toggleKeyboard();
+                },
                 helpText: "Mở bàn phím ảo trên màn hình (TabTip) của Windows để nhập liệu nhanh bằng cảm ứng hoặc cần điều khiển.",
               ),
             ),
@@ -108,7 +235,10 @@ class SettingsTab extends StatelessWidget {
                 icon: Icons.analytics_outlined,
                 title: "Mở Task Manager",
                 isFocused: focusedIndex == 1,
-                onTap: onTaskManager,
+                onTap: () async {
+                  await OverlayController.instance.hideOverlay();
+                  BridgeService.instance.launchTaskManager();
+                },
                 helpText: "Mở Trình quản lý tác vụ (Task Manager) để theo dõi tài nguyên phần cứng và quản lý các tiến trình đang chạy.",
               ),
             ),
@@ -123,7 +253,10 @@ class SettingsTab extends StatelessWidget {
                 icon: Icons.monitor_rounded,
                 title: "Cài đặt màn hình",
                 isFocused: focusedIndex == 2,
-                onTap: onDisplaySettings,
+                onTap: () async {
+                  await OverlayController.instance.hideOverlay();
+                  BridgeService.instance.launchDisplaySettings();
+                },
                 helpText: "Mở cửa sổ cài đặt hiển thị của Windows để thay đổi độ phân giải, tần số quét (Hz) hoặc cấu hình đa màn hình.",
               ),
             ),
@@ -134,7 +267,7 @@ class SettingsTab extends StatelessWidget {
                 icon: Icons.cleaning_services_rounded,
                 title: "Dọn dẹp RAM",
                 isFocused: focusedIndex == 3,
-                onTap: onTrimMemory,
+                onTap: SystemOptimizer.trimMemory,
                 helpText: "Giải phóng bộ nhớ RAM đệm (Working Set Trimming) của các tiến trình nền để tăng dung lượng bộ nhớ trống cho game.",
               ),
             ),
@@ -143,42 +276,39 @@ class SettingsTab extends StatelessWidget {
 
         // 2. CẤU HÌNH HỆ THỐNG & TƯƠNG THÍCH
         const SectionLabel(label: "CẤU HÌNH HỆ THỐNG"),
-        // Khởi động cùng Windows (Auto-start via Task Scheduler)
         ToggleCard(
           key: getItemKey(4),
           icon: Icons.power_settings_new_rounded,
           title: "Khởi động cùng Windows",
           subtitle: "Tự chạy với quyền Quản trị viên (Task Scheduler)",
-          value: autoStartEnabled,
-          onChanged: onToggleAutoStart,
+          value: _autoStartEnabled,
+          onChanged: _toggleAutoStart,
           isFocused: focusedIndex == 4,
           helpText: "Kích hoạt tác vụ Windows Task Scheduler với quyền Quản trị viên tối đa (Highest Privileges) khi đăng nhập, khắc phục triệt để việc UAC chặn ứng dụng tự khởi động.",
         ),
         const SizedBox(height: 12),
 
-        // Phím tắt mở Quick Settings (Đơn nhất: Bàn phím PC HOẶC Gamepad)
         HotkeyTile(
           key: getItemKey(5),
           icon: Icons.dashboard_customize_rounded,
           title: "Phím tắt mở Quick Settings",
           target: "overlay",
-          device: overlayHotkeyDevice,
-          hotkey: overlayHotkey,
-          onHotkeyChanged: onOverlayHotkeyChanged,
+          device: _overlayHotkeyDevice,
+          hotkey: _overlayHotkey,
+          onHotkeyChanged: _updateOverlayHotkey,
           isFocused: focusedIndex == 5,
           helpText: "Phím tắt duy nhất để bật hoặc ẩn bảng điều khiển Quick Settings (Bàn phím PC HOẶC Gamepad).",
         ),
         const SizedBox(height: 12),
 
-        // Phím tắt mở Bàn phím ảo (Đơn nhất: Bàn phím PC HOẶC Gamepad)
         HotkeyTile(
           key: getItemKey(6),
           icon: Icons.keyboard_alt_rounded,
           title: "Phím tắt mở Bàn phím ảo",
           target: "keyboard",
-          device: virtualKeyboardHotkeyDevice,
-          hotkey: virtualKeyboardHotkey,
-          onHotkeyChanged: onVirtualKeyboardHotkeyChanged,
+          device: _virtualKeyboardHotkeyDevice,
+          hotkey: _virtualKeyboardHotkey,
+          onHotkeyChanged: _updateVirtualKeyboardHotkey,
           isFocused: focusedIndex == 6,
           helpText: "Phím tắt duy nhất để kích hoạt nhanh bàn phím ảo Windows TabTip khi chơi game (Bàn phím PC HOẶC Gamepad).",
         ),
@@ -186,31 +316,28 @@ class SettingsTab extends StatelessWidget {
 
         // 3. TÙY BIẾN GIAO DIỆN (UI SCALE & WIDTH)
         const SectionLabel(label: "TÙY BIẾN GIAO DIỆN"),
-
-        // Tỷ lệ phóng đại UI Scale
         PresetSelector<double>(
           key: getItemKey(7),
           title: "Tỷ lệ hiển thị (UI Scale)",
           icon: Icons.format_size_rounded,
-          currentValueText: "${(scale * 100).toInt()}%",
+          currentValueText: "${(_scale * 100).toInt()}%",
           presets: const [0.9, 1.0, 1.1, 1.2],
-          selectedValue: scale,
+          selectedValue: _scale,
           labelBuilder: (preset) => "${(preset * 100).toInt()}%",
-          onSelected: onScaleChanged,
+          onSelected: _updateScale,
           isFocused: focusedIndex == 7,
         ),
         const SizedBox(height: 12),
 
-        // Độ rộng Side Panel
         PresetSelector<int>(
           key: getItemKey(8),
           title: "Độ rộng Side Panel",
           icon: Icons.aspect_ratio_rounded,
-          currentValueText: "$widthPercent %",
+          currentValueText: "$_widthPercent %",
           presets: const [30, 35, 40, 45],
-          selectedValue: widthPercent,
+          selectedValue: _widthPercent,
           labelBuilder: (preset) => "$preset%",
-          onSelected: onWidthPercentChanged,
+          onSelected: _updateWidthPercent,
           isFocused: focusedIndex == 8,
         ),
 
@@ -222,8 +349,8 @@ class SettingsTab extends StatelessWidget {
           title: "RivaTuner RTSS",
           statusText: isRtssRunning
               ? (activeGame != null
-                    ? "Đang hook game: $activeGame"
-                    : "Đang chạy (Sẵn sàng đo FPS)")
+                  ? "Đang hook game: $activeGame"
+                  : "Đang chạy (Sẵn sàng đo FPS)")
               : "Chưa kết nối RTSS",
           isActive: isRtssRunning,
           isFocused: focusedIndex == 9,
@@ -232,16 +359,16 @@ class SettingsTab extends StatelessWidget {
 
         StatusIndicatorCard(
           key: getItemKey(10),
-          icon: isTdpHardwareActive
+          icon: telem.isTdpHardwareActive
               ? Icons.memory_rounded
               : Icons.warning_amber_rounded,
           title: "RyzenAdj TDP Driver",
-          statusText: isTdpHardwareActive
+          statusText: telem.isTdpHardwareActive
               ? "WinRing0 Ring 0 Driver Hoạt động"
-              : (isHvciBlocked
+              : (telem.isHvciBlocked
                   ? "Bị chặn bởi Memory Integrity (HVCI) - Cần tắt HVCI"
                   : "Chưa nạp được driver Ring 0"),
-          isActive: isTdpHardwareActive,
+          isActive: telem.isTdpHardwareActive,
           isFocused: focusedIndex == 10,
         ),
         const SizedBox(height: 8),
@@ -250,10 +377,8 @@ class SettingsTab extends StatelessWidget {
           key: getItemKey(11),
           icon: Icons.layers_rounded,
           title: "Windows System Z-Band",
-          statusText: isZBandActive
-              ? "Hoạt động (ZBID_SYSTEM_TOOLS - UIAccess)"
-              : "Chưa kích hoạt",
-          isActive: isZBandActive,
+          statusText: "Hoạt động (ZBID_SYSTEM_TOOLS - UIAccess)",
+          isActive: true,
           isFocused: focusedIndex == 11,
         ),
         const SizedBox(height: 8),
@@ -262,12 +387,12 @@ class SettingsTab extends StatelessWidget {
           key: getItemKey(12),
           icon: Icons.sports_esports_rounded,
           title: "Tay cầm Gamepad",
-          statusText: isGamepadConnected
-              ? (overlayHotkeyDevice == 'gamepad' && overlayHotkey.isNotEmpty
-                    ? "Đã kết nối (Phím tắt: $overlayHotkey)"
-                    : "Đã kết nối (Sẵn sàng)")
+          statusText: GamepadService.isConnected
+              ? (_overlayHotkeyDevice == 'gamepad' && _overlayHotkey.isNotEmpty
+                  ? "Đã kết nối (Phím tắt: $_overlayHotkey)"
+                  : "Đã kết nối (Sẵn sàng)")
               : "Chưa phát hiện tay cầm XInput",
-          isActive: isGamepadConnected,
+          isActive: GamepadService.isConnected,
           isFocused: focusedIndex == 12,
         ),
 

@@ -2,6 +2,7 @@ import os
 import sys
 import ctypes
 from ctypes import wintypes
+import socket
 import urllib.request
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtCore import Qt, Signal, QUrl, QCoreApplication, QEvent, QTimer
@@ -43,6 +44,7 @@ class QuickPanel(QWidget):
         self.ws_server = WsServer(self.bridge, port=8765, parent=self)
         self.static_server = None
         self.dev_tools_view = None
+        self.is_dev_mode = False
         self._setup_ui()
         self._connect_bridge_signals()
 
@@ -93,6 +95,12 @@ class QuickPanel(QWidget):
         return super().nativeEvent(eventType, message)
 
     def _on_page_load_finished(self, ok: bool):
+        logger.info(f"[QuickPanel] Frontend page load finished: ok={ok}, url={self.view.url().toString()}")
+        if not ok and self.is_dev_mode:
+            logger.warning("[QuickPanel] Dev server web page failed to load initially. Auto-reloading in 1.5s...")
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(1500, self.view.reload)
+
         proxy = self.view.focusProxy()
         if proxy:
             proxy.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -141,6 +149,10 @@ class QuickPanel(QWidget):
         # 3. Phím tắt F12 để mở Chromium DevTools kiểm tra và debug web
         self.shortcut_f12 = QShortcut(QKeySequence("F12"), self)
         self.shortcut_f12.activated.connect(self._toggle_dev_tools)
+        self.shortcut_f5 = QShortcut(QKeySequence("F5"), self)
+        self.shortcut_f5.activated.connect(self._reload_frontend)
+        self.shortcut_ctrl_r = QShortcut(QKeySequence("Ctrl+R"), self)
+        self.shortcut_ctrl_r.activated.connect(self._reload_frontend)
 
         # 4. Xác định nạp Vite Dev Server hay Bản build Production
         self._load_frontend()
@@ -149,16 +161,19 @@ class QuickPanel(QWidget):
 
     def _is_dev_server_running(self) -> bool:
         try:
-            req = urllib.request.urlopen("http://localhost:5173", timeout=0.3)
-            return req.status == 200
-        except Exception:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                return s.connect_ex(("127.0.0.1", 5173)) == 0
+        except Exception as e:
+            logger.debug(f"Dev server probe failed: {e}")
             return False
 
     def _load_frontend(self):
         # 1. Nếu đang chạy Flutter Web Dev Server tại cổng 5173 (phát triển độc lập)
         if self._is_dev_server_running():
-            logger.info("Phát hiện Flutter Web Dev Server đang chạy tại http://localhost:5173. Đang nạp chế độ Dev...")
-            self.view.load(QUrl("http://localhost:5173"))
+            logger.info("Phát hiện Flutter Web Dev Server đang chạy tại http://127.0.0.1:5173. Đang nạp chế độ Dev...")
+            self.is_dev_mode = True
+            self.view.load(QUrl("http://127.0.0.1:5173"))
             return
 
         # 2. Quét tìm thư mục build/web chứa index.html từ các vị trí tiềm năng (PyInstaller bundle, _internal, exe_dir hoặc project root)
@@ -190,7 +205,12 @@ class QuickPanel(QWidget):
             self.view.load(QUrl("http://127.0.0.1:8766"))
         else:
             logger.warning("Chưa tìm thấy bản build tĩnh (build/web/index.html). Đang nạp máy chủ dev fallback...")
-            self.view.load(QUrl("http://localhost:5173"))
+            self.is_dev_mode = True
+            self.view.load(QUrl("http://127.0.0.1:5173"))
+
+    def _reload_frontend(self):
+        logger.info("[QuickPanel] Reloading frontend view (F5 / Ctrl+R)...")
+        self.view.reload()
 
     def _toggle_dev_tools(self):
         """Mở cửa sổ Chrome DevTools độc lập để Inspect Element, xem Console, Network..."""

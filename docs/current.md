@@ -1,6 +1,6 @@
 # Trạng thái hiện tại của dự án (Project Status)
 
-> Cập nhật lần cuối: 24/10/2026 10:45
+> Cập nhật lần cuối: 24/10/2026 13:37
 
 > [!IMPORTANT]
 > **Quy tắc duy trì tài liệu**:
@@ -53,6 +53,26 @@
   + [23/10/2026 22:28] Sửa lỗi ánh xạ Joystick trái sang D-Pad:
     Code thực tế: Bổ sung đọc 2 trục analog `state.Gamepad.sThumbLX` và `sThumbLY` với Deadzone 16000 trong `_poll_loop` tại `backend/src/input/gamepad_service.py`, tự động ánh xạ sang `dpadUp`, `dpadDown`, `dpadLeft`, `dpadRight` kèm cơ chế hold-to-repeat.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 10:55] Tái cấu trúc module hóa QuickPanel & phân tán điều hướng Gamepad vào từng Tab:
+    Code thực tế:
+      - `frontend/lib/ui/navigation/gamepad_navigable.dart`: Xây dựng mixin `GamepadNavigableMixin` quản lý điều hướng 2D grid, di chuyển focus và auto-scroll dùng chung (DRY) cho tất cả các tab.
+      - Xóa bỏ hoàn toàn khối hardcode `_getTabLayout()` (L411-L465), `_handleGamepadA()` và `_adjustFocusedSlider()` trong `quick_panel.dart`. Mỗi tab (`HomeTab`, `PerformanceTab`, `DeviceTab`, `SettingsTab`) tự định nghĩa `navigationLayout` và tự xử lý các thao tác tương tác của riêng mình.
+      - Tách logic state và kết nối service của TDP, Fan, RTSS, Brightness, Audio, Touchscreen, Hotkey vào bên trong từng Tab riêng biệt dưới dạng `StatefulWidget`, triệt tiêu hoàn toàn hiện tượng prop-drilling.
+      - Tách `frontend/lib/ui/quick_panel/panel_footer.dart`, tinh gọn `quick_panel.dart` từ 1.286 dòng xuống còn 188 dòng đóng vai trò Shell Scaffold.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 11:00] Tinh gọn và quy tụ toàn bộ cụm Quick Panel vào frontend/lib/ui/quick_panel/:
+    Code thực tế:
+      - Xóa bỏ comment cũ sai lệch về "Dimmed Backdrop", gộp trực tiếp `OverlayScreen` (animation Fade + Slide) và `QuickSettingsPanel` vào một tệp duy nhất: `frontend/lib/ui/quick_panel/quick_panel.dart` (205 dòng).
+      - Di chuyển `gamepad_navigable.dart` từ `frontend/lib/ui/navigation/` vào `frontend/lib/ui/quick_panel/gamepad_navigable.dart` để đồng bộ cụm module Quick Panel, xóa bỏ thư mục rỗng `ui/navigation/` và các file wrapper trung gian thừa (`overlay_screen.dart`, `ui/quick_panel.dart`).
+      - Cập nhật entrypoint `frontend/lib/main.dart` nạp `OverlayScreen` trực tiếp từ `ui/quick_panel/quick_panel.dart`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 11:31] Tái cấu trúc cấu trúc Tab: Gộp Thiết bị vào Trang chủ & Tách RTSS/OSD thành RTSS Tab riêng:
+    Code thực tế:
+      - `frontend/lib/ui/tabs/home_tab.dart`: Tích hợp các bộ điều khiển và thanh trượt Độ sáng màn hình, Âm lượng loa và công tắc Cảm ứng màn hình vào ngay bên dưới phần đồng hồ; kết nối listener 2 chiều với Windows; cập nhật navigationLayout và xử lý Gamepad A / Slider.
+      - `frontend/lib/ui/tabs/rtss_tab.dart`: Tạo mới tab chuyên biệt cho RTSS và OSD in-game; chuyển toàn bộ logic khóa FPS, bộ điều khiển OSD (Zoom, Position, Layout, Metric Toggles) và thẻ cài đặt tự động RTSS Installer sang tab mới.
+      - `frontend/lib/ui/tabs/performance_tab.dart`: Tinh gọn từ 871 dòng xuống còn 203 dòng, loại bỏ toàn bộ code liên quan đến RTSS/OSD, chỉ tập trung vào quản lý công suất TDP và quạt tản nhiệt Fan.
+      - `frontend/lib/ui/quick_panel/quick_panel.dart`: Cập nhật 4 tab theo thứ tự mới: 1. Trang chủ, 2. Hiệu năng, 3. RTSS / OSD, 4. Cài đặt; xóa bỏ hoàn toàn tệp thừa `frontend/lib/ui/tabs/device_tab.dart`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 ---
 
@@ -88,6 +108,36 @@
     Code thực tế: Sửa logic trong `frontend/lib/ui/quick_panel.dart`, biến `_liveFan` luôn cập nhật trực tiếp từ `_telemetryData.liveFan`, loại bỏ triệt để việc gán đè `_liveFan = _fan` khi chuyển chế độ hoặc khi người dùng kéo thanh trượt.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+  + [24/10/2026 12:50] Triển khai hệ thống Fan Curves toàn diện & Xóa bỏ triệt để mã nguồn chết:
+    Code thực tế:
+      - `backend/src/hardware/fan_service.py`: Xóa bỏ hoàn toàn hàm chết `_apply_ec_io`, loại bỏ phụ thuộc `inpoutx64.dll` theo đúng nguyên tắc Cấm Backward Compatibility. Tích hợp 3 Profile Fan Curve tối ưu (`quiet`, `balanced`, `cool`) và 1 Profile `custom` lưu trong `config.json`. Bổ sung bộ lọc trễ nhiệt độ Hysteresis 3°C và cơ chế Rate-limit an toàn (tối đa 1 lệnh/3s) trong luồng nền `_fan_curve_worker`.
+      - `backend/src/bridge/web_bridge.py` & `ws_server.py`: Bổ sung API `setFanCurve(profile, curve)`, truyền trạng thái `fan_profile` và `fan_curve` qua WebSocket IPC.
+      - `frontend/lib/services/bridge_service.dart` & `fan_service.dart`: Bổ sung ValueNotifier `fanProfile` và `fanCurve`, API `setFanCurve(profile, curve)`.
+      - `frontend/lib/ui/widgets/fan_curve_graph.dart`: Xây dựng widget biểu đồ CustomPainter hiển thị đồ thị đường cong spline, các điểm mốc nhiệt độ, và Live Indicator Dot (chấm chỉ báo thời gian thực) chuyển động theo nhiệt độ và tốc độ quạt hiện tại.
+      - `frontend/lib/ui/tabs/performance_tab.dart`: Tích hợp bộ chọn `PresetSelector` (Yên tĩnh, Cân bằng, Mát lạnh, Tùy chỉnh) và biểu đồ `FanCurveGraph`. Hỗ trợ điều hướng Gamepad (D-pad Trái/Phải chọn điểm mốc, Lên/Xuống chỉnh % tốc độ quạt).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 13:02] Khắc phục lỗi TypeError int() khi nạp cấu hình FanService:
+    Code thực tế:
+      - `backend/src/core/config.py`: Nâng cấp hàm `get()` hỗ trợ linh hoạt cả dot-notation (`"hardware.fan.current"`) và positional fallback (`get("a.b", fallback)`), tự động mở rộng các chuỗi phân cấp có dấu chấm thành danh sách keys. Bổ sung giá trị cấu hình mặc định cho `profile` ("balanced") và `custom_curve` trong `DEFAULT_CONFIG`.
+      - `backend/src/hardware/fan_service.py`: Chuẩn hóa các lệnh gọi đọc cấu hình sang `self.config.get("hardware", "fan", "current", default=50)`, loại bỏ nguy cơ ném lỗi `TypeError` khi nạp giá trị số nguyên lúc khởi động ứng dụng.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 13:26] Triệt tiêu nhiệt độ giả lập, cảnh báo HVCI và chuẩn hóa Logic Chế độ Quạt (Auto vs Manual Curves):
+    Code thực tế:
+      - `backend/src/hardware/tdp_service.py`: Xóa bỏ hoàn toàn công thức ước lượng nhiệt độ giả qua % CPU (psutil). Khi driver phần cứng bị chặn bởi HVCI hoặc không đọc được cảm biến, trả về `cpu_temp = None` để kích hoạt giao diện cảnh báo thay vì số ảo.
+      - `backend/src/services/system_telemetry.py`: Trả về `cpu_temp = None` khi không có cảm biến thực tế.
+      - `backend/src/hardware/fan_service.py`: Chuẩn hóa logic chế độ quạt theo thiết bị Handheld: Auto (`is_auto=True`) giao toàn quyền cho BIOS / EC phần cứng tự vận hành mà không can thiệp đè lệnh; Manual (`is_auto=False`) kích hoạt luồng `_fan_curve_worker` điều tốc theo Fan Curves đã chọn. Tự động đồng bộ ngay tốc độ quạt chu kỳ đầu tiên. Xóa bỏ hoàn toàn hàm khóa cứng tốc độ quạt một mức `set_speed`.
+      - `backend/src/bridge/web_bridge.py` & `ws_server.py`: Cập nhật slot `setFan` và `setFanAuto`.
+      - `frontend/lib/services/system_telemetry_service.dart` & `bridge_service.dart` & `tdp_service.dart`: Đổi `cpuTemp` sang kiểu `int?` nullable, loại bỏ hoàn toàn các fallback số fake 40°C hay 45°C.
+      - `frontend/lib/ui/widgets/fan_curve_graph.dart`: Hỗ trợ `liveTemp` nullable. Khi bị chặn bởi HVCI, hiển thị badge cảnh báo màu cam `HVCI (!) • liveFan%` và không vẽ chấm trắng giả lơ lửng trên đồ thị.
+      - `frontend/lib/ui/tabs/performance_tab.dart`: Đổi ToggleCard Quạt: Bật = Do BIOS / Phần cứng tự điều khiển; Tắt = Tùy biến theo Fan Curve. Khi tắt (Manual), hiển thị PresetSelector và FanCurveGraph kèm Banner cảnh báo nếu HVCI đang bật. Khi bật (Auto), hiển thị thẻ trạng thái bảo vệ an toàn của BIOS. Xóa bỏ hoàn toàn thanh trượt Slider khóa cứng tốc độ quạt. Cập nhật navigationLayout và phím bấm Gamepad tương ứng.
+      - `scripts/run.bat`: Bổ sung nhãn `:CLEAN_PREVIOUS_INSTANCE` tự động dọn dẹp tiến trình cũ chạy ngầm trước khi nạp ứng dụng.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 13:37] Khắc phục lỗi Flutter Web treo trắng màn hình & Chuẩn hóa tiến trình Dev Hot Reload:
+    Code thực tế:
+      - `frontend/lib/services/bridge_service.dart`: Bắt lỗi an toàn trên `_channel!.ready` bằng `.catchError(...)`, triệt tiêu hoàn toàn ngoại lệ `Uncaught (in promise) WebSocketChannelException` trong microtask loop của Dart Web SDK khi backend chưa kịp bắt tay WebSocket, giúp Flutter Web render giao diện bình thường và tự động retry kết nối sau 2 giây.
+      - `scripts/run.bat`: Thay thế cơ chế thăm dò cổng socket sớm bằng kiểm tra HTTP GET thực tế (`http://127.0.0.1:5173`) trả về mã 200 OK. Đảm bảo backend Python chỉ nạp sau khi máy chủ Flutter Web đã biên dịch hoàn tất toàn bộ 530 module Javascript.
+      - `backend/src/overlay/quick_panel.py`: Bổ sung cơ chế tự động thử nạp lại (`reload()`) sau 1.5 giây trong `_on_page_load_finished` nếu ở chế độ dev mà trang web nạp không thành công (`ok == False`).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 ---
 
 ## 4. Hiển thị OSD thông số in-game qua RivaTuner (RTSS Overlay)
@@ -105,6 +155,12 @@
       - `backend/src/hardware/rtss_service.py`: Bổ sung hàm `install_rtss_silent()` hỗ trợ cài đặt ngầm bằng winget hoặc tải silent installer từ mirror và chạy `/S`.
       - `backend/src/bridge/web_bridge.py` & `backend/src/bridge/ws_server.py`: Thêm slot `installRtss` tiếp nhận yêu cầu cài đặt từ frontend qua QWebChannel / WebSocket.
       - `frontend/lib/services/bridge_service.dart` & `frontend/lib/services/rtss_installer_service.dart`: Kết nối nút bấm cài đặt trực tiếp trên tab Performance đến backend.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 11:05] Chuẩn hóa toàn bộ nội dung scripts/run.bat sang tiếng Anh:
+    Code thực tế: Cập nhật menu lựa chọn, cảnh báo kiểm tra RTSS và thông báo tiến trình khởi chạy trong `scripts/run.bat` sang 100% tiếng Anh (English).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 11:08] Sửa lỗi khởi chạy tùy chọn [2] (Dev Hot Reload) trong scripts/run.bat:
+    Code thực tế: Sử dụng cờ `/D` của lệnh `start` và `cmd /k` để loại bỏ lỗi lồng dấu ngoặc kép và giữ cửa sổ log Flutter luôn mở; bổ sung vòng lặp kiểm tra kết nối TCP cổng 5173 bằng socket Python, tự động chờ Flutter Web Server sẵn sàng trước khi nạp ứng dụng backend.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [ ] **Bộ đếm khung hình in-game (FPS Counter)**
@@ -197,6 +253,13 @@
       - `backend/main.py`: Cập nhật hàm `get_app_icon()` hỗ trợ quét thư mục `assets` qua `sys._MEIPASS` và `sys.executable` trong môi trường PyInstaller; nâng cấp cơ chế fallback vẽ trực tiếp vector Google Fonts `sports_esports` qua `QSvgRenderer` nếu tệp đĩa bị thiếu (loại bỏ hoàn toàn hình tròn chữ "H" cũ).
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+  + [24/10/2026 12:50] Nâng cấp Icon Modern Blue Fluent Design không viền (Full Bleed):
+    Code thực tế:
+      - Loại bỏ hoàn toàn nền gradient tím cũ, chuyển sang màu xanh đơn sắc phẳng hiện đại Windows Accent Blue (`#0067C0`).
+      - Triệt tiêu 100% lề ngoài thừa (Zero Margin / Full Bleed) và phóng to biểu tượng Gamepad lên 88-90% khung hình giúp hiển thị to rõ, sắc nét ở khay hệ thống (System Tray).
+      - Phối hợp các sắc độ trắng khác nhau (Fluent White Shades) cho thân vỏ, D-pad, nút bấm ABXY và cần gạt Analog tạo chiều sâu đa lớp đồng bộ hoàn hảo với Windows 11.
+      - Sinh lại `backend/assets/app_icon.png` (512x512) và `backend/assets/app_icon.ico` (7 layer: 16 đến 256 px); cập nhật fallback SVG trong `backend/main.py`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 ---
 
 ## 7. Tính năng dự kiến mở rộng (Backlog)
@@ -212,3 +275,23 @@
 - [ ] **Ánh xạ nút vật lý mở panel (Dedicated QAM Button Remap)**
   + [Initial] Bắt scancode phần cứng của các nút bấm cạnh máy như trên Lenovo Legion Go, ROG Ally để mở Quick Panel.
     Tình trạng: Chưa thực hiện.
+
+
+---
+
+## 8. Kịch bản phát triển & Triển khai (Scripts & Tooling)
+
+- [ ] **Kịch bản điều khiển trung tâm (scripts/run.bat)**
+  + [Initial] Code thực tế: `scripts/run.bat` cung cấp menu chọn chế độ chạy: Gaming Overlay, Dev Hot Reload, Chrome DevTools, Deploy Release Package, Uninstall.
+    Tình trạng: Tùy chọn [2] (Dev Hot Reload) bị crash ngay khi khởi chạy với thông báo lỗi `NOT was unexpected at this time.` do cú pháp ngoặc đơn `(RTSS)` trong khối `if not defined RTSS_INSTALLED (...)`.
+  + [24/10/2026 11:13] Khắc phục lỗi cú pháp `NOT was unexpected at this time.` và nâng cấp menu [2]:
+    Code thực tế:
+      - `scripts/run.bat`: Tái cấu trúc subroutine `:ENSURE_RTSS` theo kiến trúc phẳng (flat label-goto), loại bỏ khối `if (...)` đa dòng bọc quanh lệnh `echo`, đổi `(RTSS)` thành `[RTSS]`, chuẩn hóa định nghĩa biến `PYTHON_CMD`.
+      - Cấu hình lệnh `start` với cờ thư mục làm việc `/D "%PROJECT_ROOT%\frontend"` chuẩn Win32 và vòng lặp socket Python kiểm tra cổng 5173 sẵn sàng trước khi nạp backend.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 11:23] Khắc phục lỗi 'No client connected' & nạp sai bản build tĩnh khi Dev Hot Reload:
+    Code thực tế:
+      - `scripts/run.bat`: Bổ sung cờ `--web-hostname 127.0.0.1` vào lệnh chạy Flutter Web Dev Server để liên kết trực tiếp IPv4, loại bỏ độ trễ phân giải IPv6 của `localhost`.
+      - `backend/src/overlay/quick_panel.py`: Viết lại hàm `_is_dev_server_running()` dùng socket IPv4 (`127.0.0.1:5173`) tốc độ cao thay cho `urllib.request.urlopen("http://localhost:5173", timeout=0.3)` (vốn luôn bị Timeout do IPv6 fallback, khiến QuickPanel âm thầm rơi vào fallback nạp bản build tĩnh cũ và DWDS không kết nối được client).
+      - Đổi URL nạp thành `http://127.0.0.1:5173`, bật cờ `is_dev_mode = True`, bổ sung phím tắt `F5` và `Ctrl+R` kích hoạt `self.view.reload()` cho phép reload giao diện tức thì.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).

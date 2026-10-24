@@ -1,107 +1,244 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
+import '../../core/config.dart';
 import '../../hardware/tdp_service.dart';
 import '../../hardware/fan_service.dart';
-import '../../hardware/rtss_service.dart';
-import '../../hardware/rtss_osd_formatter.dart';
-import '../../services/rtss_installer_service.dart';
+import '../../services/bridge_service.dart';
+import '../../services/system_telemetry_service.dart';
+import '../quick_panel/gamepad_navigable.dart';
 import '../widgets/setting_slider.dart';
 import '../widgets/section_label.dart';
 import '../widgets/toggle_card.dart';
-import '../widgets/help_box.dart';
 import '../widgets/preset_selector.dart';
+import '../widgets/fan_curve_graph.dart';
 
-/// Tab điều khiển Hiệu năng & Năng lượng: Quản lý TDP, Tốc độ quạt và Khóa khung hình RTSS.
-class PerformanceTab extends StatelessWidget {
-  final ScrollController scrollController;
-  final int focusedIndex;
+/// Tab điều khiển Hiệu năng & Năng lượng: Quản lý Công suất điện (TDP) và Tốc độ quạt tản nhiệt (Fan & Fan Curves).
+class PerformanceTab extends StatefulWidget {
+  final ConfigManager? config;
 
-  // Cấu hình & Dữ liệu đo TDP
-  final int tdp;
-  final int? liveTdp;
-  final bool tdpAuto;
-  final TdpController tdpCtrl;
-  final ValueChanged<int> onTdpChanged;
-  final VoidCallback onToggleTdpAuto;
+  const PerformanceTab({super.key, this.config});
 
-  // Cấu hình & Dữ liệu đo Quạt
-  final int fan;
-  final int liveFan;
-  final bool fanAuto;
-  final FanController fanCtrl;
-  final ValueChanged<int> onFanChanged;
-  final VoidCallback onToggleFanAuto;
+  @override
+  State<PerformanceTab> createState() => PerformanceTabState();
+}
 
-  // Cấu hình & Dữ liệu đo RTSS
-  final int fpsLimit;
-  final int? liveFps;
-  final String? activeGame;
-  final RtssFpsController rtssCtrl;
-  final ValueChanged<int> onFpsLimitChanged;
-  final bool isInstallingRtss;
-  final String? rtssInstallMsg;
-  final VoidCallback onInstallRtss;
+class PerformanceTabState extends State<PerformanceTab>
+    with GamepadNavigableMixin<PerformanceTab> {
+  late final TdpController _tdpCtrl;
+  late final FanController _fanCtrl;
 
-  // Cấu hình hiển thị Overlay OSD của RTSS
-  final bool osdEnabled;
-  final ValueChanged<bool> onToggleOsd;
-  final int osdZoom;
-  final ValueChanged<int> onOsdZoomChanged;
-  final RtssOsdPosition osdPosition;
-  final ValueChanged<RtssOsdPosition> onOsdPositionChanged;
-  final RtssOsdMetricsConfig osdMetrics;
-  final ValueChanged<RtssOsdLayout> onOsdLayoutChanged;
-  final VoidCallback onToggleMetricFps;
-  final VoidCallback onToggleMetricTdp;
-  final VoidCallback onToggleMetricCpuTemp;
-  final VoidCallback onToggleMetricCpuUsage;
-  final VoidCallback onToggleMetricRam;
-  final VoidCallback onToggleMetricBattery;
-  final VoidCallback onToggleMetricFan;
-  final GlobalKey Function(int index) getItemKey;
+  late int _tdp;
+  int? _liveTdp;
+  late bool _tdpAuto;
 
-  const PerformanceTab({
-    super.key,
-    required this.scrollController,
-    required this.focusedIndex,
-    required this.tdp,
-    required this.liveTdp,
-    required this.tdpAuto,
-    required this.tdpCtrl,
-    required this.onTdpChanged,
-    required this.onToggleTdpAuto,
-    required this.fan,
-    required this.liveFan,
-    required this.fanAuto,
-    required this.fanCtrl,
-    required this.onFanChanged,
-    required this.onToggleFanAuto,
-    required this.fpsLimit,
-    required this.liveFps,
-    required this.activeGame,
-    required this.rtssCtrl,
-    required this.onFpsLimitChanged,
-    required this.isInstallingRtss,
-    required this.rtssInstallMsg,
-    required this.onInstallRtss,
-    required this.osdEnabled,
-    required this.onToggleOsd,
-    required this.osdZoom,
-    required this.onOsdZoomChanged,
-    required this.osdPosition,
-    required this.onOsdPositionChanged,
-    required this.osdMetrics,
-    required this.onOsdLayoutChanged,
-    required this.onToggleMetricFps,
-    required this.onToggleMetricTdp,
-    required this.onToggleMetricCpuTemp,
-    required this.onToggleMetricCpuUsage,
-    required this.onToggleMetricRam,
-    required this.onToggleMetricBattery,
-    required this.onToggleMetricFan,
-    required this.getItemKey,
-  });
+  late int _liveFan;
+  late bool _fanAuto;
+  late String _fanProfile;
+  late List<List<int>> _fanCurve;
+  int _selectedCurvePoint = 0;
+  int? _liveCpuTemp;
+
+  Timer? _telemetryTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    final cfg = widget.config ?? ConfigManager();
+
+    _tdpCtrl = TdpController(
+      minVal: cfg.get("hardware.tdp.min", 5),
+      maxVal: cfg.get("hardware.tdp.max", 35),
+      step: cfg.get("hardware.tdp.step", 1),
+      defaultVal: cfg.get("hardware.tdp.current", 15),
+    );
+
+    _fanCtrl = FanController(
+      minVal: cfg.get("hardware.fan.min", 0),
+      maxVal: cfg.get("hardware.fan.max", 100),
+      step: cfg.get("hardware.fan.step", 5),
+      defaultVal: cfg.get("hardware.fan.current", 50),
+    );
+
+    _tdp = _tdpCtrl.getValue();
+    _tdpAuto = cfg.get("hardware.tdp.auto", false);
+    _liveTdp = _tdpCtrl.getLiveTdp()?.round();
+
+    _fanAuto = _fanCtrl.isAuto();
+    _liveFan = _fanCtrl.getValue();
+    _fanProfile = _fanCtrl.profile;
+    _fanCurve = List<List<int>>.from(_fanCtrl.curve);
+
+    // Lắng nghe thay đổi từ BridgeService
+    BridgeService.instance.tdp.addListener(_onBridgeTdpChanged);
+    BridgeService.instance.fanSpeed.addListener(_onBridgeFanChanged);
+    BridgeService.instance.isFanAuto.addListener(_onBridgeFanAutoChanged);
+    BridgeService.instance.fanProfile.addListener(_onBridgeFanProfileChanged);
+    BridgeService.instance.fanCurve.addListener(_onBridgeFanCurveChanged);
+
+    // Bắt đầu chu kỳ đọc Telemetry cho Live TDP, Fan và Nhiệt độ CPU
+    _telemetryTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
+      _pollTelemetry();
+    });
+  }
+
+  void _onBridgeTdpChanged() {
+    if (!mounted) return;
+    final val = BridgeService.instance.tdp.value;
+    if (_tdp != val) setState(() => _tdp = val);
+  }
+
+  void _onBridgeFanChanged() {
+    if (!mounted) return;
+    final val = BridgeService.instance.fanSpeed.value;
+    if (_liveFan != val) setState(() => _liveFan = val);
+  }
+
+  void _onBridgeFanAutoChanged() {
+    if (!mounted) return;
+    final val = BridgeService.instance.isFanAuto.value;
+    if (_fanAuto != val) setState(() => _fanAuto = val);
+  }
+
+  void _onBridgeFanProfileChanged() {
+    if (!mounted) return;
+    final val = BridgeService.instance.fanProfile.value;
+    if (_fanProfile != val) setState(() => _fanProfile = val);
+  }
+
+  void _onBridgeFanCurveChanged() {
+    if (!mounted) return;
+    final val = BridgeService.instance.fanCurve.value;
+    setState(() => _fanCurve = List<List<int>>.from(val));
+  }
+
+  void _pollTelemetry() {
+    if (!mounted) return;
+    final telem = SystemTelemetryService.instance.getSnapshot();
+    final hwTdp = _tdpCtrl.getLiveTdp();
+
+    setState(() {
+      _liveTdp = hwTdp?.round() ?? telem.liveTdp;
+      _liveFan = telem.liveFan;
+      _liveCpuTemp = telem.cpuTemp;
+    });
+  }
+
+  void _updateTdp(int val) {
+    setState(() => _tdp = val);
+    _tdpCtrl.setValue(val);
+    widget.config?.set("hardware.tdp.current", val);
+  }
+
+  void _toggleTdpAuto() {
+    final next = !_tdpAuto;
+    setState(() => _tdpAuto = next);
+    widget.config?.set("hardware.tdp.auto", next);
+  }
+
+  void _toggleFanAuto() {
+    final next = !_fanAuto;
+    setState(() => _fanAuto = next);
+    _fanCtrl.setAuto(next);
+    widget.config?.set("hardware.fan.auto", next);
+  }
+
+  void _updateFanProfile(String profile) {
+    setState(() => _fanProfile = profile);
+    _fanCtrl.setProfile(profile);
+  }
+
+  void _updateCustomCurvePoint(int pointIdx, int delta) {
+    if (_fanCurve.isEmpty || pointIdx < 0 || pointIdx >= _fanCurve.length) return;
+    final updated = List<List<int>>.from(_fanCurve.map((p) => [p[0], p[1]]));
+    final newSpeed = (updated[pointIdx][1] + delta).clamp(0, 100);
+    updated[pointIdx][1] = newSpeed;
+    setState(() => _fanCurve = updated);
+    _fanCtrl.setProfile('custom', updated);
+  }
+
+  String _getProfileLabel(String p) {
+    switch (p) {
+      case 'quiet':
+        return 'Yên tĩnh';
+      case 'balanced':
+        return 'Cân bằng';
+      case 'cool':
+        return 'Mát lạnh';
+      case 'custom':
+        return 'Tùy chỉnh';
+      default:
+        return p;
+    }
+  }
+
+  @override
+  List<List<int>> get navigationLayout => [
+        const [0],
+        if (!_tdpAuto) const [1],
+        const [2],
+        if (!_fanAuto) ...[
+          const [3],
+          const [4],
+        ],
+      ];
+
+  @override
+  void onGamepadActionA(int focusedIndex) {
+    switch (focusedIndex) {
+      case 0:
+        _toggleTdpAuto();
+        break;
+      case 1:
+        if (!_tdpAuto) {
+          cyclePreset(const [10, 15, 20, 25, 30], _tdp, 1, _updateTdp);
+        }
+        break;
+      case 2:
+        _toggleFanAuto();
+        break;
+      case 3:
+        if (!_fanAuto) {
+          cyclePreset(const ['quiet', 'balanced', 'cool', 'custom'], _fanProfile, 1, _updateFanProfile);
+        }
+        break;
+      case 4:
+        if (!_fanAuto && _fanProfile == 'custom' && _fanCurve.isNotEmpty) {
+          setState(() => _selectedCurvePoint = (_selectedCurvePoint + 1) % _fanCurve.length);
+        }
+        break;
+    }
+  }
+
+  @override
+  void onGamepadAdjustSlider(int focusedIndex, int direction) {
+    switch (focusedIndex) {
+      case 1:
+        if (!_tdpAuto) {
+          _updateTdp(
+            (_tdp + direction * _tdpCtrl.step).clamp(_tdpCtrl.minVal, _tdpCtrl.maxVal),
+          );
+        }
+        break;
+      case 4:
+        if (!_fanAuto && _fanProfile == 'custom') {
+          _updateCustomCurvePoint(_selectedCurvePoint, direction * 5);
+        }
+        break;
+    }
+  }
+
+  @override
+  void dispose() {
+    _telemetryTimer?.cancel();
+    BridgeService.instance.tdp.removeListener(_onBridgeTdpChanged);
+    BridgeService.instance.fanSpeed.removeListener(_onBridgeFanChanged);
+    BridgeService.instance.isFanAuto.removeListener(_onBridgeFanAutoChanged);
+    BridgeService.instance.fanProfile.removeListener(_onBridgeFanProfileChanged);
+    BridgeService.instance.fanCurve.removeListener(_onBridgeFanCurveChanged);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -116,8 +253,8 @@ class PerformanceTab extends StatelessWidget {
           icon: Icons.bolt_rounded,
           title: "Chế độ TDP tự động",
           subtitle: "Tự điều chỉnh công suất theo tải hệ thống",
-          value: tdpAuto,
-          onChanged: (_) => onToggleTdpAuto(),
+          value: _tdpAuto,
+          onChanged: (_) => _toggleTdpAuto(),
           isFocused: focusedIndex == 0,
           helpText: "Tự động điều chỉnh mức tiêu thụ điện năng (Watt) của CPU theo thời gian thực để tối ưu thời lượng pin và hiệu năng khi chơi game.",
         ),
@@ -126,20 +263,20 @@ class PerformanceTab extends StatelessWidget {
           key: getItemKey(1),
           icon: Icons.electric_meter_rounded,
           title: "Công suất TDP",
-          value: tdp,
-          min: tdpCtrl.minVal,
-          max: tdpCtrl.maxVal,
-          step: tdpCtrl.step,
-          unit: tdpCtrl.unit,
-          currentValue: liveTdp,
+          value: _tdp,
+          min: _tdpCtrl.minVal,
+          max: _tdpCtrl.maxVal,
+          step: _tdpCtrl.step,
+          unit: _tdpCtrl.unit,
+          currentValue: _liveTdp,
           currentColor: AppTheme.tdp,
           accentColor: AppTheme.tdp,
-          quickPresets: tdpAuto ? null : const [10, 15, 20, 25, 30],
-          onChanged: onTdpChanged,
-          shouldShowSlider: !tdpAuto,
+          quickPresets: _tdpAuto ? null : const [10, 15, 20, 25, 30],
+          onChanged: _updateTdp,
+          shouldShowSlider: !_tdpAuto,
           isFocused: focusedIndex == 1,
-          isWarning: !tdpCtrl.isAvailable() || tdpCtrl.isHvciBlocked(),
-          warningTooltip: tdpCtrl.isHvciBlocked()
+          isWarning: !_tdpCtrl.isAvailable() || _tdpCtrl.isHvciBlocked(),
+          warningTooltip: _tdpCtrl.isHvciBlocked()
               ? "Driver WinRing0 bị chặn bởi Windows Memory Integrity (HVCI). Vui lòng tắt HVCI trong Windows Security để đo và điều chỉnh TDP."
               : "Không phát hiện phần cứng điều khiển TDP tương thích.",
           helpText: "Khóa công suất điện tối đa của bộ xử lý (TDP tính bằng Watt). Tăng TDP để có FPS cao hơn, giảm TDP để máy mát hơn và tiết kiệm pin.",
@@ -150,418 +287,128 @@ class PerformanceTab extends StatelessWidget {
           key: getItemKey(2),
           icon: Icons.toys_rounded,
           title: "Chế độ quạt tự động",
-          subtitle: "Hệ thống tự điều tốc theo nhiệt độ chip",
-          value: fanAuto,
-          onChanged: (_) => onToggleFanAuto(),
+          subtitle: _fanAuto
+              ? "Do BIOS / Phần cứng thiết bị tự điều khiển"
+              : "Điều khiển theo đường cong nhiệt độ (Fan Curve)",
+          value: _fanAuto,
+          onChanged: (_) => _toggleFanAuto(),
           isFocused: focusedIndex == 2,
-          helpText: "Tự động điều chỉnh vòng quay quạt tản nhiệt dựa theo nhiệt độ linh kiện. Chuyển sang MANUAL nếu muốn tự khóa % quạt cố định.",
+          helpText: "Bật để quạt hoạt động theo mặc định an toàn của BIOS máy. Tắt để chủ động tùy biến đường cong tản nhiệt (Fan Curve).",
         ),
         const SizedBox(height: 8),
-        SettingSlider(
-          key: getItemKey(3),
-          icon: Icons.mode_fan_off_rounded,
-          title: "Tốc độ quạt",
-          value: fan,
-          min: fanCtrl.minVal,
-          max: fanCtrl.maxVal,
-          step: fanCtrl.step,
-          unit: fanCtrl.unit,
-          currentValue: liveFan,
-          currentColor: AppTheme.fan,
-          accentColor: AppTheme.fan,
-          quickPresets: fanAuto ? null : const [30, 50, 75, 100],
-          onChanged: onFanChanged,
-          shouldShowSlider: !fanAuto,
-          isFocused: focusedIndex == 3,
-          helpText: "Điều chỉnh phần trăm tốc độ quạt làm mát của máy Handheld từ 0% đến 100%.",
-        ),
-
-        const SectionLabel(label: "KHUNG HÌNH (RTSS)"),
-        if (!RtssInstallerService.isInstalled())
-          AnimatedContainer(
+        if (!_fanAuto) ...[
+          if (_liveCpuTemp == null && _tdpCtrl.isHvciBlocked()) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.warning.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+                border: Border.all(color: AppTheme.warning.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: AppTheme.warning, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "Memory Integrity (HVCI) đang chặn đọc nhiệt độ phần cứng. Cần tắt HVCI trong Windows Security để đo nhiệt độ và áp dụng Fan Curve.",
+                      style: AppTheme.caption.copyWith(color: AppTheme.warning, fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          PresetSelector<String>(
+            key: getItemKey(3),
+            title: "Cấu hình Fan Curve",
+            icon: Icons.tune_rounded,
+            currentValueText: _getProfileLabel(_fanProfile),
+            presets: const ['quiet', 'balanced', 'cool', 'custom'],
+            selectedValue: _fanProfile,
+            labelBuilder: _getProfileLabel,
+            onSelected: _updateFanProfile,
+            isFocused: focusedIndex == 3,
+            helpText: "Yên tĩnh: Giảm ồn khi chơi nhẹ. Cân bằng: Tối ưu hàng ngày. Mát lạnh: Quạt quay sớm để giữ xung nhịp. Tùy chỉnh: Chỉnh từng mốc.",
+          ),
+          const SizedBox(height: 8),
+          FanCurveGraph(
             key: getItemKey(4),
-            duration: const Duration(milliseconds: 150),
-            padding: const EdgeInsets.all(14),
+            points: _fanCurve,
+            liveTemp: _liveCpuTemp,
+            liveFan: _liveFan,
+            isCustom: _fanProfile == 'custom',
+            selectedPointIndex: _selectedCurvePoint,
+            onSelectPoint: (idx) => setState(() => _selectedCurvePoint = idx),
+            isFocused: focusedIndex == 4,
+          ),
+          if (_fanProfile == 'custom') ...[
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                children: [
+                  Text(
+                    "Điểm đang chọn: ${_fanCurve.length > _selectedCurvePoint ? '${_fanCurve[_selectedCurvePoint][0]}°C ➔ ${_fanCurve[_selectedCurvePoint][1]}%' : '--'}",
+                    style: AppTheme.caption.copyWith(
+                      color: AppTheme.fan,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    "D-Pad: Lên/Xuống chỉnh %",
+                    style: AppTheme.hint.copyWith(fontSize: 10),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ] else ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               color: AppTheme.cardBackground,
               borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-              border: Border.all(
-                color: focusedIndex == 4
-                    ? AppTheme.accent
-                    : AppTheme.cardBorder,
-                width: focusedIndex == 4 ? 1.8 : 1.0,
-              ),
-              boxShadow: focusedIndex == 4
-                  ? [
-                      BoxShadow(
-                        color: AppTheme.primary.withValues(alpha: 0.4),
-                        blurRadius: 14,
-                        spreadRadius: 1,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : null,
+              border: Border.all(color: AppTheme.cardBorder),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.speed_rounded,
-                      color: AppTheme.accent,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Flexible(
-                            child: Text(
-                              "Chưa cài đặt RTSS",
-                              style: AppTheme.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          HelpBox(
-                            helpText: "RTSS (RivaTuner Statistics Server) là dịch vụ giám sát và khóa tốc độ khung hình (FPS). Bấm nút A trên tay cầm để tự động tải và cài đặt nhanh qua Winget.",
-                            isFocused: focusedIndex == 4,
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (isInstallingRtss)
-                      const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: AppTheme.accent,
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  rtssInstallMsg ?? "Cần RivaTuner Statistics Server để đo FPS và khóa tốc độ khung hình.",
-                  style: AppTheme.caption.copyWith(fontSize: 11),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  height: 34,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.accent.withValues(alpha: 0.15),
-                      foregroundColor: AppTheme.accent,
-                      side: BorderSide(
-                        color: AppTheme.accent.withValues(alpha: 0.4),
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(
-                          AppTheme.buttonRadius,
-                        ),
-                      ),
-                    ),
-                    icon: Icon(
-                      isInstallingRtss
-                          ? Icons.hourglass_top_rounded
-                          : Icons.download_rounded,
-                      size: 16,
-                    ),
-                    label: Text(
-                      isInstallingRtss
-                          ? "Đang cài đặt..."
-                          : "Tự động cài đặt RTSS qua Winget",
-                      style: AppTheme.body.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    onPressed: isInstallingRtss ? null : onInstallRtss,
-                  ),
-                ),
-              ],
-            ),
-          )
-        else ...[
-          SettingSlider(
-            key: getItemKey(4),
-            icon: Icons.timelapse_rounded,
-            title: activeGame != null
-                ? "Giới hạn FPS ($activeGame)"
-                : "Giới hạn FPS",
-            value: fpsLimit,
-            min: rtssCtrl.minVal,
-            max: rtssCtrl.maxVal,
-            step: rtssCtrl.step,
-            unit: rtssCtrl.unit,
-            currentValue: liveFps,
-            currentColor: AppTheme.accent,
-            quickPresets: const [0, 30, 40, 60],
-            onChanged: onFpsLimitChanged,
-            isFocused: focusedIndex == 4,
-            helpText: "Khóa tốc độ khung hình tối đa trong game. Đặt mức 30, 40 hoặc 60 FPS giúp ổn định độ mượt (Frame Time) và giảm tải nhiệt độ.",
-          ),
-          const SizedBox(height: 8),
-          ToggleCard(
-            key: getItemKey(5),
-            icon: Icons.subtitles_rounded,
-            title: "Lớp phủ Overlay (OSD)",
-            subtitle: rtssCtrl.isAvailable()
-                ? (osdEnabled
-                    ? "Đang hiển thị trên màn hình"
-                    : "Đã tắt hiển thị OSD")
-                : (isInstallingRtss
-                    ? "Đang cài đặt RTSS..."
-                    : "Chưa kết nối RTSS (Gạt để khởi chạy)"),
-            value: osdEnabled && rtssCtrl.isAvailable(),
-            onChanged: onToggleOsd,
-            isFocused: focusedIndex == 5,
-            helpText: "Hiển thị lớp phủ theo dõi số khung hình FPS và thông số phần cứng trực tiếp trên màn hình trò chơi qua RivaTuner.",
-          ),
-          if (osdEnabled) ...[
-            const SizedBox(height: 8),
-            PresetSelector<int>(
-              key: getItemKey(6),
-              title: "Kích thước OSD",
-              icon: Icons.format_size_rounded,
-              currentValueText: "${osdZoom}x",
-              presets: const [1, 2, 3, 4],
-              selectedValue: osdZoom,
-              labelBuilder: (preset) => "${preset}x",
-              onSelected: onOsdZoomChanged,
-              isFocused: focusedIndex == 6,
-              helpText: "Phóng to hoặc thu nhỏ kích thước chữ của lớp phủ OSD trên màn hình. Mức 2x hoặc 3x phù hợp nhất cho màn hình Handheld 7-8 inch.",
-            ),
-            const SizedBox(height: 8),
-            PresetSelector<RtssOsdPosition>(
-              key: getItemKey(7),
-              title: "Vị trí hiển thị OSD",
-              icon: Icons.fullscreen_rounded,
-              currentValueText: osdPosition.label,
-              presets: RtssOsdPosition.values,
-              selectedValue: osdPosition,
-              labelBuilder: (preset) => preset.label,
-              onSelected: onOsdPositionChanged,
-              isFocused: focusedIndex == 7,
-              helpText: "Chọn 1 trong 4 góc màn hình để neo lớp phủ OSD, tránh che khuất các thành phần HUD hoặc bản đồ nhỏ (Minimap) của game.",
-            ),
-            const SizedBox(height: 8),
-            PresetSelector<RtssOsdLayout>(
-              key: getItemKey(8),
-              title: "Bố cục OSD",
-              icon: Icons.view_comfortable_rounded,
-              currentValueText: osdMetrics.layout.label,
-              presets: RtssOsdLayout.values,
-              selectedValue: osdMetrics.layout,
-              labelBuilder: (preset) => preset.label,
-              onSelected: onOsdLayoutChanged,
-              isFocused: focusedIndex == 8,
-              helpText: "Thu gọn (1 dòng) giúp tiết kiệm diện tích trên màn hình Handheld. Chi tiết (Nhiều dòng) hiển thị từng linh kiện trên một dòng riêng.",
-            ),
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.only(left: 4, bottom: 6),
-              child: Text(
-                "THÔNG SỐ OSD",
-                style: AppTheme.caption.copyWith(
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
-                  fontSize: 11,
-                  color: AppTheme.textSecondary.withValues(alpha: 0.8),
-                ),
-              ),
-            ),
-            Row(
-              children: [
-                Expanded(
-                  child: _MetricToggleCard(
-                    key: getItemKey(9),
-                    icon: Icons.speed_rounded,
-                    title: "FPS",
-                    value: osdMetrics.showFps,
-                    onTap: onToggleMetricFps,
-                    isFocused: focusedIndex == 9,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _MetricToggleCard(
-                    key: getItemKey(10),
-                    icon: Icons.bolt_rounded,
-                    title: "TDP (W)",
-                    value: osdMetrics.showTdp,
-                    onTap: onToggleMetricTdp,
-                    isFocused: focusedIndex == 10,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _MetricToggleCard(
-                    key: getItemKey(11),
-                    icon: Icons.local_fire_department_rounded,
-                    title: "Nhiệt độ CPU",
-                    value: osdMetrics.showCpuTemp,
-                    onTap: onToggleMetricCpuTemp,
-                    isFocused: focusedIndex == 11,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _MetricToggleCard(
-                    key: getItemKey(12),
-                    icon: Icons.memory_rounded,
-                    title: "Tải CPU (%)",
-                    value: osdMetrics.showCpuUsage,
-                    onTap: onToggleMetricCpuUsage,
-                    isFocused: focusedIndex == 12,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _MetricToggleCard(
-                    key: getItemKey(13),
-                    icon: Icons.storage_rounded,
-                    title: "RAM (GB)",
-                    value: osdMetrics.showRam,
-                    onTap: onToggleMetricRam,
-                    isFocused: focusedIndex == 13,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _MetricToggleCard(
-                    key: getItemKey(14),
-                    icon: Icons.battery_charging_full_rounded,
-                    title: "Pin (%)",
-                    value: osdMetrics.showBattery,
-                    onTap: onToggleMetricBattery,
-                    isFocused: focusedIndex == 14,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: _MetricToggleCard(
-                    key: getItemKey(15),
-                    icon: Icons.toys_rounded,
-                    title: "Tốc độ quạt",
-                    value: osdMetrics.showFan,
-                    onTap: onToggleMetricFan,
-                    isFocused: focusedIndex == 15,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                const Spacer(),
-              ],
-            ),
-          ],
-        ],
-      ],
-    );
-  }
-}
-
-/// Thẻ bật/tắt mục thông số OSD nhỏ gọn dạng lưới 2 cột
-class _MetricToggleCard extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final bool value;
-  final VoidCallback onTap;
-  final bool isFocused;
-
-  const _MetricToggleCard({
-    super.key,
-    required this.icon,
-    required this.title,
-    required this.value,
-    required this.onTap,
-    this.isFocused = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
-      decoration: BoxDecoration(
-        color: AppTheme.cardBackground,
-        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-        border: Border.all(
-          color: isFocused
-              ? AppTheme.accent
-              : (value
-                    ? AppTheme.accent.withValues(alpha: 0.4)
-                    : AppTheme.cardBorder),
-          width: isFocused ? 1.8 : 1.0,
-        ),
-        boxShadow: isFocused
-            ? [
-                BoxShadow(
-                  color: AppTheme.primary.withValues(alpha: 0.4),
-                  blurRadius: 10,
-                  spreadRadius: 1,
-                  offset: const Offset(0, 2),
-                ),
-              ]
-            : null,
-      ),
-      child: Material(
-        color: AppTheme.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
             child: Row(
               children: [
-                Icon(
-                  icon,
-                  size: 16,
-                  color: value ? AppTheme.accent : AppTheme.textSecondary,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: AppTheme.body.copyWith(
-                      fontSize: 12,
-                      fontWeight: value ? FontWeight.w700 : FontWeight.w500,
-                      color: value
-                          ? AppTheme.textPrimary
-                          : AppTheme.textSecondary,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: AppTheme.success.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
                   ),
+                  child: const Icon(Icons.verified_user_rounded, color: AppTheme.success, size: 18),
                 ),
-                Icon(
-                  value
-                      ? Icons.check_circle_rounded
-                      : Icons.radio_button_unchecked_rounded,
-                  size: 18,
-                  color: value
-                      ? AppTheme.accent
-                      : AppTheme.textSecondary.withValues(alpha: 0.4),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Quạt do BIOS phần cứng tự điều khiển",
+                        style: AppTheme.caption.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        "Bảo đảm an toàn tối đa theo thiết lập mặc định của thiết bị. Tắt chế độ tự động để tùy biến Fan Curve.",
+                        style: AppTheme.hint.copyWith(fontSize: 10),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
-        ),
-      ),
+        ],
+      ],
     );
   }
 }

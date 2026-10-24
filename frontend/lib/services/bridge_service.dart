@@ -32,6 +32,15 @@ class BridgeService {
   final ValueNotifier<int> tdp = ValueNotifier<int>(15);
   final ValueNotifier<int> fanSpeed = ValueNotifier<int>(50);
   final ValueNotifier<bool> isFanAuto = ValueNotifier<bool>(true);
+  final ValueNotifier<String> fanProfile = ValueNotifier<String>('balanced');
+  final ValueNotifier<List<List<int>>> fanCurve = ValueNotifier<List<List<int>>>(const [
+    [40, 30],
+    [50, 42],
+    [60, 58],
+    [70, 75],
+    [80, 90],
+    [85, 100],
+  ]);
   final ValueNotifier<int> volume = ValueNotifier<int>(50);
   final ValueNotifier<bool> isMuted = ValueNotifier<bool>(false);
   final ValueNotifier<int> brightness = ValueNotifier<int>(70);
@@ -50,6 +59,14 @@ class BridgeService {
       _logger.info('Đang kết nối WebSocket tới ws://127.0.0.1:8765...');
       final uri = Uri.parse('ws://127.0.0.1:8765');
       _channel = WebSocketChannel.connect(uri);
+
+      // Catch channel.ready future to avoid unhandled promise rejection on Web platform
+      _channel!.ready.then((_) {
+        _logger.info('WebSocket channel connection established.');
+      }).catchError((error) {
+        _logger.warning('WebSocket connection handshake failed: $error');
+        _onDisconnected();
+      });
 
       _channel!.stream.listen(
         (message) {
@@ -145,6 +162,14 @@ class BridgeService {
       brightness.value = (hw['brightness'] as num?)?.toInt() ?? 70;
       isTouchEnabled.value = (hw['touch_enabled'] as bool?) ?? true;
       autostart.value = (hw['autostart'] as bool?) ?? false;
+      if (hw.containsKey('fan_profile')) {
+        fanProfile.value = hw['fan_profile'].toString();
+      }
+      if (hw.containsKey('fan_curve') && hw['fan_curve'] is List) {
+        fanCurve.value = (hw['fan_curve'] as List)
+            .map((item) => [(item[0] as num).toInt(), (item[1] as num).toInt()])
+            .toList();
+      }
     }
 
     final telem = data['telemetry'] as Map<String, dynamic>?;
@@ -166,7 +191,7 @@ class BridgeService {
     final ramUsed = ((data['ram_used_gb'] as num?) ?? 0.0).toDouble();
     final ramTotal = ((data['ram_total_gb'] as num?) ?? 16.0).toDouble();
     final ramPct = ((data['ram_usage_percent'] ?? data['ram_percent']) as num?)?.toInt() ?? 0;
-    final cpuTemp = (data['cpu_temp'] as num?)?.toInt() ?? 45;
+    final cpuTemp = (data['cpu_temp'] as num?)?.toInt();
     final liveTdp = data['live_tdp'] != null ? (data['live_tdp'] as num).toInt() : null;
     final isTdpHardwareActive = data['is_tdp_hardware_active'] as bool? ?? false;
     final isHvciBlocked = data['is_hvci_blocked'] as bool? ?? false;
@@ -177,6 +202,14 @@ class BridgeService {
     }
     if (data.containsKey('is_fan_auto')) {
       isFanAuto.value = data['is_fan_auto'] as bool;
+    }
+    if (data.containsKey('fan_profile')) {
+      fanProfile.value = data['fan_profile'].toString();
+    }
+    if (data.containsKey('fan_curve') && data['fan_curve'] is List) {
+      fanCurve.value = (data['fan_curve'] as List)
+          .map((item) => [(item[0] as num).toInt(), (item[1] as num).toInt()])
+          .toList();
     }
     if (data.containsKey('fan_speed')) {
       fanSpeed.value = (data['fan_speed'] as num).toInt();
@@ -240,6 +273,14 @@ class BridgeService {
     fanSpeed.value = percent;
     isFanAuto.value = isAuto;
     _send({'action': 'setFan', 'percent': percent, 'is_auto': isAuto});
+  }
+
+  void setFanCurve(String profile, [List<List<int>>? curve]) {
+    fanProfile.value = profile;
+    if (curve != null) {
+      fanCurve.value = curve;
+    }
+    _send({'action': 'setFanCurve', 'profile': profile, 'curve': curve});
   }
 
   void setVolume(int percent) {

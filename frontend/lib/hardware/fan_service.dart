@@ -29,6 +29,14 @@ class FanController extends HardwareController {
 
   bool isAuto() => BridgeService.instance.isFanAuto.value;
 
+  String get profile => BridgeService.instance.fanProfile.value;
+  List<List<int>> get curve => BridgeService.instance.fanCurve.value;
+
+  void setProfile(String profile, [List<List<int>>? customCurve]) {
+    BridgeService.instance.setFanCurve(profile, customCurve);
+    _logger.info('Đã chọn Fan Profile: $profile');
+  }
+
   bool setAuto(bool auto) {
     BridgeService.instance.setFan(_currentSpeed, auto);
     _logger.info('Đã chuyển chế độ quạt: ${auto ? 'Tự động (Auto)' : 'Thủ công (Manual)'}');

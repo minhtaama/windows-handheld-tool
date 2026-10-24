@@ -1,7 +1,5 @@
-1. Giao tiếp: Sử dụng 100% tiếng Việt khi trao đổi và tài liệu (Implementation, Tasks...).
-2. Quyền hạn thực thi:
-   - Chỉ viết code hoặc chỉnh sửa file khi có chỉ định rõ: "hãy thực hiện cho tôi" hoặc khi user bấm duyệt Proceed trên Implementation Plan.
-   - Mọi trường hợp còn lại: Chỉ giải thích và vạch phương hướng thực hiện.
+1. Giao tiếp: Sử dụng 100% tiếng Việt khi trao đổi và nội dung Artifact. Đối với code, comment, docstring thì sử dụng 100% tiếng Anh (English)
+2. Chỉ viết code hoặc chỉnh sửa file khi có chỉ định rõ: "hãy thực hiện cho tôi" hoặc khi user bấm duyệt Proceed trên Implementation Plan.
 3. Tiêu chuẩn mã nguồn:
    - DRY: Tái sử dụng tối đa function/class/widget có sẵn trong project. Hỏi trước khi muốn mở rộng logic sẵn có, cấm tạo hàm/class mới có chức năng tương tự.
    - Separation of Concerns (SoC): Tạo module dùng chung; mỗi file/module chỉ đảm nhận duy nhất một trách nhiệm độc lập.

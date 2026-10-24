@@ -1,22 +1,41 @@
 import os
 import sys
-import ctypes
 import threading
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Dict
 from src.core.logger import setup_logger
+from src.core.config import ConfigManager
 
 logger = setup_logger("FanService")
 
-# Mốc đường cong nhiệt độ mặc định: (nhiệt_độ_°C, tốc_độ_quạt_%)
-DEFAULT_FAN_CURVE: List[Tuple[int, int]] = [
-    (40, 30),
-    (50, 42),
-    (60, 58),
-    (70, 75),
-    (80, 90),
-    (85, 100),
-]
+# Preset Fan Profiles: List of (Temperature_C, Fan_Speed_Percent)
+FAN_PROFILES: Dict[str, List[Tuple[int, int]]] = {
+    "quiet": [
+        (45, 20),
+        (55, 30),
+        (65, 45),
+        (75, 65),
+        (85, 85),
+        (90, 100),
+    ],
+    "balanced": [
+        (40, 30),
+        (50, 42),
+        (60, 58),
+        (70, 75),
+        (80, 90),
+        (85, 100),
+    ],
+    "cool": [
+        (40, 45),
+        (50, 60),
+        (60, 75),
+        (70, 90),
+        (75, 100),
+    ],
+}
+
+DEFAULT_FAN_CURVE = list(FAN_PROFILES["balanced"])
 
 class FanService:
     _instance = None
@@ -30,53 +49,34 @@ class FanService:
     def __init__(self):
         if self._initialized:
             return
-        self.inpout = None
-        self.is_hardware_detected = False
-        self.is_auto = True
-        self.current_speed = 50
-        self.fan_curve: List[Tuple[int, int]] = list(DEFAULT_FAN_CURVE)
-        self._load_inpout()
 
-        # Luồng nền tự động điều tốc quạt theo đường cong nhiệt độ
+        self.config = ConfigManager()
+        self.is_auto = bool(self.config.get("hardware", "fan", "auto", default=True))
+        self.current_speed = int(self.config.get("hardware", "fan", "current", default=50))
+        self.profile = str(self.config.get("hardware", "fan", "profile", default="balanced"))
+
+        saved_custom = self.config.get("hardware", "fan", "custom_curve", default=None)
+        if saved_custom and isinstance(saved_custom, list):
+            self.custom_curve = [(int(p[0]), int(p[1])) for p in saved_custom]
+        else:
+            self.custom_curve = list(DEFAULT_FAN_CURVE)
+
+        if self.profile in FAN_PROFILES:
+            self.fan_curve = list(FAN_PROFILES[self.profile])
+        else:
+            self.profile = "custom"
+            self.fan_curve = list(self.custom_curve)
+
+        # Background thread: adjusts fan speed based on thermal curve with hysteresis
         self._running = True
         self._curve_thread = threading.Thread(target=self._fan_curve_worker, daemon=True)
         self._curve_thread.start()
 
         self._initialized = True
-
-    def _load_inpout(self):
-        bin_dirs = []
-        if getattr(sys, "frozen", False):
-            mei_dir = getattr(sys, "_MEIPASS", "")
-            if mei_dir:
-                bin_dirs.append(os.path.join(mei_dir, "bin"))
-            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
-            bin_dirs.append(os.path.join(exe_dir, "bin"))
-            bin_dirs.append(os.path.join(exe_dir, "_internal", "bin"))
-        else:
-            dev_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            bin_dirs.append(os.path.join(dev_root, "bin"))
-
-        for bin_dir in bin_dirs:
-            if os.path.isdir(bin_dir) and hasattr(os, "add_dll_directory"):
-                try:
-                    os.add_dll_directory(bin_dir)
-                except Exception:
-                    pass
-
-        for b in bin_dirs:
-            p = os.path.join(b, "inpoutx64.dll")
-            if os.path.isfile(p):
-                try:
-                    self.inpout = ctypes.windll.LoadLibrary(p)
-                    self.is_hardware_detected = True
-                    logger.info(f"Đã nạp thành công InpOutx64 từ bin: {p}")
-                    break
-                except Exception as e:
-                    logger.warning(f"Không thể nạp InpOutx64 từ {p}: {e}")
+        logger.info(f"[FanService] Initialized: profile='{self.profile}', is_auto={self.is_auto}, speed={self.current_speed}%")
 
     def calculate_speed_from_temp(self, temp: float) -> int:
-        """Nội suy tuyến tính tốc độ quạt (%) từ nhiệt độ CPU hiện thời theo bảng Fan Curve"""
+        """Linear interpolation of fan speed (%) from current CPU temperature based on active fan curve"""
         if not self.fan_curve:
             return 50
         sorted_curve = sorted(self.fan_curve, key=lambda x: x[0])
@@ -94,87 +94,110 @@ class FanService:
         return 50
 
     def _fan_curve_worker(self):
-        """Vòng lặp chạy ngầm cập nhật tốc độ quạt theo chu kỳ 2s khi ở chế độ Auto"""
+        """Background loop updating fan speed according to thermal curve with 3C hysteresis & rate-limiting.
+        Only actively drives fan speed when in Manual Fan Curve mode (is_auto=False).
+        When is_auto=True, hands over complete control to device BIOS / EC hardware default.
+        """
         from src.hardware.tdp_service import TdpService
         tdp_svc = TdpService()
 
+        last_applied_time = 0.0
+        last_peak_temp = 0.0
+
         while self._running:
             time.sleep(2.0)
-            if not self.is_auto:
+            # In Auto mode, device BIOS / EC hardware controls fan speeds naturally without software override
+            if self.is_auto:
+                last_applied_time = 0.0
                 continue
 
             try:
                 temp, _, _ = tdp_svc.get_telemetry()
-                if temp > 0:
-                    target_speed = self.calculate_speed_from_temp(temp)
-                    if abs(target_speed - self.current_speed) >= 2:
-                        self.current_speed = target_speed
-                        self._apply_hardware_speed(target_speed)
+                # If temperature cannot be read (e.g. HVCI blocked), do not override fan for hardware safety
+                if temp is None or temp <= 0:
+                    continue
+
+                target_speed = self.calculate_speed_from_temp(temp)
+                now = time.time()
+
+                # Initial calibration on enabling Manual Fan Curves: sync immediately
+                if last_applied_time == 0.0:
+                    self.current_speed = target_speed
+                    self._apply_hardware_speed(target_speed)
+                    last_peak_temp = temp
+                    last_applied_time = now
+                    continue
+
+                # Thermal Hysteresis:
+                # - Increase speed immediately if delta >= 2% to protect hardware
+                # - Decrease speed only when temperature drops by >= 3C and at least 3 seconds have passed
+                should_apply = False
+                if target_speed > self.current_speed and (target_speed - self.current_speed) >= 2:
+                    should_apply = True
+                    last_peak_temp = temp
+                elif target_speed < self.current_speed:
+                    if (last_peak_temp - temp) >= 3.0 and (now - last_applied_time) >= 3.0:
+                        should_apply = True
+                        last_peak_temp = temp
+
+                if should_apply:
+                    self.current_speed = target_speed
+                    self._apply_hardware_speed(target_speed)
+                    last_applied_time = now
             except Exception as e:
-                logger.error(f"Lỗi trong vòng lặp Fan Curve Worker: {e}")
+                logger.error(f"Error in fan curve worker: {e}")
 
     def _apply_asus_wmi(self, percent: int) -> bool:
-        """Gửi lệnh điều tốc quạt qua giao diện WMI của ASUS Handheld (ROG Ally / Ally X)"""
+        """Send fan speed control command via ASUS ACPI WMI (ROG Ally / Ally X)"""
         try:
             import win32com.client
             wmi = win32com.client.GetObject("winmgmts:\\\\.\\root\\wmi")
             asus_methods = wmi.ExecQuery("SELECT * FROM AsusAtkWmi_WMNB")
             if asus_methods.Count > 0:
                 for obj in asus_methods:
-                    # Mã thiết bị phần cứng ASUS: 0x00110013 (Fan 1), 0x00110014 (Fan 2)
                     for dev_id in (0x00110013, 0x00110014):
                         obj.DEVS(dev_id, percent)
-                logger.info(f"[ASUS WMI] Đã đồng bộ tốc độ quạt Handheld: {percent}%")
+                logger.info(f"[ASUS WMI] Synchronized fan speed: {percent}%")
                 return True
         except Exception:
             pass
         return False
 
-    def _apply_ec_io(self, percent: int) -> bool:
-        """
-        Ghi giá trị điều tốc xuống thanh ghi của chip Embedded Controller (EC) qua cổng I/O 0x6C / 0x68.
-        CHÚ Ý: Cổng 0x6C/0x68 là cổng ACPI EC dùng chung của Kernel. Việc ghi bừa bãi mã lệnh cố định (0x2E)
-        sẽ làm xung đột ACPI bus, gây treo cứng hệ điều hành (Hardware Stall) dẫn đến sập nguồn/Black Screen.
-        Tạm thời vô hiệu hóa việc ghi mù xuống cổng này trừ khi có handshake định danh thiết bị cụ thể.
-        """
-        return False
-
     def _apply_hardware_speed(self, percent: int):
-        """Áp dụng tốc độ quạt xuống phần cứng Embedded Controller / WMI nếu có, hoặc mô phỏng mượt mà"""
-        applied = False
-        # 1. Thử gửi qua giao tiếp WMI ACPI dành riêng cho ASUS ROG Ally
+        """Apply fan speed to ACPI WMI hardware driver or simulate gracefully"""
         if self._apply_asus_wmi(percent):
-            applied = True
+            return
+        logger.info(f"[FanControl] Active speed: {percent}% (Mode: {'Auto' if self.is_auto else 'Manual'}, Profile: '{self.profile}')")
 
-        # 2. Thử ghi cổng thanh ghi phần cứng EC I/O (InpOutx64)
-        if not applied and self.is_hardware_detected:
-            if self._apply_ec_io(percent):
-                applied = True
+    def set_fan_profile(self, profile: str, custom_curve: Optional[List[Tuple[int, int]]] = None) -> bool:
+        """Switch active fan profile ('quiet', 'balanced', 'cool', 'custom')"""
+        if profile in FAN_PROFILES:
+            self.profile = profile
+            self.fan_curve = list(FAN_PROFILES[profile])
+        elif profile == "custom":
+            self.profile = "custom"
+            if custom_curve:
+                self.custom_curve = sorted([(int(p[0]), int(p[1])) for p in custom_curve], key=lambda x: x[0])
+                self.config.set(self.custom_curve, "hardware", "fan", "custom_curve")
+            self.fan_curve = list(self.custom_curve)
+        else:
+            return False
 
-        if not applied:
-            logger.info(f"[Điều tốc quạt] Tốc độ quạt hiện tại: {percent}% (Chế độ: {'Tự động' if self.is_auto else 'Thủ công'})")
+        self.config.set(self.profile, "hardware", "fan", "profile")
+        logger.info(f"[FanService] Applied fan profile '{self.profile}': {self.fan_curve}")
+        return True
 
-    def set_fan_curve(self, curve: List[Tuple[int, int]]):
-        """Cập nhật bảng mốc nhiệt độ - tốc độ quạt mới"""
-        if curve:
-            self.fan_curve = sorted(curve, key=lambda x: x[0])
-            logger.info(f"Đã cập nhật Fan Curve mới: {self.fan_curve}")
+    def get_fan_profile(self) -> str:
+        return self.profile
 
     def get_fan_curve(self) -> List[Tuple[int, int]]:
         return list(self.fan_curve)
 
     def set_auto(self, auto: bool) -> bool:
         self.is_auto = auto
-        logger.info(f"Chế độ quạt: {'Tự động theo đường cong nhiệt độ (Auto Fan Curve)' if auto else 'Thủ công (Manual)'}")
-        return True
-
-    def set_speed(self, percent: int) -> bool:
-        percent = max(0, min(100, percent))
-        self.current_speed = percent
-        self.is_auto = False
-        self._apply_hardware_speed(percent)
+        self.config.set(auto, "hardware", "fan", "auto")
+        logger.info(f"Fan Mode: {'Device BIOS Default (Auto)' if auto else 'Manual Fan Curves'}")
         return True
 
     def get_speed(self) -> int:
         return self.current_speed
-

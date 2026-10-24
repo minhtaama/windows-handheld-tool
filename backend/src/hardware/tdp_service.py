@@ -210,9 +210,9 @@ class TdpService:
         logger.info(f"[Quản lý năng lượng] Thiết lập mức TDP danh định: {watts}W (Đang chờ nạp driver Ring 0)")
         return True
 
-    def get_telemetry(self) -> Tuple[float, Optional[float], float]:
-        """Trả về (CPU_Temp_C, Live_TDP_Watt, Fast_Limit_Watt).
-        Nếu driver Ring 0 bị HVCI chặn, Live_TDP_Watt trả về None để giao diện hiển thị dấu ! cảnh báo thay vì số ảo.
+    def get_telemetry(self) -> Tuple[Optional[float], Optional[float], float]:
+        """Return (CPU_Temp_C, Live_TDP_Watt, Fast_Limit_Watt).
+        If Ring 0 driver is blocked by HVCI, both CPU_Temp_C and Live_TDP_Watt return None to trigger warning UI.
         """
         temp = 0.0
         fast = 0.0
@@ -236,20 +236,11 @@ class TdpService:
                 fast = self.lib.get_fast_limit(self.ry_handle) if hasattr(self.lib, "get_fast_limit") else 0.0
                 if temp > 0 and live_power > 0.0:
                     return float(temp), float(round(live_power, 1)), float(fast)
+                if temp > 0:
+                    return float(temp), None, float(fast if fast > 0 else getattr(self, "last_set_tdp", 15.0) + 3.0)
             except Exception:
                 pass
 
-        # Khi không có số đo phần cứng trực tiếp, vẫn đọc nhiệt độ thực tế nếu có hoặc ước lượng nhiệt độ
-        try:
-            import psutil
-            cpu_load = psutil.cpu_percent(interval=None)
-            estimated_temp = round(40.0 + (cpu_load * 0.45), 1)
-        except Exception:
-            estimated_temp = 45.0
-
-        if temp <= 0:
-            temp = estimated_temp
-
-        # TUYỆT ĐỐI KHÔNG FAKE SỐ TDP: Trả về None khi driver phần cứng bị chặn bởi HVCI
-        return float(temp), None, float(getattr(self, "last_set_tdp", 15.0) + 3.0)
+        # Return None when Ring 0 hardware driver is blocked by HVCI
+        return None, None, float(getattr(self, "last_set_tdp", 15.0) + 3.0)
 

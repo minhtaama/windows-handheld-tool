@@ -114,6 +114,12 @@ class WsServer(QObject):
                 self.bridge.setTdp(int(req.get("watts", 15)))
             elif action == "setFan":
                 self.bridge.setFan(int(req.get("percent", 50)), bool(req.get("is_auto", False)))
+            elif action == "setFanAuto":
+                self.bridge.setFanAuto(bool(req.get("is_auto", True)))
+            elif action == "setFanCurve":
+                profile = str(req.get("profile", "balanced"))
+                curve = req.get("curve", None)
+                self.bridge.setFanCurve(profile, json.dumps(curve) if curve is not None else "")
             elif action == "setVolume":
                 self.bridge.setVolume(int(req.get("percent", 50)))
             elif action == "toggleMute":

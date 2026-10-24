@@ -3,7 +3,7 @@ import 'core/app_theme.dart';
 import 'core/config.dart';
 import 'services/bridge_service.dart';
 import 'services/overlay_controller.dart';
-import 'ui/overlay_screen.dart';
+import 'ui/quick_panel/quick_panel.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

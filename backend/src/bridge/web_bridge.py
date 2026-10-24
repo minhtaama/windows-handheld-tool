@@ -54,6 +54,8 @@ class WebBridge(QObject):
             snap["is_touch_enabled"] = self.touch_svc.is_enabled
             snap["is_fan_auto"] = self.fan_svc.is_auto
             snap["fan_speed"] = self.fan_svc.get_speed()
+            snap["fan_profile"] = self.fan_svc.get_fan_profile()
+            snap["fan_curve"] = self.fan_svc.get_fan_curve()
             snap["volume"] = self.audio_svc.get_volume()
             snap["is_muted"] = self.audio_svc.is_muted()
             snap["brightness"] = self.bright_svc.get_brightness()
@@ -72,6 +74,8 @@ class WebBridge(QObject):
                     "tdp": self.config.get("hardware", "tdp", "current", default=15),
                     "fan": self.fan_svc.get_speed(),
                     "fan_auto": self.fan_svc.is_auto,
+                    "fan_profile": self.fan_svc.get_fan_profile(),
+                    "fan_curve": self.fan_svc.get_fan_curve(),
                     "volume": self.audio_svc.get_volume(),
                     "is_muted": self.audio_svc.is_muted(),
                     "brightness": self.bright_svc.get_brightness(),
@@ -95,12 +99,21 @@ class WebBridge(QObject):
 
     @Slot(int, bool)
     def setFan(self, percent: int, is_auto: bool):
-        if is_auto:
-            self.fan_svc.set_auto(True)
-        else:
-            self.fan_svc.set_speed(percent)
-        self.config.set(percent, "hardware", "fan", "current")
+        self.fan_svc.set_auto(is_auto)
         self.config.set(is_auto, "hardware", "fan", "auto")
+
+    @Slot(bool)
+    def setFanAuto(self, is_auto: bool):
+        self.fan_svc.set_auto(is_auto)
+        self.config.set(is_auto, "hardware", "fan", "auto")
+
+    @Slot(str, str)
+    def setFanCurve(self, profile: str, curve_json: str):
+        try:
+            curve = json.loads(curve_json) if curve_json else None
+            self.fan_svc.set_fan_profile(profile, curve)
+        except Exception as e:
+            logger.error(f"Lỗi setFanCurve: {e}")
 
     @Slot(int)
     def setVolume(self, percent: int):

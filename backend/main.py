@@ -136,14 +136,15 @@ def get_app_icon() -> QIcon:
         from PySide6.QtSvg import QSvgRenderer
         from PySide6.QtCore import QByteArray, QRectF
         svg_code = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="64" height="64">
-          <defs>
-            <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stop-color="#9C27B0"/>
-              <stop offset="100%" stop-color="#673AB7"/>
-            </linearGradient>
-          </defs>
-          <circle cx="12" cy="12" r="11" fill="url(#g)"/>
-          <path fill="#FFFFFF" transform="scale(0.68) translate(5.6, 5.6)" d="M21.58 16.09l-1.09-7.66C20.21 6.46 18.52 5 16.53 5H7.47C5.48 5 3.79 6.46 3.51 8.43l-1.09 7.66C2.2 17.63 3.39 19 4.94 19c.68 0 1.32-.27 1.8-.75L9 16h6l2.25 2.25c.48.48 1.13.75 1.8.75 1.56 0 2.75-1.37 2.53-2.91zM11 11H9v2H8v-2H6v-1h2V8h1v2h2v1zm4-1c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm2 3c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z"/>
+          <!-- Full Bleed Modern Blue Circle (No Margin, Flat Solid #0067C0) -->
+          <circle cx="12" cy="12" r="12" fill="#0067C0"/>
+          <!-- Gamepad Main Silhouette (Crisp Pure White scaled up ~88%) -->
+          <path fill="#FFFFFF" transform="scale(0.88) translate(1.6, 1.6)" d="M21.58 16.09l-1.09-7.66C20.21 6.46 18.52 5 16.53 5H7.47C5.48 5 3.79 6.46 3.51 8.43l-1.09 7.66C2.2 17.63 3.39 19 4.94 19c.68 0 1.32-.27 1.8-.75L9 16h6l2.25 2.25c.48.48 1.13.75 1.8.75 1.56 0 2.75-1.37 2.53-2.91zM11 11H9v2H8v-2H6v-1h2V8h1v2h2v1zm4-1c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm2 3c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z"/>
+          <!-- Fluent Thumbstick Shades -->
+          <circle cx="9.2" cy="15.2" r="1.8" fill="rgba(0, 103, 192, 0.40)"/>
+          <circle cx="14.8" cy="15.2" r="1.8" fill="rgba(0, 103, 192, 0.40)"/>
+          <circle cx="9.2" cy="15.2" r="1.0" fill="rgba(255, 255, 255, 0.85)"/>
+          <circle cx="14.8" cy="15.2" r="1.0" fill="rgba(255, 255, 255, 0.85)"/>
         </svg>'''
         renderer = QSvgRenderer(QByteArray(svg_code.encode("utf-8")))
         pixmap = QPixmap(64, 64)
