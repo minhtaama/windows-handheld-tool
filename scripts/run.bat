@@ -109,7 +109,7 @@ start "Flutter Web Dev Server (Port 5173)" /D "%PROJECT_ROOT%\frontend" cmd /k "
 echo [*] Waiting for Flutter Web Server to become ready on port 5173...
 set "WAIT_COUNT=0"
 :WAIT_PORT_5173
-%PYTHON_CMD% -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5173', timeout=1).status == 200 else 1)" >nul 2>&1
+%PYTHON_CMD% -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5173/main.dart.js', timeout=2).status == 200 else 1)" >nul 2>&1
 if %errorlevel% equ 0 goto DEV_SERVER_READY
 timeout /t 1 >nul
 set /a WAIT_COUNT+=1

@@ -6,6 +6,7 @@ class SystemTelemetryData {
   final String timeString;
   final String dateString;
   final int? batteryPercent;
+  final int? batterySecsLeft;
   final bool hasBattery;
   final bool isCharging;
   final bool isAcOnline;
@@ -26,6 +27,7 @@ class SystemTelemetryData {
     required this.timeString,
     required this.dateString,
     required this.batteryPercent,
+    this.batterySecsLeft,
     required this.hasBattery,
     required this.isCharging,
     required this.isAcOnline,
@@ -48,6 +50,7 @@ class SystemTelemetryData {
       timeString: '--:--',
       dateString: '--/--/----',
       batteryPercent: null,
+      batterySecsLeft: null,
       hasBattery: false,
       isCharging: false,
       isAcOnline: true,
@@ -64,6 +67,26 @@ class SystemTelemetryData {
       isTdpHardwareActive: false,
       isHvciBlocked: false,
     );
+  }
+
+  /// Formatted remaining battery time string, e.g. "1h45m", "45m", or "CHG" / "AC".
+  String get batteryTimeLeftFormatted {
+    if (isCharging || batterySecsLeft == -2) {
+      return 'CHG';
+    }
+    if (batterySecsLeft != null && batterySecsLeft! > 0) {
+      final totalMinutes = batterySecsLeft! ~/ 60;
+      final hours = totalMinutes ~/ 60;
+      final minutes = totalMinutes % 60;
+      if (hours > 0) {
+        return '${hours}h${minutes.toString().padLeft(2, '0')}m';
+      }
+      return '${minutes}m';
+    }
+    if (!hasBattery) {
+      return 'AC';
+    }
+    return '--m';
   }
 }
 

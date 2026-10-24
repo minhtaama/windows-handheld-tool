@@ -25,12 +25,7 @@ class OverlayScreen extends StatefulWidget {
   State<OverlayScreen> createState() => _OverlayScreenState();
 }
 
-class _OverlayScreenState extends State<OverlayScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _animController;
-  late final Animation<double> _fadeAnim;
-  late final Animation<Offset> _slideAnim;
-
+class _OverlayScreenState extends State<OverlayScreen> {
   int _selectedTabIndex = 0;
   late double _scale;
 
@@ -44,32 +39,6 @@ class _OverlayScreenState extends State<OverlayScreen>
   @override
   void initState() {
     super.initState();
-    _animController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 200),
-      reverseDuration: const Duration(milliseconds: 160),
-      value: 0.0,
-    );
-
-    _fadeAnim = CurvedAnimation(
-      parent: _animController,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeInCubic,
-    );
-
-    _slideAnim = Tween<Offset>(
-      begin: const Offset(0.06, 0.0),
-      end: Offset.zero,
-    ).animate(_fadeAnim);
-
-    OverlayController.instance.onAnimateShow = () async {
-      await _animController.forward(from: 0.0);
-    };
-
-    OverlayController.instance.onAnimateHide = () async {
-      await _animController.reverse();
-    };
-
     _scale = (widget.config.get("overlay.scale", 1.0) as num).toDouble();
     AppTheme.uiScale = _scale;
 
@@ -135,13 +104,6 @@ class _OverlayScreenState extends State<OverlayScreen>
 
   @override
   void dispose() {
-    if (OverlayController.instance.onAnimateShow != null) {
-      OverlayController.instance.onAnimateShow = null;
-    }
-    if (OverlayController.instance.onAnimateHide != null) {
-      OverlayController.instance.onAnimateHide = null;
-    }
-    _animController.dispose();
     BridgeService.instance.config.removeListener(_onConfigUpdated);
     _gamepadSub?.cancel();
     super.dispose();
@@ -153,89 +115,78 @@ class _OverlayScreenState extends State<OverlayScreen>
       listenable: OverlayController.instance,
       builder: (context, _) {
         final isVisible = OverlayController.instance.isVisible;
+        if (!isVisible) {
+          return const SizedBox.shrink();
+        }
 
         return Scaffold(
           backgroundColor: AppTheme.transparent,
-          body: Stack(
-            fit: StackFit.expand,
-            children: [
-              IgnorePointer(
-                ignoring: !isVisible,
-                child: FadeTransition(
-                  opacity: _fadeAnim,
-                  child: SlideTransition(
-                    position: _slideAnim,
-                    child: Padding(
-                      padding: const EdgeInsets.only(
-                        top: 20,
-                        bottom: 20,
-                        right: 16,
-                        left: 8,
-                      ),
-                      child: Column(
-                        children: [
-                          // 1. Thanh Tab Bar nổi phía trên (Compact Mode với 4 Tab)
-                          AppTabBar(
-                            selectedIndex: _selectedTabIndex,
-                            items: const [
-                              AppTabItem(icon: Icons.home_rounded, label: 'Trang chủ'),
-                              AppTabItem(icon: Icons.bolt_rounded, label: 'Hiệu năng'),
-                              AppTabItem(icon: Icons.speed_rounded, label: 'RTSS / OSD'),
-                              AppTabItem(icon: Icons.settings_rounded, label: 'Cài đặt'),
-                            ],
-                            onTabSelected: _switchTab,
-                          ),
-                          const SizedBox(height: 12),
+          body: Padding(
+            padding: const EdgeInsets.only(
+              top: 20,
+              bottom: 20,
+              right: 16,
+              left: 8,
+            ),
+            child: Column(
+              children: [
+                // 1. Thanh Tab Bar nổi phía trên (Compact Mode với 4 Tab)
+                AppTabBar(
+                  selectedIndex: _selectedTabIndex,
+                  items: const [
+                    AppTabItem(icon: Icons.home_rounded, label: 'Trang chủ'),
+                    AppTabItem(icon: Icons.bolt_rounded, label: 'Hiệu năng'),
+                    AppTabItem(icon: Icons.speed_rounded, label: 'RTSS / OSD'),
+                    AppTabItem(icon: Icons.settings_rounded, label: 'Cài đặt'),
+                  ],
+                  onTabSelected: _switchTab,
+                ),
+                const SizedBox(height: 12),
 
-                          // 2. Khung nội dung chi tiết nổi bên dưới (Fixed bounds cho ListView)
-                          Expanded(
-                            child: Container(
-                              width: double.infinity,
-                              decoration: BoxDecoration(
-                                color: AppTheme.background,
-                                borderRadius: BorderRadius.circular(AppTheme.panelRadius),
-                                border: Border.all(color: AppTheme.cardBorder, width: 1.0),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppTheme.shadow.withValues(alpha: 0.65),
-                                    blurRadius: 28,
-                                    offset: const Offset(-4, 10),
-                                    spreadRadius: 2,
-                                  ),
-                                ],
-                              ),
-                              clipBehavior: Clip.antiAlias,
-                              child: Column(
-                                children: [
-                                  Expanded(
-                                    child: MediaQuery(
-                                      data: MediaQuery.of(context).copyWith(
-                                        textScaler: TextScaler.linear(_scale),
-                                      ),
-                                      child: AnimatedSwitcher(
-                                        duration: const Duration(milliseconds: 180),
-                                        layoutBuilder: (currentChild, previousChildren) {
-                                          return Stack(
-                                            fit: StackFit.expand,
-                                            children: [...previousChildren, ?currentChild],
-                                          );
-                                        },
-                                        child: _buildSelectedTabContent(),
-                                      ),
-                                    ),
-                                  ),
-                                  const PanelFooter(),
-                                ],
-                              ),
+                // 2. Khung nội dung chi tiết nổi bên dưới (Fixed bounds cho ListView)
+                Expanded(
+                  child: Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: AppTheme.background,
+                      borderRadius: BorderRadius.circular(AppTheme.panelRadius),
+                      border: Border.all(color: AppTheme.cardBorder, width: 1.0),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppTheme.shadow.withValues(alpha: 0.65),
+                          blurRadius: 28,
+                          offset: const Offset(-4, 10),
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: MediaQuery(
+                            data: MediaQuery.of(context).copyWith(
+                              textScaler: TextScaler.linear(_scale),
+                            ),
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 180),
+                              layoutBuilder: (currentChild, previousChildren) {
+                                return Stack(
+                                  fit: StackFit.expand,
+                                  children: [...previousChildren, ?currentChild],
+                                );
+                              },
+                              child: _buildSelectedTabContent(),
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                        const PanelFooter(),
+                      ],
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },

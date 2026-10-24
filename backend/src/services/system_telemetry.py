@@ -39,6 +39,7 @@ class SystemTelemetryService:
         battery = psutil.sensors_battery()
         battery_percent = int(battery.percent) if battery else 100
         is_charging = battery.power_plugged if battery else True
+        battery_secs_left = int(battery.secsleft) if (battery and battery.secsleft is not None) else -1
 
         cpu_temp, live_tdp, fast_limit = self.tdp_service.get_telemetry()
         current_fan = self.fan_service.get_speed()
@@ -55,6 +56,7 @@ class SystemTelemetryService:
             "ram_used_gb": ram_used_gb,
             "ram_total_gb": ram_total_gb,
             "battery_percent": battery_percent,
+            "battery_secs_left": battery_secs_left,
             "is_charging": is_charging,
             "live_tdp": round(live_tdp) if (live_tdp is not None and live_tdp > 0) else None,
             "fast_limit": round(fast_limit) if fast_limit > 0 else 18,

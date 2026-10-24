@@ -4,6 +4,7 @@ import ctypes
 from ctypes import wintypes
 import socket
 import urllib.request
+from typing import TYPE_CHECKING, Optional
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtCore import Qt, Signal, QUrl, QCoreApplication, QEvent, QTimer
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -15,6 +16,9 @@ from src.bridge.web_bridge import WebBridge
 from src.bridge.ws_server import WsServer
 from src.bridge.static_server import StaticServer
 from src.core.logger import setup_logger
+
+if TYPE_CHECKING:
+    from src.overlay.window_manager import WindowManager
 
 logger = setup_logger("QuickPanel")
 
@@ -40,6 +44,9 @@ class QuickPanel(QWidget):
         self._display_change_timer.setSingleShot(True)
         self._display_change_timer.timeout.connect(self._on_display_change_timeout)
 
+        # Assigned by main.py once the WindowManager is created
+        self.win_mgr: Optional["WindowManager"] = None
+        self._dev_retries = 0
         self.bridge = WebBridge(self)
         self.ws_server = WsServer(self.bridge, port=8765, parent=self)
         self.static_server = None
@@ -49,12 +56,12 @@ class QuickPanel(QWidget):
         self._connect_bridge_signals()
 
     def _on_display_change_timeout(self):
-        if hasattr(self, "win_mgr") and self.win_mgr:
+        if self.win_mgr:
             logger.info("[WINDOW-GEOMETRY] Kích hoạt cập nhật kích thước Viewport sau Debounce (WM_DISPLAYCHANGE)...")
             self.win_mgr.update_geometry(self.win_mgr.width_setting)
 
     def mousePressEvent(self, event):
-        if hasattr(self, "win_mgr") and self.win_mgr:
+        if self.win_mgr:
             self.win_mgr.preserve_foreground_window()
         self.bridge.requestBringToFront.emit()
         super().mousePressEvent(event)
@@ -66,7 +73,7 @@ class QuickPanel(QWidget):
                 if proxy:
                     proxy.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         if event.type() == QEvent.Type.MouseButtonPress:
-            if hasattr(self, "win_mgr") and self.win_mgr:
+            if self.win_mgr:
                 self.win_mgr.preserve_foreground_window()
             self.bridge.requestBringToFront.emit()
         return super().eventFilter(watched, event)
@@ -75,7 +82,7 @@ class QuickPanel(QWidget):
         if eventType == b"windows_generic_MSG":
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == 0x0021:  # WM_MOUSEACTIVATE
-                if hasattr(self, "win_mgr") and self.win_mgr:
+                if self.win_mgr:
                     self.win_mgr.preserve_foreground_window()
                 logger.info("[SEAMLESS-1.6] Bắt WM_MOUSEACTIVATE: Ép trả về MA_NOACTIVATE (3) để triệt tiêu hành vi cướp Focus của Game")
                 return True, 3
@@ -83,7 +90,7 @@ class QuickPanel(QWidget):
                 return True, 0
             elif msg.message == 0x0006 and (msg.wParam & 0xFFFF) != 0:  # WM_ACTIVATE
                 logger.info(f"[SEAMLESS-1.6] Bắt WM_ACTIVATE (wParam={msg.wParam}): Đang khôi phục tiêu điểm cho Game...")
-                if hasattr(self, "win_mgr") and self.win_mgr:
+                if self.win_mgr:
                     self.win_mgr.restore_foreground_window()
                 return True, 0
             elif msg.message == 0x007E:  # WM_DISPLAYCHANGE
@@ -98,15 +105,34 @@ class QuickPanel(QWidget):
         logger.info(f"[QuickPanel] Frontend page load finished: ok={ok}, url={self.view.url().toString()}")
         if not ok and self.is_dev_mode:
             logger.warning("[QuickPanel] Dev server web page failed to load initially. Auto-reloading in 1.5s...")
-            from PySide6.QtCore import QTimer
             QTimer.singleShot(1500, self.view.reload)
+        elif ok and self.is_dev_mode:
+            # DDC can stall while loading modules when the dev server is still compiling: verify the app started
+            QTimer.singleShot(self.DEV_APP_CHECK_MS, self._ensure_dev_app_started)
 
         proxy = self.view.focusProxy()
         if proxy:
             proxy.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             proxy.installEventFilter(self)
-        if hasattr(self, "win_mgr") and self.win_mgr:
+        if self.win_mgr:
             self.win_mgr.enforce_no_activate_children()
+
+    DEV_APP_CHECK_MS = 12000
+    DEV_APP_MAX_RETRIES = 6
+
+    def _ensure_dev_app_started(self):
+        """Reload the dev page while the Flutter app (flt-glass-pane) has not started yet."""
+        def _on_result(started):
+            if started:
+                self._dev_retries = 0
+                return
+            self._dev_retries += 1
+            if self._dev_retries > self.DEV_APP_MAX_RETRIES:
+                logger.error("[QuickPanel] Flutter dev app did not start after max retries.")
+                return
+            logger.warning(f"[QuickPanel] Flutter dev app not started, reloading (attempt {self._dev_retries})...")
+            self.view.reload()
+        self.view.page().runJavaScript("!!document.querySelector('flt-glass-pane')", _on_result)
 
     def _setup_ui(self):
         self.installEventFilter(self)
@@ -169,8 +195,8 @@ class QuickPanel(QWidget):
             return False
 
     def _load_frontend(self):
-        # 1. Nếu đang chạy Flutter Web Dev Server tại cổng 5173 (phát triển độc lập)
-        if self._is_dev_server_running():
+        # 1. Dev server chỉ được dò khi chạy từ source; bản đóng gói (frozen) luôn dùng build tĩnh
+        if not getattr(sys, "frozen", False) and self._is_dev_server_running():
             logger.info("Phát hiện Flutter Web Dev Server đang chạy tại http://127.0.0.1:5173. Đang nạp chế độ Dev...")
             self.is_dev_mode = True
             self.view.load(QUrl("http://127.0.0.1:5173"))

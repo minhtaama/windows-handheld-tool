@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'core/app_theme.dart';
 import 'core/config.dart';
+import 'hardware/rtss_osd_service.dart';
 import 'services/bridge_service.dart';
 import 'services/overlay_controller.dart';
 import 'ui/quick_panel/quick_panel.dart';
@@ -8,6 +9,7 @@ import 'ui/quick_panel/quick_panel.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final config = ConfigManager();
+  RtssOsdService.instance.init(config);
   OverlayController.instance.config = config;
   await BridgeService.instance.init();
   runApp(HandheldApp(config: config));

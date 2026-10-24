@@ -1,6 +1,6 @@
 # Trạng thái hiện tại của dự án (Project Status)
 
-> Cập nhật lần cuối: 24/10/2026 13:37
+> Cập nhật lần cuối: 24/10/2026 14:12
 
 > [!IMPORTANT]
 > **Quy tắc duy trì tài liệu**:
@@ -74,6 +74,29 @@
       - `frontend/lib/ui/quick_panel/quick_panel.dart`: Cập nhật 4 tab theo thứ tự mới: 1. Trang chủ, 2. Hiệu năng, 3. RTSS / OSD, 4. Cài đặt; xóa bỏ hoàn toàn tệp thừa `frontend/lib/ui/tabs/device_tab.dart`.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+- [ ] **Đóng gói hiển thị biểu tượng Material Icons Offline (Offline Font Assets)**
+  + [Initial] Code thực tế: Sử dụng cấu hình mặc định uses-material-design: true của Flutter Web.
+    Hiện tượng: Khi thiết bị offline hoặc trình duyệt nhúng QtWebEngine không tải được font từ CDN fonts.gstatic.com, toàn bộ biểu tượng (Icons) bị lỗi biến thành các ô chữ nhật có dấu gạch chéo (Missing Glyph / Tofu Box).
+    Tình trạng: Còn tồn đọng lỗi.
+  + [24/10/2026 14:03] Khắc phục lỗi thiếu font biểu tượng (Missing Glyph / Tofu Box):
+    Code thực tế:
+      - frontend/fonts/MaterialIcons-Regular.otf: Đóng gói tệp font Material Icons 1.64 MB trực tiếp vào project từ Flutter SDK cache.
+      - frontend/pubspec.yaml: Khai báo font family MaterialIcons trỏ vào asset nội bộ fonts/MaterialIcons-Regular.otf.
+      - scripts/deploy/deploy_test.bat: Bổ sung cờ --no-tree-shake-icons vào lệnh flutter build web để ngăn chặn compiler loại bỏ glyph icon trong quá trình tối ưu mã.
+      - frontend/build/web/assets/FontManifest.json: Xác nhận tạo thành công mục ánh xạ font offline, trình duyệt nhúng nạp trực tiếp từ máy chủ tĩnh cục bộ mà không cần kết nối internet.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+- [ ] **Biểu tượng ứng dụng và Khay hệ thống (App Icon & System Tray)**
+  + [Initial] Code thực tế: Sử dụng biểu tượng Gamepad màu trắng đặt trên nền hình tròn màu xanh (#0067C0).
+    Tình trạng: Hoạt động ổn định.
+  + [24/10/2026 14:12] Loại bỏ vòng tròn xanh, tinh chỉnh icon Gamepad trong suốt:
+    Code thực tế:
+      - backend/assets/app_icon.png & app_icon.ico: Loại bỏ hoàn toàn hình tròn nền màu xanh, chỉ giữ hình bóng Gamepad màu trắng sắc nét kèm hiệu ứng bóng mờ viền (subtle drop shadow) và thumbstick chi tiết, nền trong suốt 100%.
+      - dist/windows_handheld_tool/assets & _internal/assets: Tự động đồng bộ các tệp icon mới sang thư mục dist.
+      - backend/main.py: Cập nhật mã vector SVG trong hàm fallback get_app_icon() đồng bộ loại bỏ hình tròn nền xanh.
+      - scripts/generate_app_icon.py: Cung cấp công cụ tái tạo icon vector đa độ phân giải (16x16 đến 256x256).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
 ---
 
 ## 3. Điều chỉnh được TDP, Fan curves
@@ -138,6 +161,18 @@
       - `scripts/run.bat`: Thay thế cơ chế thăm dò cổng socket sớm bằng kiểm tra HTTP GET thực tế (`http://127.0.0.1:5173`) trả về mã 200 OK. Đảm bảo backend Python chỉ nạp sau khi máy chủ Flutter Web đã biên dịch hoàn tất toàn bộ 530 module Javascript.
       - `backend/src/overlay/quick_panel.py`: Bổ sung cơ chế tự động thử nạp lại (`reload()`) sau 1.5 giây trong `_on_page_load_finished` nếu ở chế độ dev mà trang web nạp không thành công (`ok == False`).
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 13:49] Triệt tiêu hiện tượng Transparent Layer (Giao diện tàng hình) trong Dev Hot Reload:
+    Code thực tế:
+      - `frontend/lib/services/overlay_controller.dart`: Khởi tạo `_isVisible = true` mặc định, chấm dứt hiện tượng UI tự tàng hình trước khi nhận gói tin WebSocket.
+      - `frontend/lib/ui/quick_panel/quick_panel.dart`: Khởi tạo `_animController` với `value: 1.0` (Opacity = 1.0), loại bỏ Race Condition khi gói tin `visibility: true` bị gửi trượt trong lúc Flutter Web đang compile DDC. Đảm bảo toàn bộ Tab Bar và thẻ cấu hình hiển thị ngay khi trang web tải xong.
+      - `frontend/build/web`: Biên dịch lại bản build tĩnh bằng `flutter build web --release --pwa-strategy=none` để đồng bộ toàn diện.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 14:20] Loại bỏ hoàn toàn AnimationController & Transition thừa thãi, sửa triệt để lỗi mục 2 run.bat:
+    Code thực tế:
+      - frontend/lib/ui/quick_panel/quick_panel.dart: Xóa bỏ hoàn toàn SingleTickerProviderStateMixin, _animController, _fadeAnim, _slideAnim, FadeTransition, SlideTransition, IgnorePointer(ignoring: !isVisible) và các callback onAnimateShow/Hide theo đúng nguyên tắc DRY, SoC và Cấm Backward Compatibility. Giao diện Flutter chỉ cần render Scaffold trực tiếp.
+      - frontend/lib/services/overlay_controller.dart: Xóa bỏ các callback animation thừa thãi (onAnimateShow, onAnimateHide). Trách nhiệm hiển thị, kích thước khung viền Side-Dock và cờ xuyên thấu WS_EX_TRANSPARENT (Click-through 100%) khi đóng đã được WindowManager Win32 đảm trách hoàn toàn.
+      - frontend/build/web: Biên dịch lại thành công toàn bộ bản build web tĩnh (flutter build web), flutter analyze đạt 0 issues.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 ---
 
 ## 4. Hiển thị OSD thông số in-game qua RivaTuner (RTSS Overlay)
@@ -191,9 +226,19 @@
       - Duy trì cơ chế ghi file cấu hình fallback phòng trường hợp DLL hook chưa sẵn sàng.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
-- [x] **Tùy chỉnh thông số hiển thị & Bố cục OSD**
+- [ ] **Tùy chỉnh thông số hiển thị, màu sắc, cú pháp & Token pin (RTSS OSD Customization)**
   + [Initial] Code thực tế: `frontend/lib/hardware/rtss_osd_formatter.dart` định dạng chuỗi thẻ màu RTSS markup, cho phép bật/tắt độc lập các thông số (FPS, TDP, Temp, CPU load, RAM, Pin, Fan) và chuyển đổi 2 kiểu layout (1 dòng hoặc nhiều dòng).
     Tình trạng: Hoạt động ổn định.
+  + [24/10/2026 13:46] Triển khai tùy biến màu sắc, nhãn chữ, syntax template và bổ sung token time_left:
+    Code thực tế:
+      - `backend/src/services/system_telemetry.py`: Bổ sung trích xuất `battery_secs_left = int(battery.secsleft)` từ `psutil.sensors_battery()`, truyền số giây ước lượng còn lại vào snapshot telemetry (xử lý -2 cắm nguồn AC, -1 đang tính toán, >0 số giây).
+      - `frontend/lib/services/system_telemetry_service.dart` & `frontend/lib/services/bridge_service.dart`: Mở rộng `SystemTelemetryData` với `batterySecsLeft` và getter `batteryTimeLeftFormatted` tự động định dạng `1h45m`, `35m`, `CHG` hoặc `AC`.
+      - `frontend/lib/hardware/rtss_syntax_parser.dart`: Xây dựng compiler siêu nhẹ (Zero Allocation) hỗ trợ toàn bộ các macro token (`{fps}`, `{tdp}`, `{cpu_temp}`, `{cpu_usage}`, `{ram_used}`, `{ram_total}`, `{ram_percent}`, `{battery}`, `{time_left}`, `{fan}`, `{time}`, `{game}`), thẻ màu động (`{cpu_temp_color}`, `{fps_color}`, `{bat_color}`) và thẻ RTSS markup (`<C=HEX>`, `\n`). Cung cấp 4 bảng phối màu mẫu (`Mặc định`, `Neon Cyber`, `Amber Retro`, `Trắng tối giản`).
+      - `frontend/lib/hardware/rtss_osd_formatter.dart`: Mở rộng `RtssOsdMetricsConfig` hỗ trợ 2 chế độ `RtssOsdMode.visual` và `RtssOsdMode.syntax`, cấu hình nhãn `labels` và màu sắc `colors` cho từng metric; tích hợp `time_left` vào chuỗi hiển thị OSD.
+      - `frontend/lib/hardware/rtss_osd_service.dart`: Tách logic phát OSD ra dịch vụ nền Singleton độc lập, lắng nghe telemetry stream để cập nhật OSD bền bỉ in-game kể cả khi đóng Quick Panel.
+      - `frontend/lib/main.dart`: Khởi tạo `RtssOsdService.instance.init(config)` ngay tại entrypoint ứng dụng.
+      - `frontend/lib/ui/tabs/rtss_tab.dart`: Bổ sung khung mô phỏng Live In-App Preview với font Consolas pixel; bộ chuyển đổi chế độ Visual / Syntax; bộ chọn bảng màu mẫu; dãy nút chip chèn nhanh macro token; và HelpBox chi tiết hướng dẫn toàn bộ cú pháp token khả dụng. Hoàn toàn tương thích điều hướng Gamepad 100%.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [ ] **Tùy biến kích thước OSD (Zoom) và Vị trí hiển thị (Position)**
   + [Initial] Code thực tế: UI Flutter đã có các nút chọn Zoom (1x-4x) và Position.
@@ -294,4 +339,9 @@
       - `scripts/run.bat`: Bổ sung cờ `--web-hostname 127.0.0.1` vào lệnh chạy Flutter Web Dev Server để liên kết trực tiếp IPv4, loại bỏ độ trễ phân giải IPv6 của `localhost`.
       - `backend/src/overlay/quick_panel.py`: Viết lại hàm `_is_dev_server_running()` dùng socket IPv4 (`127.0.0.1:5173`) tốc độ cao thay cho `urllib.request.urlopen("http://localhost:5173", timeout=0.3)` (vốn luôn bị Timeout do IPv6 fallback, khiến QuickPanel âm thầm rơi vào fallback nạp bản build tĩnh cũ và DWDS không kết nối được client).
       - Đổi URL nạp thành `http://127.0.0.1:5173`, bật cờ `is_dev_mode = True`, bổ sung phím tắt `F5` và `Ctrl+R` kích hoạt `self.view.reload()` cho phép reload giao diện tức thì.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 14:40] Sửa lỗi mục 2 không hiện panel ("No client connected") và mục 4 báo ERR_CONNECTION_REFUSED:
+    Code thực tế:
+      - `backend/src/overlay/quick_panel.py`: Bản đóng gói (frozen) không còn dò Flutter dev server cổng 5173 (nguyên nhân mục 4 bám nhầm dev server của mục 2 rồi bị refused khi server tắt), luôn nạp build tĩnh. Ở chế độ dev, thêm watchdog `_ensure_dev_app_started`: sau 12s nếu chưa có `flt-glass-pane` (DDC treo ở bước nạp module khi server còn biên dịch) thì tự reload, tối đa 6 lần.
+      - `scripts/run.bat`: Vòng chờ mục 2 kiểm tra `/main.dart.js` (chỉ trả về sau khi biên dịch xong) thay cho trang index.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).

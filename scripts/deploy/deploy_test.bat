@@ -53,7 +53,7 @@ echo.
 echo [*] Step 3/6: Packaging Frontend and Python Application...
 echo [*] Compiling Flutter Web Frontend...
 pushd "%PROJECT_ROOT%\frontend"
-call flutter build web --release --pwa-strategy=none
+call flutter build web --release --pwa-strategy=none --no-tree-shake-icons
 set "FLUTTER_ERR=!errorlevel!"
 popd
 if !FLUTTER_ERR! neq 0 (

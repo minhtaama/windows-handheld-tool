@@ -221,10 +221,15 @@ class BridgeService {
       brightness.value = (data['brightness'] as num).toInt();
     }
 
+    final batterySecsLeft = data['battery_secs_left'] != null
+        ? (data['battery_secs_left'] as num).toInt()
+        : null;
+
     final telemData = SystemTelemetryData(
       timeString: timeStr,
       dateString: dateStr,
       batteryPercent: batteryPct,
+      batterySecsLeft: batterySecsLeft,
       hasBattery: true,
       isCharging: isCharging,
       isAcOnline: isCharging,
@@ -393,6 +398,7 @@ class BridgeService {
         timeString: timeStr,
         dateString: dateStr,
         batteryPercent: 88,
+        batterySecsLeft: 5400,
         hasBattery: true,
         isCharging: false,
         isAcOnline: false,
