@@ -69,7 +69,7 @@ class SystemTelemetryService:
             "battery_secs_left": battery_secs_left,
             "is_charging": is_charging,
             "live_tdp": reported_tdp,
-            "fast_limit": round(fast_limit) if fast_limit > 0 else 18,
+            "fast_limit": round(fast_limit),
             "fan_speed": current_fan,
             "live_fan": current_fan,
             "is_fan_auto": is_auto_fan,

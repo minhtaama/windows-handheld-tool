@@ -262,7 +262,7 @@ static void RestoreDisplayMode() {
 }
 
 static void MatchDisplayModeToBuffer(HWND hWnd, UINT bufW, UINT bufH) {
-    if (IsHookInert() || g_bDisplayModeChanged) return;
+    if (IsHookInert()) return;
     if (!hWnd || !IsWindow(hWnd) || bufW < 320 || bufH < 240) return;
     if (!IsMatchDisplayModeEnabled()) return;
 
@@ -284,6 +284,8 @@ static void MatchDisplayModeToBuffer(HWND hWnd, UINT bufW, UINT bufH) {
         return;
     }
 
+    // Game vừa đổi độ phân giải render -> phải khớp lại mode, nếu không cửa sổ và buffer lệch nhau
+    // (Scale > 1.0) và DWM phải chạy pass scale mỗi frame -> tụt fps.
     SaveOriginalDisplayMode();
 
     DEVMODEW dm = { sizeof(dm) };
@@ -595,9 +597,11 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(
     // Xóa cờ cho phép mode switch
     SwapChainFlags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
-    // Giữ ALLOW_TEARING qua mọi lần ResizeBuffers: nếu rơi cờ này, Present(ALLOW_TEARING) sẽ lỗi
-    // và game quay lại bị khoá nhịp 60 ↔ 30 fps.
-    if (g_bTearingSwapChain.load() && !g_bTearingUnsupported.load()) {
+    // Tearing: swapchain flip có thể nhận ALLOW_TEARING ngay trong ResizeBuffers. Luôn thử thêm cờ
+    // (kể cả khi hook CreateSwapChain* không chặn được do đua tranh lúc tiêm) để Present(0) không bị
+    // khoá vào nhịp composition 60Hz -> game tụt đúng 30 fps. Nếu bị từ chối thì rút cờ và thử lại.
+    bool tryTearing = !g_bTearingUnsupported.load();
+    if (tryTearing) {
         SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
     }
 
@@ -608,6 +612,23 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(
 
     HRESULT hr = g_pOrigResizeBuffers ?
         g_pOrigResizeBuffers(This, BufferCount, Width, Height, NewFormat, SwapChainFlags) : E_FAIL;
+
+    if (FAILED(hr) && tryTearing) {
+        g_bTearingUnsupported.store(true);
+        DiagWrite("[TEARING] ResizeBuffers kèm ALLOW_TEARING thất bại hr=0x%08lX -> thử lại không tearing", (unsigned long)hr);
+        SwapChainFlags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        hr = g_pOrigResizeBuffers ?
+            g_pOrigResizeBuffers(This, BufferCount, Width, Height, NewFormat, SwapChainFlags) : E_FAIL;
+        tryTearing = false;
+    }
+    if (SUCCEEDED(hr) && tryTearing) {
+        g_bTearingSwapChain.store(true);
+        static bool s_resizeTearingLogged = false;
+        if (!s_resizeTearingLogged) {
+            s_resizeTearingLogged = true;
+            DiagWrite("[TEARING] Đã bật ALLOW_TEARING qua ResizeBuffers (%ux%u)", Width, Height);
+        }
+    }
 
     DXGI_SWAP_CHAIN_DESC desc;
     if (SUCCEEDED(This->GetDesc(&desc)) && desc.OutputWindow) {

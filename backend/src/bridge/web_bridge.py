@@ -36,6 +36,8 @@ class WebBridge(QObject):
         super().__init__(parent)
         self.config = ConfigManager()
         self.tdp_svc = TdpService()
+        # Re-apply the persisted TDP limit on startup (SMU resets to BIOS default after reboot)
+        self._apply_persisted_tdp()
         self.fan_svc = FanService()
         self.audio_svc = AudioService()
         self.bright_svc = BrightnessService()
@@ -87,7 +89,7 @@ class WebBridge(QObject):
                 "config": self.config.data,
                 "telemetry": self.telemetry_svc.get_snapshot(),
                 "hardware": {
-                    "tdp": self.config.get("hardware", "tdp", "current", default=15),
+                    "tdp": int(self.tdp_svc.last_set_tdp),
                     "fan": self.fan_svc.get_speed(),
                     "fan_auto": self.fan_svc.is_auto,
                     "fan_profile": self.fan_svc.get_fan_profile(),
@@ -105,6 +107,21 @@ class WebBridge(QObject):
         except Exception as e:
             logger.error(f"Lỗi getInitialState: {e}")
             return "{}"
+
+    def _apply_persisted_tdp(self):
+        try:
+            if bool(self.config.get("hardware", "tdp", "auto", default=False)):
+                logger.info("[Bridge] TDP đang ở chế độ Auto -> không ghi đè giới hạn lúc khởi động")
+                return
+            persisted = getattr(self.tdp_svc, "persisted_tdp", None)
+            if not persisted:
+                logger.info("[Bridge] Chưa có TDP do người dùng đặt -> giữ nguyên giới hạn BIOS")
+                return
+            if self.tdp_svc.is_active:
+                self.tdp_svc.set_tdp(int(persisted))
+                logger.info(f"[Bridge] Re-applied persisted TDP on startup: {int(persisted)}W")
+        except Exception as e:
+            logger.warning(f"[Bridge] Không thể áp TDP lúc khởi động: {e}")
 
     @Slot(int)
     def setTdp(self, watts: int):

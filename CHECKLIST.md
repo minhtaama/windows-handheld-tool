@@ -1,6 +1,5 @@
 # Trạng thái hiện tại của dự án (Project Status)
-
-~~~~> Cập nhật lần cuối: 24/10/2026 20:05
+Cập nhật lần cuối: 24/10/2026 20:05
 
 > [!IMPORTANT]
 > **Quy tắc duy trì tài liệu**:
@@ -13,7 +12,7 @@
 > 3. Khi vừa sửa xong code cho một lỗi, bổ sung một mốc `+ [Thời gian]` mới ghi rõ: **Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định)** và giữ checkbox tính năng là `- [ ]`. Chỉ tick `- [x]` sau khi người dùng hoặc kiểm thử thực chiến xác nhận.
 
 
-- [ ] **AMD RSR (Radeon Super Resolution) & Tương thích AMD In-Game Overlay**
+- [x] **AMD RSR (Radeon Super Resolution) & Tương thích AMD In-Game Overlay**
   + [Initial] Hiện tượng: Khi vào game, AMD Adrenalin In-Game Overlay (Alt+R) không thể mở lên; người dùng đã bật RSR ON trong AMD Software nhưng vào game RSR không kích hoạt upscaling (không phóng to từ 720p lên 1080p).
     Nguyên nhân kỹ thuật:
       - `dxgi_hook.cpp` ép 100% các game chạy ở chế độ Borderless Windowed và cưỡng bức `Hooked_GetFullscreenState` luôn trả về `*pFullscreen = FALSE`.
@@ -54,6 +53,13 @@
         + Tích hợp `ApplyDynamicDisplayMode` vào toàn bộ chu trình SwapChain: `Hooked_ResizeBuffers`, `Hooked_ResizeTarget`, `Hooked_SetFullscreenState`, `Hooked_CreateSwapChain`, `Hooked_CreateSwapChainForHwnd`, `Hooked_D3D11CreateDeviceAndSwapChain`.
       - `backend/native/dxgi_hook/build.bat`: Biên dịch thành công `backend/bin/dxgi_hook.dll` (MSVC x64) và đồng bộ sang `dist/windows_handheld_tool/bin/` và `dist/windows_handheld_tool/_internal/bin/`.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 22:35] Đính chính: cơ chế `ApplyDynamicDisplayMode` ở mốc 01:25 **đã bị gỡ bỏ hoàn toàn**:
+    Lý do: `ChangeDisplaySettingsExW(CDS_FULLSCREEN)` hạ mode màn hình xuống bằng độ phân giải render gây lệch DPI 1,75×, cửa sổ/buffer không khớp và làm Metro Exodus tụt 60 → 15-30 FPS (chi tiết chuỗi chẩn đoán ở mục "Metro Exodus (4A Engine)..." phần 1).
+    Đường hiện tại: hook hạ display mode **đúng bằng độ phân giải render** (`dxgi_hook.match_display_mode`, Named Event `HandheldTool_MatchDisplayMode`), cửa sổ game 1:1 với buffer (`Scale=1.000`), phần phóng lên tấm nền do scaler phần cứng / RSR đảm nhận. Mode gốc tự khôi phục ở `WM_DESTROY`, khi tool thoát và khi DLL unload.
+    Kết quả: RSR hoạt động tốt trên Metro Exodus EE, Far Cry 5, Dead Island 2, FPS cao, hình phủ kín màn hình.
+    Tình trạng: Hoạt động ổn định (đã xác nhận thực chiến 25/10 22:20).
+
 ---
 
 
@@ -67,12 +73,27 @@
   + [Initial] Code thực tế: `backend/native/dxgi_hook/src/dxgi_hook.cpp` (MinHook x64) can thiệp bảng VMT SwapChain. `Hooked_SetFullscreenState` chặn `Fullscreen = TRUE`, ép `FALSE`, gọi `ForceBorderlessWindow` chuẩn hóa style Win32 (xóa `WS_CAPTION`, `WS_THICKFRAME`...) và trả về `S_OK`. `Hooked_GetFullscreenState` ép báo cáo `*pFullscreen = FALSE` để engine (Unreal Slate UI, Unity) dùng nhánh tọa độ chuột chuẩn Client Rect của Borderless Windowed. `Hooked_ResizeBuffers` & `Hooked_ResizeTarget` xóa cờ `ALLOW_MODE_SWITCH` và chặn game co rút cửa sổ Win32 khi render nhỏ hơn màn hình. Hook Factory (`CreateSwapChain`, `CreateSwapChainForHwnd`, `D3D11CreateDeviceAndSwapChain`) tự động xóa `ALLOW_MODE_SWITCH`, ép `Windowed = TRUE`, ép `Scaling = DXGI_SCALING_ASPECT_RATIO_STRETCH`.
     Tình trạng: Hoạt động ổn định.
 
+  + [25/10/2026 22:35] Bổ sung các cơ chế trình bày/hiển thị (nhật ký chẩn đoán chi tiết nằm ở mục "Metro Exodus (4A Engine)..." phần 1):
+    - **`ALLOW_TEARING`**: thêm `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` khi tạo swapchain FLIP **và** ở mỗi `ResizeBuffers` (tự rút cờ + gọi lại nếu DXGI trả `E_INVALIDARG`); `Hooked_Present`/`Present1` thêm `DXGI_PRESENT_ALLOW_TEARING` khi `syncInterval == 0`. Nhờ vậy `Present` không bị DWM khoá vào nhịp composition 60Hz — triệt tiêu hiện tượng FPS tụt đúng 30,0 và cho phép vượt 60.
+    - **`DXGI_SCALING_STRETCH`**: thay cho `DXGI_SCALING_ASPECT_RATIO_STRETCH` (giá trị này chỉ hợp lệ cho composition swapchain, với swapchain hwnd bị xử lý như `NONE` nên ảnh vẽ 1:1 ở góc).
+    - **`match_display_mode`**: hạ display mode đúng bằng độ phân giải render, theo dõi lại mỗi lần game đổi resolution → `Scale = 1.000`, loại bỏ pass scale mỗi frame của DWM.
+    - **Pass-through khi tool thoát**: `IsShutdownRequested()`/`IsHookInert()` + Named Event `HandheldTool_Shutdown` — hook ngừng sửa hành vi game (không tháo MinHook để tránh deadlock luồng render).
+    - **Chẩn đoán**: hook `Present`/`Present1` ghi `HRESULT`/`SyncInterval`/`PresentFlags` + nhịp khung hình (`[FPS]`), log `[MSG]`/`[TEARING]`/`[SCALING]`/`[DISPMODE]`/`Overlays=` ra `dxgi_diag.log`.
+    Tình trạng: Hoạt động ổn định (đã xác nhận thực chiến 25/10 22:20).
+
 - [x] **Cách ly tín hiệu tay cầm vào game khi mở panel (IPC Gamepad Isolation)**
   + [Initial] Code thực tế: `window_manager.py` khởi tạo Named Event toàn cục `Global\HandheldTool_PanelActive` (SDDL Everyone). `dxgi_hook.cpp` hook hàm `XInputGetState` từ các DLL XInput. Khi panel mở (`SetEvent`), hook tự động xóa sạch dữ liệu nút bấm (`wButtons = 0`) và cần gạt analog trước khi trả về game, ngăn nhân vật trong game bị nhảy/bắn khi duyệt menu panel. Khi panel đóng (`ResetEvent`), quyền điều khiển trả lại nguyên vẹn cho game ngay lập tức.
     Tình trạng: Hoạt động ổn định.
 
 - [x] **Giám sát vòng đời game & Tự động tiêm DLL (GameCompatService)**
   + [Initial] Code thực tế: `backend/src/services/game_compat_service.py` cài đặt `SetWinEventHook` bắt `EVENT_SYSTEM_FOREGROUND` tự động nhận diện game (lọc bỏ tiến trình hệ thống qua `NON_GAME_PROCESSES` và đường dẫn thư viện Steam/Epic/Xbox). Kích hoạt `SeDebugPrivilege` và tiêm `dxgi_hook.dll` vào game 64-bit qua `VirtualAllocEx` + `WriteProcessMemory` + `CreateRemoteThread(LoadLibraryW)`. Tự động dọn cờ tắt FSO trong Registry (`AppCompatFlags\Layers` và `GameConfigStore`) để duy trì Composed Flip mượt mà. Bắt `EVENT_SYSTEM_MINIMIZESTART` tự động khôi phục game (`SW_RESTORE`) nếu game cố thu nhỏ khi panel mở (kèm debounce chống lặp).
+    Tình trạng: Hoạt động ổn định.
+
+  + [25/10/2026 22:35] Bổ sung công tắc cấu hình + thu hẹp phạm vi dọn cờ tương thích:
+    - `backend/src/services/game_compat_service.py`: đọc `dxgi_hook.enabled` (bỏ qua tiêm DLL) và `dxgi_hook.auto_borderless` (bỏ qua `convert_to_borderless`) từ `config.json` → A/B test không cần quyền admin hay đổi tên tệp trong Program Files.
+    - `optimize_fso_registry()`: chỉ gỡ đúng token `DISABLEDXMAXIMIZEDWINDOWEDMODE`; **giữ nguyên** `PERMONITORV2`/`HIGHDPIAWARE` và các shim DPI khác (trước đây xoá sạch cả dấu `~`, làm game bị DPI ảo hoá 1,75× → lệch chuột + mất FPS).
+    - `backend/src/overlay/window_manager.py`: tạo thêm Named Event `HandheldTool_Shutdown` để hook trong tiến trình game chuyển sang chế độ pass-through khi tool thoát hẳn.
+    Ghi chú còn tồn: hai giá trị toàn cục `GameDVR_DXGIHonorFSEWindowsCompatible=1` và `GameDVR_FSEBehaviorMode=2` vẫn được ghi mỗi lần nhận diện game; cần rà lại xem chúng có cản trở đường "windowed flip" của Windows 11 hay không.
     Tình trạng: Hoạt động ổn định.
 
 - [x] **Metro Exodus (4A Engine) tự hạ FPS xuống 15 khi công cụ đang chạy**
@@ -166,9 +187,44 @@
     - Kết quả thực tế: game phủ kín màn hình, fps cao và không còn khựng; display mode tự khôi phục khi thoát.
     Tình trạng: Hoạt động ổn định (đã xác nhận thực chiến).
 
+  + [25/10/2026 11:54] Tái phát 30 fps sau khi thêm code sửa TDP — nguyên nhân là tearing bị mất, không phải TDP:
+    Chẩn đoán từ log (PID 10248, 11:48): `[DISPMODE] Hạ mode màn hình xuống 1366x768` và `Scale=1.000` (C1 vẫn chạy đúng), nhưng **không có** dòng `[TEARING]`/`[SWAPCHAIN]` nào → hook `CreateSwapChainForHwnd` không chặn được lần tạo swapchain (đua tranh lúc tiêm, timing khởi động của exe mới khác). Hệ quả `g_bTearingSwapChain=false` → `Present(syncInterval=0)` không có `ALLOW_TEARING` → bị khoá nhịp composition 60Hz → game tụt đúng 30 fps (`avgFrame=33,3ms`, `presents=30`). TDP 30-35W không liên quan (SMU đã set đủ, log trả về toàn 0).
+    Code thực tế:
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp::Hooked_ResizeBuffers`: luôn thử thêm `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` ngay trong lần resize (độc lập với hook tạo swapchain), tự rút cờ + gọi lại nếu DXGI từ chối, và bật `g_bTearingSwapChain` khi thành công. Nhờ vậy tearing không còn phụ thuộc vào việc có chặn được lúc tạo swapchain hay không.
+      - Build lại `backend/bin/dxgi_hook.dll` (MSVC x64, 45.056 bytes).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 12:10] Đổi res trong game sang 1280x720 nhưng fps vẫn 22-30 — mode không khớp lại:
+    Chẩn đoán từ log (PID 18296, 12:07): tearing **đã bật đúng** (`[TEARING]` cả 2 đường + `flags=0x200`), `[DISPMODE]` hạ mode xuống **1366x768** lúc đầu, nhưng sau khi người dùng đổi game sang 1280x720 thì `Buffer=1280x720` còn `Client/Window=1366x768` → **`Scale=1.067`** → DWM lại phải chạy pass scale mỗi frame → fps tụt 22-30.
+    Nguyên nhân: `MatchDisplayModeToBuffer()` có guard một lần (`g_bDisplayModeChanged`) nên sau lần khớp đầu tiên nó **không theo kịp** khi game đổi độ phân giải render.
+    Bằng chứng TDP/nhiệt không liên quan (`[TELEMETRY]`): `power=3-6W`, `temp=42-48C`, `fan=50%`, `fast_limit=30W` — máy đang idle mát, không throttle.
+    Code thực tế:
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp::MatchDisplayModeToBuffer`: bỏ guard một lần, chỉ so `mode hiện tại` với `buffer` để quyết định — nên mỗi lần game đổi resolution (ResizeBuffers/ResizeTarget/SetFullscreenState) mode sẽ được khớp lại ngay, `Scale` luôn về `1.000`.
+      - Build lại `backend/bin/dxgi_hook.dll` (MSVC x64, 45.568 bytes).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 12:31] FPS vẫn thấp dù đã kéo TDP lên 30W — lệnh kéo không tới backend + code TDP ghi đè sai:
+    Chẩn đoán từ log (12:17-12:24): **không có dòng `[Bridge] Đặt TDP` nào sau 12:17:43** (lệnh kéo không tới backend) và `[TELEMETRY] fast_limit=15W` suốt phiên. Nguyên nhân kép:
+      1. `hardware.tdp.auto = true` → `performance_tab.dart` ẩn slider (`shouldShowSlider: !_tdpAuto`) nên không thể chỉnh TDP từ panel.
+      2. `WebBridge._apply_persisted_tdp()` ghi đè **15W** lúc khởi động (đọc `config.hardware.tdp.current = 15`) dù UI báo "Auto", và mỗi lần deploy lại thì `backend/config.json` (15) copy đè lên config đã cài.
+    Đối chiếu 2 phiên test gần nhất: 12:07 có **30W nhưng `Scale=1.067`**; 12:17 có **`Scale=1.000` nhưng 15W** — chưa lần nào đúng đồng thời cả hai, nên fps đều thấp.
+    Code thực tế:
+      - `backend/src/hardware/tdp_service.py`: `set_tdp()` không còn ghi `set_apu_slow_limit` (giới hạn SoC/iGPU, ép xuống bằng STAPM làm GPU bị bóp: 72-85 fps → 26-44 fps ở cùng 15W) và khôi phục burst `fast = watts + 3` (`FAST_BURST_OFFSET_W`). TDP người dùng đặt được lưu ở `%LOCALAPPDATA%\WindowsHandheldTools\tdp_state.json` để deploy không ghi đè.
+      - `backend/src/bridge/web_bridge.py`: `_apply_persisted_tdp()` bỏ qua khi `tdp.auto = true`, chỉ áp khi có giá trị người dùng đã lưu; `getInitialState()` trả TDP thực đang áp (`last_set_tdp`) thay vì giá trị trong config.
+      - `frontend/lib/ui/tabs/performance_tab.dart`: slider TDP luôn hiển thị; kéo slider/preset tự chuyển sang chế độ thủ công (`tdp.auto = false`); layout gamepad luôn có mục slider.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 22:35] Chốt item: đã xác nhận thực chiến trên 3 tựa game (Metro Exodus EE, Far Cry 5, Dead Island 2):
+    Kết quả: cả 3 phủ kín màn hình, RSR hoạt động, FPS cao và không khựng; display mode tự khôi phục khi thoát game.
+    Đối chiếu cùng mức 15W: phiên 12:17 được 26-44 FPS (iGPU bị bóp + `Scale=1.067`), phiên 22:20 được 53-77 FPS (Dead Island 2) và 63-64 FPS (Far Cry 5) với công suất trung bình 13,2W.
+    Tổng hợp 4 nút thắt đã gỡ trong ngày: (1) `ChangeDisplaySettingsExW` cũ gây lệch DPI 1,75× / FPS 15-30 → revert; (2) thiếu `ALLOW_TEARING` → bị khoá nhịp 60 ↔ 30; (3) buffer ≠ cửa sổ → DWM scale mỗi frame; (4) mô hình TDP sai (`apu_slow` + mất burst + bị ghi đè 15W lúc khởi động) — chi tiết ở mục "Quản lý công suất TDP & Cảm biến phần cứng" phần 3.
+    Tình trạng: Hoạt động ổn định (đã xác nhận thực chiến).
+
 - [ ] **Xung đột phần cứng EC & Đồng bộ tọa độ chuột khi render lệch phân giải**
   + [Initial] Code thực tế: Vô hiệu hóa hoàn toàn lệnh ghi mù cổng EC I/O `0x6C / 0x68` trong `FanService` (loại bỏ dứt điểm hiện tượng nghẽn bus phần cứng gây giật lag máy, đơ GPU và Black Screen Kernel-Power Event 41). Đồng bộ tọa độ chuột đa tỉ lệ Client / Buffer: `dxgi_hook.cpp` duy trì hook 4 điểm (`Hooked_GetCursorPos`, `Hooked_SetCursorPos`, `Hooked_GetMessagePos` và ánh xạ `lParam` trong `PeekMessageW`/`GetMessageW`) theo ma trận `Buffer / Client`. `window_manager.py` gọi `ClipCursor(None)` khi mở panel.
     Tình trạng thực tế: Trên *Dead Island 2* và game DirectX chuẩn: Hoạt động hoàn toàn ổn định; Trên *Ready Or Not* (Unreal Engine): **Vẫn chưa khắc phục được** (con trỏ chuột và vùng tương tác hit-test của Slate UI vẫn bị lệch nhau, rê chuột lệch vị trí thì nút mới sáng và thao tác click menu chưa ăn khớp).
+  + [25/10/2026 22:35] Quyết định phạm vi: phần lệch chuột **chỉ còn ở Ready Or Not** (Slate UI của Unreal Engine); Metro Exodus EE, Far Cry 5, Dead Island 2 đều chính xác → **tạm hoãn** hạng mục này, không chặn các việc khác. Phần xung đột EC I/O (`0x6C/0x68`) vẫn giữ nguyên trạng thái vô hiệu hoá và ổn định.
+    Tình trạng: Tạm hoãn theo quyết định của người dùng (không còn là lỗi chặn tiến độ).
 
 ---
 
@@ -186,12 +242,6 @@
     Tình trạng: Còn tồn đọng lỗi. Hiện chỉ điều hướng được bằng cụm nút mũi tên D-Pad bên trái; Joystick bên trái (Left Thumbstick) chưa nhận tín hiệu điều hướng menu.
   + [23/10/2026 22:28] Sửa lỗi ánh xạ Joystick trái sang D-Pad:
     Code thực tế: Bổ sung đọc 2 trục analog `state.Gamepad.sThumbLX` và `sThumbLY` với Deadzone 16000 trong `_poll_loop` tại `backend/src/input/gamepad_service.py`, tự động ánh xạ sang `dpadUp`, `dpadDown`, `dpadLeft`, `dpadRight` kèm cơ chế hold-to-repeat.
-    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
-  + [24/10/2026 20:05] Khắc phục lỗi fake success dxva2 DDC/CI và chuyển sang WMI COM gốc:
-    Hiện tượng: Màn hình eDP tích hợp của Handheld (GPD WIN 4) không can thiệp được qua dxva2 DDC/CI, nhưng SetMonitorBrightness trả về 1 ảo làm backend bỏ qua tầng WMI ACPI; đồng thời thư viện wmi bên thứ 3 thiếu hụt trong PyInstaller bundle khiến lệnh WMI bị nuốt lỗi.
-    Code thực tế:
-      - `backend/src/hardware/brightness_service.py`: Thay thế hoàn toàn phụ thuộc thư viện ngoài `wmi` bằng kết nối WMI COM InParameters trực tiếp (`win32com.client.GetObject("winmgmts:\\.\root\wmi")` -> `WmiSetBrightness`) độ trễ 0ms kèm fallback PowerShell CIM.
-      - Siết chặt dxva2: Chỉ chấp nhận DDC/CI khi cả `GetMonitorBrightness` thành công (loại bỏ hoàn toàn fake success trên eDP). Ưu tiên số 1 của màn hình Handheld eDP chuyển thẳng sang WMI ACPI phần cứng.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
   + [24/10/2026 10:55] Tái cấu trúc module hóa QuickPanel & phân tán điều hướng Gamepad vào từng Tab:
     Code thực tế:
@@ -241,7 +291,7 @@
 
 ## 3. Điều chỉnh được TDP, Fan curves
 
-- [ ] **Quản lý công suất TDP & Cảm biến phần cứng**
+- [x] **Quản lý công suất TDP & Cảm biến phần cứng**
   + [Initial] Code thực tế: `backend/src/hardware/tdp_service.py` nạp driver Ring 0 `WinRing0x64.sys`, can thiệp công suất CPU Ryzen qua `libryzenadj.dll` (STAPM/Fast/Slow) kèm fallback CLI `ryzenadj.exe`. Thu thập telemetry nhiệt độ CPU và mức TDP thực tế, có fallback ước tính nhiệt độ qua % CPU của `psutil`.
     Tình trạng: Cơ chế gán công suất phần cứng: Hoạt động ổn định; Hiển thị telemetry Live TDP: **Còn lỗi** (Dữ liệu Live TDP đang bị trùng khớp với mức cài đặt của user, chưa thả nổi hiển thị đúng mức tiêu thụ TDP thực tế của chip).
   + [23/10/2026 22:50] Sửa lỗi Live TDP bị dính chết vào mức trần cài đặt:
@@ -306,6 +356,32 @@
       - Kiểm thử thực tế xác nhận công suất biến thiên tự nhiên: 3.3W - 5.0W khi nghỉ, 8W - 15W+ khi tải game.
       - Đóng gói PyInstaller và đồng bộ toàn diện vào `dist/windows_handheld_tool`.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [25/10/2026 11:05] Khắc phục lỗi Live TDP vượt quá giới hạn TDP đã cài & mất giới hạn sau khởi động lại:
+    Hiện tượng: Người dùng chỉnh giới hạn TDP (ví dụ cài 10W) nhưng Live TDP trên Panel/OSD vẫn hiển thị 13–15W khi tải, tức thiết bị không bị kẹp đúng mức đã cài; sau khi khởi động lại ứng dụng/máy, giới hạn cũ bị mất về mặc định BIOS.
+    Nguyên nhân:
+      - `set_tdp()` ghi Fast PPT = `watts + fast_offset(3)` khiến khi cài 10W thì Fast PPT = 13W. Vì RAPL đo công suất tức thời, APU boost ngắn hạn theo Fast PPT nhảy lên đúng `giới hạn + 3W`, gây hiểu nhầm "không giới hạn".
+      - Trên APU Rembrandt/Phoenix, giới hạn duy trì thực tế có thể do EC dùng "APU SLOW" (`set_apu_slow_limit`, lệnh SMU `0x23`) thay vì STAPM; code cũ chưa ghi tham số này.
+      - Không có cơ chế re-apply định kỳ nên EC/firmware có thể ghi đè ngược giới hạn; và app không re-apply TDP lúc khởi động nên sau reboot SMU reset về mặc định BIOS.
+      - `get_core_power` khai báo sai signature (thiếu tham số core index); `fast_limit` trong telemetry là số giả `last_set_tdp + 3` do `init_table=-5` khiến `get_fast_limit()` trả NAN.
+    Code thực tế:
+      - `backend/src/hardware/tdp_service.py`: Bỏ `fast_offset`, áp giới hạn phẳng `STAPM = Fast PPT = Slow PPT = APU SLOW = watts`. Tách hàm `_invoke_set` (log mã SMU trả về 0/-1/-3/-4) và `_write_limits_dll` (DRY, kèm `threading.Lock`). Bổ sung luồng nền `_reapply_worker` ghi lại giới hạn mỗi 5 giây chống EC ghi đè. Sửa signature `get_core_power` và fallback `fast_limit` (bỏ `+3`).
+      - `backend/src/bridge/web_bridge.py`: Bổ sung `_apply_persisted_tdp()` gọi ngay sau khi nạp driver để re-apply TDP đã lưu lúc khởi động.
+      - `backend/src/services/system_telemetry.py`: Chuẩn hóa `fast_limit = round(fast_limit)` (bỏ hardcode fallback 18).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 22:35] Đảo lại mô hình giới hạn công suất (bản 11:05 gây tụt FPS) + tách trạng thái Auto:
+    Hiện tượng: Sau khi áp "giới hạn phẳng" (mốc 11:05), Metro Exodus ở **cùng mức 15W** tụt từ 72-85 FPS xuống 26-44 FPS; đồng thời kéo slider TDP không có tác dụng và app tự kẹp 15W mỗi lần khởi động.
+    Nguyên nhân:
+      - `set_apu_slow_limit = watts` là giới hạn ngân sách **SoC/iGPU**: ép nó bằng STAPM làm iGPU bị bóp trong khi gói CPU vẫn bung (log ghi nhận `power` tới 28W dù "đặt 15W") → máy vẫn ăn điện nhưng FPS thấp.
+      - `fast = watts` (bỏ `+3W`) làm mất headroom burst → frame nặng tụt ngay.
+      - `_apply_persisted_tdp()` đọc `config.hardware.tdp.current` (mặc định 15, bị mỗi lần deploy ghi đè) nên mở app là kẹp về 15W; cộng thêm `tdp.auto = true` làm slider bị ẩn nên không thể nâng lại.
+    Code thực tế:
+      - `backend/src/hardware/tdp_service.py`: `_write_limits_dll` chỉ ghi `stapm = slow = target`, `fast = target + FAST_BURST_OFFSET_W (3)`, **không** ghi `set_apu_slow_limit`. Thêm `_state_path/_load_persisted_tdp/_save_persisted_tdp` lưu TDP vào `%LOCALAPPDATA%\WindowsHandheldTools\tdp_state.json`; `__init__` nạp lại giá trị này (chưa có thì đọc STAPM hiện tại từ SMU) để UI hiển thị đúng mức đang áp.
+      - `backend/src/bridge/web_bridge.py`: `_apply_persisted_tdp()` bỏ qua khi `tdp.auto = true` và chỉ áp giá trị người dùng đã lưu; `getInitialState()` trả `last_set_tdp` thay vì giá trị trong config.
+      - `frontend/lib/ui/tabs/performance_tab.dart`: slider TDP luôn hiển thị; kéo slider/preset tự đặt `tdp.auto = false`; `navigationLayout` luôn có mục slider.
+    Ghi chú hành vi (kiểm chứng bằng 462 mẫu telemetry khi chơi game): "TDP nhảy cao hơn mức đặt" là **bình thường** — `power` là công suất package tức thời (RAPL, cửa sổ ~1 giây), còn trần SMU là **trung bình STAPM** + burst Fast PPT (+3W). Tại mức 15W: trung bình 13,2W, đỉnh 16-18W trong vài giây. Quyết định **không** thêm hard-cap (`fast = stapm`) để giữ FPS.
+    Tình trạng: Hoạt động ổn định (đã xác nhận thực chiến 25/10 22:20).
+
 - [ ] **Điều khiển quạt tản nhiệt (Fan Control)**
   + [Initial] Code thực tế: `backend/src/hardware/fan_service.py` điều khiển quạt ASUS ROG Ally / Ally X qua giao diện WMI (`AsusAtkWmi_WMNB`). Luồng chạy ngầm tự động điều tốc quạt (Auto Fan Curve) chu kỳ 2 giây dựa trên bảng mốc nhiệt độ. Đã ngắt lệnh can thiệp cổng EC I/O trực tiếp (`0x6C/0x68`) để đảm bảo an toàn phần cứng.
     Tình trạng: Cơ chế điều tốc Auto và Manual slider: Hoạt động ổn định; Hiển thị telemetry Live Fan: **Còn lỗi** (Dữ liệu Live Fan đang bị trùng với giá trị cài đặt của user, chưa hiển thị thả nổi tốc độ quạt thực tế); Tùy biến đồ thị Fan Curve: Chưa có widget giao diện trên UI Flutter để người dùng kéo thả, tùy biến trực tiếp từng điểm mốc trên đồ thị Fan Curve.
@@ -443,6 +519,12 @@
     Code thực tế:
       - `backend/src/hardware/brightness_service.py`: Tái cấu trúc theo mô hình Multi-tier 3 tầng: Tầng 1 Win32 Native `dxva2.dll` (VESA DDC/CI) điều khiển trực tiếp phần cứng màn hình; Tầng 2 ACPI WMI cho màn hình Handheld eDP; Tầng 3 Win32 GDI `SetDeviceGammaRamp` (Software Dimming). Tự động đọc độ sáng thực tế ban đầu từ phần cứng; bổ sung worker ngầm có debounce tránh nghẽn I2C bus và luồng định kỳ 2s đồng bộ khi người dùng chỉnh từ Windows.
       - `frontend/lib/ui/quick_panel.dart`: Đăng ký listener trên `BridgeService.instance.brightness`, tự động cập nhật lại biến state khi nhận tín hiệu từ Windows; đồng bộ ngay lập tức khi mở panel (`_onOverlayVisibilityChanged`) và trong chu kỳ `_updateTelemetry`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [24/10/2026 20:05] Khắc phục lỗi fake success dxva2 DDC/CI và chuyển sang WMI COM gốc:
+    Hiện tượng: Màn hình eDP tích hợp của Handheld (GPD WIN 4) không can thiệp được qua dxva2 DDC/CI, nhưng SetMonitorBrightness trả về 1 ảo làm backend bỏ qua tầng WMI ACPI; đồng thời thư viện wmi bên thứ 3 thiếu hụt trong PyInstaller bundle khiến lệnh WMI bị nuốt lỗi.
+    Code thực tế:
+      - `backend/src/hardware/brightness_service.py`: Thay thế hoàn toàn phụ thuộc thư viện ngoài `wmi` bằng kết nối WMI COM InParameters trực tiếp (`win32com.client.GetObject("winmgmts:\\.\root\wmi")` -> `WmiSetBrightness`) độ trễ 0ms kèm fallback PowerShell CIM.
+      - Siết chặt dxva2: Chỉ chấp nhận DDC/CI khi cả `GetMonitorBrightness` thành công (loại bỏ hoàn toàn fake success trên eDP). Ưu tiên số 1 của màn hình Handheld eDP chuyển thẳng sang WMI ACPI phần cứng.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [ ] **Âm lượng hệ thống & Tắt tiếng (Volume & Mute)**

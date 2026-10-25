@@ -128,7 +128,14 @@ class PerformanceTabState extends State<PerformanceTab>
   }
 
   void _updateTdp(int val) {
-    setState(() => _tdp = val);
+    final wasAuto = _tdpAuto;
+    setState(() {
+      _tdp = val;
+      // Chỉnh TDP thủ công luôn chuyển sang chế độ thủ công; nếu không, slider bị ẩn
+      // và người dùng tưởng đã đặt TDP nhưng backend không nhận được lệnh nào.
+      _tdpAuto = false;
+    });
+    if (wasAuto) widget.config?.set("hardware.tdp.auto", false);
     _tdpCtrl.setValue(val);
     widget.config?.set("hardware.tdp.current", val);
   }
@@ -178,7 +185,7 @@ class PerformanceTabState extends State<PerformanceTab>
   @override
   List<List<int>> get navigationLayout => [
         const [0],
-        if (!_tdpAuto) const [1],
+        const [1],
         const [2],
         if (!_fanAuto) ...[
           const [3],
@@ -193,9 +200,7 @@ class PerformanceTabState extends State<PerformanceTab>
         _toggleTdpAuto();
         break;
       case 1:
-        if (!_tdpAuto) {
-          cyclePreset(const [10, 15, 20, 25, 30], _tdp, 1, _updateTdp);
-        }
+        cyclePreset(const [10, 15, 20, 25, 30], _tdp, 1, _updateTdp);
         break;
       case 2:
         _toggleFanAuto();
@@ -217,11 +222,9 @@ class PerformanceTabState extends State<PerformanceTab>
   void onGamepadAdjustSlider(int focusedIndex, int direction) {
     switch (focusedIndex) {
       case 1:
-        if (!_tdpAuto) {
-          _updateTdp(
-            (_tdp + direction * _tdpCtrl.step).clamp(_tdpCtrl.minVal, _tdpCtrl.maxVal),
-          );
-        }
+        _updateTdp(
+          (_tdp + direction * _tdpCtrl.step).clamp(_tdpCtrl.minVal, _tdpCtrl.maxVal),
+        );
         break;
       case 4:
         if (!_fanAuto && _fanProfile == 'custom') {
@@ -273,9 +276,9 @@ class PerformanceTabState extends State<PerformanceTab>
           currentValue: _liveTdp,
           currentColor: AppTheme.tdp,
           accentColor: AppTheme.tdp,
-          quickPresets: _tdpAuto ? null : const [10, 15, 20, 25, 30],
+          quickPresets: const [10, 15, 20, 25, 30],
           onChanged: _updateTdp,
-          shouldShowSlider: !_tdpAuto,
+          shouldShowSlider: true,
           isFocused: focusedIndex == 1,
           isWarning: !_tdpCtrl.isAvailable() || _tdpCtrl.isHvciBlocked(),
           warningTooltip: _tdpCtrl.isHvciBlocked()
