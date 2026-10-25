@@ -4,6 +4,7 @@ from PySide6.QtCore import QObject, Signal, Slot, QRect, QTimer
 from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QGuiApplication
 from src.core.logger import setup_logger
+from src.core.config import ConfigManager
 from src.services.game_compat_service import GameCompatService
 
 logger = setup_logger("WindowManager")
@@ -202,6 +203,8 @@ class WindowManager(QObject):
         self.panel_width = 380
         self.current_band = ZBID_DESKTOP
         self._panel_active_event = None
+        self._shutdown_event = None
+        self._match_mode_event = None
         self._sec_attr = None
         self._init_panel_event()
 
@@ -259,8 +262,41 @@ class WindowManager(QObject):
                 logger.info(f"[SEAMLESS-1.10] Đã khởi tạo Named Event HandheldTool_PanelActive (Handle={self._panel_active_event})")
             else:
                 logger.error(f"[SEAMLESS-1.10] Không thể tạo Named Event HandheldTool_PanelActive (Err={kernel32.GetLastError()})")
+
+            # Named Event báo cho dxgi_hook.dll trong tiến trình game biết tool đã thoát hẳn,
+            # để hook chuyển sang chế độ pass-through và trả quyền điều khiển cửa sổ lại cho game.
+            self._shutdown_event = kernel32.CreateEventW(p_sa, True, False, "Global\\HandheldTool_Shutdown")
+            if not self._shutdown_event:
+                err = kernel32.GetLastError()
+                logger.warning(f"[SEAMLESS-1.10] CreateEventW Global\\HandheldTool_Shutdown thất bại (Err={err}), thử session cục bộ...")
+                self._shutdown_event = kernel32.CreateEventW(p_sa, True, False, "HandheldTool_Shutdown")
+
+            if self._shutdown_event:
+                logger.info(f"[SEAMLESS-1.10] Đã khởi tạo Named Event HandheldTool_Shutdown (Handle={self._shutdown_event})")
+            else:
+                logger.error(f"[SEAMLESS-1.10] Không thể tạo Named Event HandheldTool_Shutdown (Err={kernel32.GetLastError()})")
+
+            self._init_match_display_mode_event(p_sa)
         except Exception as e:
             logger.error(f"[SEAMLESS-1.10] Lỗi khởi tạo Named Event: {e}")
+
+    def _init_match_display_mode_event(self, p_sa):
+        """Tạo Named Event báo cho hook biết được phép hạ display mode khớp độ phân giải render.
+
+        Chỉ tạo khi `dxgi_hook.match_display_mode = true`; hook chỉ cần sự tồn tại + trạng thái signaled.
+        """
+        if not bool(ConfigManager().get("dxgi_hook", "match_display_mode", default=True)):
+            return
+        try:
+            self._match_mode_event = kernel32.CreateEventW(p_sa, True, True, "Global\\HandheldTool_MatchDisplayMode")
+            if not self._match_mode_event:
+                self._match_mode_event = kernel32.CreateEventW(p_sa, True, True, "HandheldTool_MatchDisplayMode")
+            if self._match_mode_event:
+                logger.info("[SEAMLESS-1.13] Bật khớp display mode theo độ phân giải render (match_display_mode=True)")
+            else:
+                logger.error(f"[SEAMLESS-1.13] Không thể tạo Named Event HandheldTool_MatchDisplayMode (Err={kernel32.GetLastError()})")
+        except Exception as e:
+            logger.error(f"[SEAMLESS-1.13] Lỗi khởi tạo Named Event MatchDisplayMode: {e}")
 
     def _init_win32_attributes(self):
         # 1.3. Kiểm tra trạng thái DWM Composition
@@ -637,6 +673,13 @@ class WindowManager(QObject):
 
     def cleanup(self):
         """Dọn dẹp tài nguyên và giải phóng Named Event [SEAMLESS-1.10]"""
+        if self._shutdown_event:
+            try:
+                kernel32.SetEvent(self._shutdown_event)
+                logger.info("[SEAMLESS-1.10] SetEvent(HandheldTool_Shutdown): báo hook trong game chuyển sang pass-through")
+            except Exception as e:
+                logger.warning(f"[SEAMLESS-1.10] Lỗi SetEvent HandheldTool_Shutdown: {e}")
+
         if self._panel_active_event:
             try:
                 kernel32.ResetEvent(self._panel_active_event)
@@ -645,3 +688,20 @@ class WindowManager(QObject):
                 self._panel_active_event = None
             except Exception as e:
                 logger.warning(f"[SEAMLESS-1.10] Lỗi CloseHandle Named Event: {e}")
+
+        if self._shutdown_event:
+            try:
+                kernel32.CloseHandle(self._shutdown_event)
+                logger.info("[SEAMLESS-1.10] Đã giải phóng handle Named Event HandheldTool_Shutdown")
+                self._shutdown_event = None
+            except Exception as e:
+                logger.warning(f"[SEAMLESS-1.10] Lỗi CloseHandle HandheldTool_Shutdown: {e}")
+
+        if self._match_mode_event:
+            try:
+                kernel32.ResetEvent(self._match_mode_event)
+                kernel32.CloseHandle(self._match_mode_event)
+                logger.info("[SEAMLESS-1.13] Đã giải phóng handle Named Event HandheldTool_MatchDisplayMode")
+                self._match_mode_event = None
+            except Exception as e:
+                logger.warning(f"[SEAMLESS-1.13] Lỗi CloseHandle HandheldTool_MatchDisplayMode: {e}")

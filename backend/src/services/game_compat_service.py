@@ -6,6 +6,7 @@ from ctypes import wintypes
 from typing import Callable, Optional, Set, List
 from PySide6.QtCore import QObject
 from src.core.logger import setup_logger
+from src.core.config import ConfigManager
 
 logger = setup_logger("GameCompatService")
 
@@ -302,6 +303,13 @@ class GameCompatService(QObject):
         has_priv = enable_debug_privilege()
         logger.info(f"[INJECTOR] Khởi tạo GameCompatService: SeDebugPrivilege={has_priv}")
 
+        # Cấu hình hook: cho phép bật/tắt tiêm DLL và ép Borderless ngay từ config.json
+        # để A/B test mà không cần quyền admin hay đổi tên tệp trong Program Files.
+        config = ConfigManager()
+        self.hook_enabled = bool(config.get("dxgi_hook", "enabled", default=True))
+        self.auto_borderless = bool(config.get("dxgi_hook", "auto_borderless", default=True))
+        logger.info(f"[SEAMLESS-COMPAT] Cấu hình Hook: enabled={self.hook_enabled}, auto_borderless={self.auto_borderless}")
+
     def get_dxgi_hook_dll_path(self) -> str:
         """Xác định đường dẫn tuyệt đối của tệp dxgi_hook.dll"""
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -453,24 +461,29 @@ class GameCompatService(QObject):
         modified = False
         try:
             # 1. Cấu hình AppCompatFlags\Layers:
-            # - Chỉ gỡ bỏ DISABLEDXMAXIMIZEDWINDOWEDMODE (nếu có) để Windows bật Fullscreen Optimizations DWM Flip.
-            # - Không ghi cờ DPI nhân tạo vì tiến trình game hiện đại đều tự mang manifest Per-Monitor V2 hợp lệ.
+            # - Chỉ gỡ bỏ đúng token DISABLEDXMAXIMIZEDWINDOWEDMODE (nếu có) để Windows bật Fullscreen
+            #   Optimizations / DWM Flip.
+            # - Giữ nguyên mọi shim khác (PERMONITORV2, HIGHDPIAWARE, RUNASADMIN...) vì chúng điều khiển
+            #   nhận thức DPI của tiến trình game. Xoá PERMONITORV2 sẽ khiến game bị DPI ảo hoá 1,75×
+            #   (cửa sổ lớn hơn render buffer, lệch chuột và mất hiệu năng).
             layers_path = r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers"
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, layers_path, 0, winreg.KEY_READ | winreg.KEY_WRITE) as k:
                 try:
                     val, _ = winreg.QueryValueEx(k, exe_path)
-                    cleaned = val.replace("DISABLEDXMAXIMIZEDWINDOWEDMODE", "").replace("PERMONITORV2", "").replace("~", "").strip()
-                    if not cleaned:
+                    tokens = val.split()
+                    kept = [t for t in tokens if t.upper() != "DISABLEDXMAXIMIZEDWINDOWEDMODE"]
+                    new_val = " ".join(kept).strip()
+
+                    if new_val in ("", "~"):
                         try:
                             winreg.DeleteValue(k, exe_path)
                             logger.info(f"[SEAMLESS-COMPAT] Đã xóa giá trị AppCompatFlags thừa cho {exe_path}")
                             modified = True
                         except FileNotFoundError:
                             pass
-                    elif cleaned != val.replace("~", "").strip():
-                        new_val = "~ " + cleaned
+                    elif new_val != val.strip():
                         winreg.SetValueEx(k, exe_path, 0, winreg.REG_SZ, new_val)
-                        logger.info(f"[SEAMLESS-COMPAT] Cập nhật AppCompatFlags cho {exe_path}: '{val}' -> '{new_val}'")
+                        logger.info(f"[SEAMLESS-COMPAT] Đã gỡ cờ tắt FSO cho {exe_path}: '{val}' -> '{new_val}'")
                         modified = True
                 except FileNotFoundError:
                     pass
@@ -622,16 +635,22 @@ class GameCompatService(QObject):
             self.optimize_fso_registry(exe_path)
 
 
-            # 1.8. Tiêm dxgi_hook.dll vào tiến trình trò chơi
-            self.inject_dxgi_hook(pid)
+            # 1.8. Tiêm dxgi_hook.dll vào tiến trình trò chơi (bỏ qua nếu tắt trong config)
+            if self.hook_enabled:
+                self.inject_dxgi_hook(pid)
+            else:
+                logger.info("[SEAMLESS-COMPAT] dxgi_hook.enabled=False -> bỏ qua tiêm DLL")
 
             if hwnd:
                 self.restore_if_minimized(hwnd)
-                self.convert_to_borderless(hwnd, screen_w, screen_h)
-                # Cơ chế Delayed Enforcement chỉ kích hoạt 1 lần duy nhất khi game vừa khởi chạy
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(400, lambda: self.convert_to_borderless(hwnd, screen_w, screen_h))
-                QTimer.singleShot(1200, lambda: self.convert_to_borderless(hwnd, screen_w, screen_h))
+                if self.auto_borderless:
+                    self.convert_to_borderless(hwnd, screen_w, screen_h)
+                    # Cơ chế Delayed Enforcement chỉ kích hoạt 1 lần duy nhất khi game vừa khởi chạy
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(400, lambda: self.convert_to_borderless(hwnd, screen_w, screen_h))
+                    QTimer.singleShot(1200, lambda: self.convert_to_borderless(hwnd, screen_w, screen_h))
+                else:
+                    logger.info("[SEAMLESS-COMPAT] dxgi_hook.auto_borderless=False -> giữ nguyên cửa sổ game")
         else:
             # Game đã tối ưu trước đó: chỉ khôi phục nếu game bị thu nhỏ
             if hwnd:

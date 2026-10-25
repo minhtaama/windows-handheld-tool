@@ -75,6 +75,97 @@
   + [Initial] Code thực tế: `backend/src/services/game_compat_service.py` cài đặt `SetWinEventHook` bắt `EVENT_SYSTEM_FOREGROUND` tự động nhận diện game (lọc bỏ tiến trình hệ thống qua `NON_GAME_PROCESSES` và đường dẫn thư viện Steam/Epic/Xbox). Kích hoạt `SeDebugPrivilege` và tiêm `dxgi_hook.dll` vào game 64-bit qua `VirtualAllocEx` + `WriteProcessMemory` + `CreateRemoteThread(LoadLibraryW)`. Tự động dọn cờ tắt FSO trong Registry (`AppCompatFlags\Layers` và `GameConfigStore`) để duy trì Composed Flip mượt mà. Bắt `EVENT_SYSTEM_MINIMIZESTART` tự động khôi phục game (`SW_RESTORE`) nếu game cố thu nhỏ khi panel mở (kèm debounce chống lặp).
     Tình trạng: Hoạt động ổn định.
 
+- [x] **Metro Exodus (4A Engine) tự hạ FPS xuống 15 khi công cụ đang chạy**
+  + [Initial] Hiện tượng: Khi Windows Handheld Tool đang chạy, Metro Exodus (cửa sổ `4A Engine`) tự giới hạn khoảng 15 FPS như thể engine cho rằng ứng dụng đã mất tiêu điểm; đóng panel (chỉ còn cửa sổ xuyên thấu) vẫn bị, tức thủ phạm tồn tại liên tục chứ không phải thao tác mở/đóng panel.
+    Bằng chứng đã thu thập (log tại `%LOCALAPPDATA%\WindowsHandheldTools\logs`):
+      - `app.log`: không có bất kỳ dòng `[SEAMLESS-1.6] Bắt WM_ACTIVATE` nào → panel chưa bao giờ được activate; chỉ có `WM_MOUSEACTIVATE → MA_NOACTIVATE`.
+      - `dxgi_diag.log`: suốt thời gian panel mở (01:53:29-01:53:37, 01:56:06-01:56:21) hook trong tiến trình game ghi `Fg=1` → `GetForegroundWindow()` vẫn trả về HWND của game. Vì vậy tín hiệu "mất focus" không đến từ `WM_ACTIVATE`/`WM_ACTIVATEAPP`.
+      - `dxgi_hook.cpp` chưa hook `Present` nên log chưa có nhịp khung hình thực tế để đối chiếu.
+      - `config.json` có khóa `dxgi_hook.enabled` nhưng `GameCompatService` không đọc → DLL luôn bị tiêm, không thể A/B test bằng cấu hình.
+  + [25/10/2026 02:13] Bổ sung chẩn đoán 1.12 (chỉ đo, không đổi hành vi của hook):
+    Code thực tế:
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp`: Hook `IDXGISwapChain::Present` (VMT slot 8) và `IDXGISwapChain1::Present1` (VMT slot 22) bằng MinHook; ghi nhận `HRESULT`, `SyncInterval`, `PresentFlags`, khoảng thời gian giữa 2 lần Present (QPC) và thống kê `ok/occluded/failed`.
+      - Ghi dòng `[FPS] fps=.. avgFrame=.. maxFrame=.. hr[ok/occ/fail] lastHr=.. syncInt=.. flags=.. PanelActive=.. Fg=.. SWFlags=.. BufCount=.. Overlays=..` mỗi giây khi FPS < 40 hoặc khi có `DXGI_STATUS_OCCLUDED`/Present lỗi, và mỗi 10 giây ở trạng thái bình thường.
+      - `DiagSnapshot` bổ sung `GetGUIThreadInfo` của luồng UI game (`hwndActive`, `hwndFocus`, `hwndCapture`, `hwndMenuOwner`, `flags`) cùng `FgHwnd`, đủ để phân biệt "mất activation" với "mất keyboard focus/capture".
+      - `GameSubclassWndProc` ghi log `[MSG]` cho toàn bộ thông điệp kích hoạt/tiêu điểm mà engine thật sự nhận (`WM_ACTIVATE`, `WM_ACTIVATEAPP`, `WM_KILLFOCUS`, `WM_SETFOCUS`, `WM_NCACTIVATE`, `WM_CANCELMODE`, `WM_SHOWWINDOW`, `WM_SIZE`, `WM_SYSCOMMAND`, `WM_ENTERMENULOOP`...), giới hạn 60 dòng/giây.
+      - Ghi log `[SWAPCHAIN]` (buffer, `SwapEffect`, `Flags`, `ALLOW_TEARING`), `[DISPMODE]` (`ChangeDisplaySettingsExW` thành công/thất bại) và `[BORDERLESS]` (thời điểm đổi style/vị trí cửa sổ game) để đối chiếu mốc thời gian với lúc FPS tụt.
+      - Thêm bộ đếm `Overlays=` quét các cửa sổ `WS_EX_LAYERED | WS_EX_NOACTIVATE` đang hiện diện (kèm PID + rect) để biết panel còn nằm trên màn hình hay không, dù Named Event `PanelActive=0`.
+      - `backend/native/dxgi_hook/build.bat`: biên dịch lại thành công `backend/bin/dxgi_hook.dll` (MSVC x64, 45.056 bytes).
+    Tình trạng: Đã bổ sung công cụ chẩn đoán trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 02:30] Kết quả đo lần 1 (Metro Exodus Enhanced Edition, 187 mẫu `[FPS]` trong 02:22-02:26):
+    Số liệu thực đo:
+      - Panel ĐANG mở (`PanelActive=1`): 27 mẫu, FPS trung vị **13,0** (10,9-15,0).
+      - Panel ĐÓNG, app còn chạy (`Overlays=1`): 130 mẫu, trung vị **29,9** (6,9-46,3).
+      - Đã thoát hẳn app (`Overlays=0`): 29 mẫu, trung vị **24,1** (6,7-46,2).
+      - Toàn bộ 187 mẫu: `occ=0`, `fail=0`, `syncInt=0`, `flags=0` → không có `DXGI_STATUS_OCCLUDED`, không có Present lỗi.
+    Kết luận: **panel không phải nguyên nhân gây tụt FPS**. Bằng chứng:
+      - Tại mọi lần `PANEL_OPEN`, engine vẫn giữ `Fg=1`, `Active=<HWND game>`, `Focus=<HWND game>`, `Capture=0`, và **không có** thông điệp `WM_ACTIVATE`/`WM_ACTIVATEAPP`/`WM_KILLFOCUS` nào được gửi tới cửa sổ game.
+      - FPS đã tụt từ 39,4 (02:24:08) xuống 12,7 (02:24:26) **trước khi panel mở lần đầu** (02:24:28), và vẫn giữ 13-14 suốt 13 giây **sau khi panel đóng** (02:24:43-02:24:55).
+      - Sau khi thoát hẳn app (`Overlays=0`) FPS vẫn 22-25 → không liên quan tới cửa sổ panel.
+    Dạng suy giảm thực tế: 39,4 → 13 trong ~19 giây, giữ phẳng ở 13; sau đó game mất focus 8 giây (02:25:20-02:25:28, `WM_ACTIVATEAPP=0`) rồi lấy lại focus → FPS bùng lên 39,8 rồi lại tụt dần về ~23. Đây là dấu hiệu **throttle công suất/nhiệt (STAPM/thermal)**, không phải mất focus.
+    Nguyên nhân khả dĩ: công cụ đã ghi SMU `STAPM=15W / slow=15W / fast=18W` lúc 00:05 (`set_tdp(15)`, `fast_offset=+3`); các giới hạn này nằm trong SMU nên phiên 02:20 không cần set lại. Quạt khởi tạo `balanced`, auto, 50%.
+    Code thực tế (chỉ bổ sung đo):
+      - `backend/src/bridge/web_bridge.py`: ghi `[TELEMETRY] cpu=..% temp=..C power=..W fast_limit=..W fan=..% fan_auto=.. fan_profile=.. fps=.. game=..` vào `app.log` mỗi 5 giây (`_diag_tick`) để đối chiếu cùng mốc thời gian với các dòng `[FPS]` của `dxgi_diag.log`.
+    Tình trạng: Đã bổ sung công cụ chẩn đoán trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định). (Số liệu trên đã được thay thế bằng kết luận ở mốc 03:02 bên dưới.)
+
+  + [25/10/2026 03:02] Chốt nguyên nhân thật: **display mode sync trong `e167952`**, không phải panel/focus/TDP. Đã revert.
+    Bằng chứng:
+      - `git log -S"ChangeDisplaySettings"` → **chỉ duy nhất commit `e167952`** ("fix amd rsr features", hôm nay) có lời gọi `ChangeDisplaySettingsExW`. Bản `07ac67a` (819 dòng hook) có **0** lời gọi → đó là bản chơi 60 fps, RSR vẫn upscale bằng đường driver.
+      - Người dùng xác nhận thực tế: tắt tool nhưng DLL đã tiêm thì vẫn bám trong tiến trình game → display mode bị trả về 1920x1080 nhưng cửa sổ game giữ kích thước 1280x720 → game chỉ hiện **1 góc màn hình**; restart PC (không còn DLL) → game vào fullscreen thật và **mượt**.
+      - Đo phiên 35W (174 mẫu `[FPS]`, PID 1988): avg 21,8 fps, 116/174 mẫu < 25 fps, cực đại 51,8 → nâng 15W → 35W **không cải thiện**, nên TDP không phải nút thắt.
+      - Phiên 35W: `PanelActive` không tương quan FPS; không có `WM_ACTIVATE`/`WM_ACTIVATEAPP` nào khi panel mở; `occ=0`, `fail=0`.
+    Code thực tế:
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp`: xoá toàn bộ `QueryNativeDisplayResolution`, `RestoreNativeDisplayMode`, `ApplyDynamicDisplayMode`, 4 biến `g_uNative*`/`g_bDisplayModeSwitched`, 8 điểm gọi và nhánh `WM_ACTIVATEAPP`/`WM_DESTROY` có đổi display mode. Giữ lại subclass (chỉ siết borderless khi game lấy lại activation) và toàn bộ hook cũ (chuột, XInput, swapchain, fullscreen).
+      - `backend/src/services/game_compat_service.py`: đọc `dxgi_hook.enabled` (bỏ qua tiêm DLL) và `dxgi_hook.auto_borderless` (bỏ qua `convert_to_borderless`) từ `config.json` để A/B test không cần quyền admin.
+      - `backend/native/dxgi_hook/build.bat`: build lại `backend/bin/dxgi_hook.dll` (MSVC x64, 42.496 bytes); kiểm tra binary không còn chuỗi `ChangeDisplaySettings`.
+    Ghi chú: đường RSR trong borderless (nếu cần lại) là ghi cờ `upscaling_use_borderless = TRUE` + `upscaling_target_resolution` vào `gmdb.blb` của AMD (đúng cách đã từng chạy ở mục 24/10 20:05), **không** dùng display mode.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 09:23] Hoàn tất phần còn lại: hook tự tắt khi thoát tool + không xoá cờ DPI của game.
+    Code thực tế:
+      - `backend/src/overlay/window_manager.py`: tạo Named Event `Global\HandheldTool_Shutdown` (SDDL Everyone) trong `_init_panel_event()` và `SetEvent` trong `cleanup()` trước khi đóng handle.
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp`: thêm `IsShutdownRequested()` (diag thread kiểm tra 1 Hz) và `IsHookInert()` (cờ cache cho đường nóng). Khi event bật: `ForceBorderlessWindow` ngừng can thiệp, `GetCursorMappingParams` trả `false` (thôi ánh xạ chuột), `Hooked_XInputGetState` thôi zero state, `GameSubclassWndProc` forward nguyên xi, diag thread dừng và ghi `[SHUTDOWN]`. **Không** gọi `MH_DisableHook` (rủi ro deadlock khi luồng render đang nằm trong detour) — hook ở lại dưới dạng pass-through.
+      - `backend/src/services/game_compat_service.py::optimize_fso_registry`: chỉ gỡ đúng token `DISABLEDXMAXIMIZEDWINDOWEDMODE`, **giữ nguyên** `PERMONITORV2`/`HIGHDPIAWARE` và các shim khác. Trước đây hàm này xoá sạch cả `PERMONITORV2` lẫn dấu `~`, khiến game bị DPI ảo hoá 1,75× (cửa sổ lớn hơn render buffer → lệch chuột + mất hiệu năng).
+      - Build lại `backend/bin/dxgi_hook.dll` (MSVC x64, 42.496 bytes): có chuỗi `HandheldTool_Shutdown`/`[SHUTDOWN]`, **không** còn `ChangeDisplaySettings`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 09:41] Chống "khoá nhịp" 60 ↔ 30 fps của cửa sổ Borderless (bật tearing).
+    Hiện tượng: Metro Exodus đã về 60 fps nhưng luân phiên từng đợt dài đúng **30,0 fps** (`avgFrame=33,3ms`, `presents=30/s`), xen kẽ các đợt 51-60 fps → cảm giác sụt giật.
+    Nguyên nhân kỹ thuật: swapchain flip 2 buffer + `Present(syncInterval=0)` vẫn bị DWM khoá vào nhịp composition 60Hz. Khi frame time chỉ hơn 16,67ms một chút, mọi frame bị đẩy sang vblank kế tiếp → khoá đúng 30 fps (đúng như khi chạy exclusive fullscreen thì mượt, vì không qua composition).
+    Code thực tế:
+      - `backend/native/dxgi_hook/src/dxgi_hook.h`: thêm `<dxgi1_5.h>` (định nghĩa `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING`).
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp`: `Hooked_CreateSwapChainForHwnd` thêm `ALLOW_TEARING` cho swapchain **FLIP** (tự tạo lại không tearing nếu driver/OS từ chối → không bao giờ làm hỏng game); `Hooked_Present`/`Hooked_Present1` thêm `DXGI_PRESENT_ALLOW_TEARING` khi `syncInterval == 0`, tự tắt tearing + trình bày lại kiểu cũ nếu DXGI trả lỗi; ghi log `[TEARING]`.
+      - Build lại `backend/bin/dxgi_hook.dll` (MSVC x64, 43.520 bytes).
+    Đánh đổi: frame time 17-20ms sẽ ra 50-58 fps liên tục (thay vì 60/30 nhảy từng đợt) và có thể thấy tearing nhẹ. Phương án thay thế nếu không thích tearing: ép `BufferCount = 3` (triple buffering, không tearing, chỉ còn judder nhẹ).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 09:58] Sửa lỗi game không phủ kín màn hình (ảnh chỉ chiếm đúng vùng 1280x720).
+    Hiện tượng: Sau khi bật tearing, FPS > 60 và rất mượt nhưng hình chỉ nằm trong vùng 1280x720 thay vì phủ 1920x1080.
+    Chẩn đoán từ log (PID 15936): cửa sổ game **đã đúng** 1920x1080 (`Window=(0,0,1920,1080)`, `DwmFrame=(0,0,1920,1080)`, `Client=1920x1080`), nhưng backbuffer chỉ 1280x720 (`Scale(Client/Buffer)=1.500`) và ảnh vẽ 1:1 ở góc. Nguyên nhân: hook cũ đổi `DXGI_SCALING_NONE` -> `DXGI_SCALING_ASPECT_RATIO_STRETCH`, nhưng `ASPECT_RATIO_STRETCH` chỉ hợp lệ cho composition swapchain; với swapchain hwnd nó bị xử lý như `NONE` → không phóng to.
+    Code thực tế:
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp::Hooked_CreateSwapChainForHwnd`: ép `Scaling = DXGI_SCALING_STRETCH` (0) cho swapchain hwnd để presenter phóng backbuffer phủ kín client area; log `[SCALING]`.
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp::Hooked_ResizeBuffers`: giữ `ALLOW_TEARING` qua mọi lần `ResizeBuffers` (nếu rơi cờ này, `Present(ALLOW_TEARING)` lỗi và game quay lại khoá nhịp 60 ↔ 30 fps).
+      - Build lại `backend/bin/dxgi_hook.dll` (MSVC x64, 43.520 bytes).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 10:19] C1: khớp display mode với độ phân giải render (tuỳ chọn, mặc định TẮT).
+    Hiện tượng: Sau khi phủ kín màn hình (backbuffer 720p trong cửa sổ 1080p), game khựng 100-900ms (14/29 mẫu > 100ms, đỉnh 935ms) trong khi phiên 1:1 trước đó chỉ có `maxFrame` 15ms. Đổi độ phân giải render trong game lên 1920x1080 thì hết khựng.
+    Nguyên nhân: buffer ≠ cửa sổ → DWM không được dùng independent flip, mỗi frame phải chạy pass scale 720p→1080p trong composition; kết hợp tearing (`syncInterval=0`, 2 buffer) làm hàng đợi dồn và `Present` bị chặn. Khi buffer = cửa sổ = màn hình thì không còn pass scale.
+    Giải pháp: hạ **display mode** xuống đúng độ phân giải render để game 1:1 với buffer, phần phóng lên tấm nền do scaler phần cứng / AMD RSR đảm nhận (không tốn GPU của game).
+    Code thực tế:
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp`: thêm `MatchDisplayModeToBuffer()` (chỉ hạ mode, lưu mode gốc từ registry để chống trường hợp lần chạy trước crash), `RestoreDisplayMode()` gọi ở `WM_DESTROY`, ở nhánh shutdown (Named Event) và trong `ShutdownDxgiHook()`. Hook 6 điểm gọi trước `ForceBorderlessWindow` (swapchain factory + x3 `ResizeBuffers/ResizeTarget/SetFullscreenState`). Bật/tắt bằng Named Event `HandheldTool_MatchDisplayMode` do app tạo.
+      - `backend/src/overlay/window_manager.py`: `_init_match_display_mode_event()` tạo event khi `dxgi_hook.match_display_mode = true`, giải phóng trong `cleanup()`.
+      - `backend/src/core/config.py` + `backend/config.json`: thêm khoá `dxgi_hook.match_display_mode` (mặc định `false`).
+      - Build lại `backend/bin/dxgi_hook.dll` (MSVC x64, 45.056 bytes).
+    Đánh đổi: nháy đen ~1s khi vào/thoát game (đổi mode); nếu app bị kill cứng thì mode có thể còn 720p cho tới lần chạy sau (hook tự khôi phục khi game đóng).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [25/10/2026 10:45] Người dùng xác nhận hoạt động ổn định — đóng item:
+    - `dxgi_hook.match_display_mode` được chuyển mặc định **true** (trước đó false) để bật luôn mà không cần sửa config tay (`backend/config.json`, `config.py`, `window_manager.py`).
+    - Kết quả thực tế: game phủ kín màn hình, fps cao và không còn khựng; display mode tự khôi phục khi thoát.
+    Tình trạng: Hoạt động ổn định (đã xác nhận thực chiến).
+
 - [ ] **Xung đột phần cứng EC & Đồng bộ tọa độ chuột khi render lệch phân giải**
   + [Initial] Code thực tế: Vô hiệu hóa hoàn toàn lệnh ghi mù cổng EC I/O `0x6C / 0x68` trong `FanService` (loại bỏ dứt điểm hiện tượng nghẽn bus phần cứng gây giật lag máy, đơ GPU và Black Screen Kernel-Power Event 41). Đồng bộ tọa độ chuột đa tỉ lệ Client / Buffer: `dxgi_hook.cpp` duy trì hook 4 điểm (`Hooked_GetCursorPos`, `Hooked_SetCursorPos`, `Hooked_GetMessagePos` và ánh xạ `lParam` trong `PeekMessageW`/`GetMessageW`) theo ma trận `Buffer / Client`. `window_manager.py` gọi `ClipCursor(None)` khi mở panel.
     Tình trạng thực tế: Trên *Dead Island 2* và game DirectX chuẩn: Hoạt động hoàn toàn ổn định; Trên *Ready Or Not* (Unreal Engine): **Vẫn chưa khắc phục được** (con trỏ chuột và vùng tương tác hit-test của Slate UI vẫn bị lệch nhau, rê chuột lệch vị trí thì nút mới sáng và thao tác click menu chưa ăn khớp).

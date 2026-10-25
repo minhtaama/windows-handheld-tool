@@ -26,11 +26,6 @@ static std::atomic<HWND> g_hGameWnd(nullptr);
 static std::atomic<UINT> g_uBufferWidth(0);
 static std::atomic<UINT> g_uBufferHeight(0);
 
-// Quản lý độ phân giải màn hình động phục vụ tự động kích hoạt AMD RSR
-static std::atomic<UINT> g_uNativeWidth(0);
-static std::atomic<UINT> g_uNativeHeight(0);
-static std::atomic<UINT> g_uNativeRefreshRate(0);
-static std::atomic<bool> g_bDisplayModeSwitched(false);
 static std::atomic<HWND> g_hHookedGameWnd(nullptr);
 static WNDPROC g_pOrigGameWndProc = nullptr;
 
@@ -48,6 +43,9 @@ typedef HRESULT (WINAPI* PFN_CreateDXGIFactory2)(UINT Flags, REFIID riid, void**
 typedef HRESULT (STDMETHODCALLTYPE* PFN_ResizeBuffers)(IDXGISwapChain* This, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags);
 typedef HRESULT (STDMETHODCALLTYPE* PFN_ResizeTarget)(IDXGISwapChain* This, const DXGI_MODE_DESC* pNewTargetParameters);
 
+typedef HRESULT (STDMETHODCALLTYPE* PFN_Present)(IDXGISwapChain* This, UINT SyncInterval, UINT PresentFlags);
+typedef HRESULT (STDMETHODCALLTYPE* PFN_Present1)(IDXGISwapChain1* This, UINT SyncInterval, UINT PresentFlags, const DXGI_PRESENT_PARAMETERS* pPresentParameters);
+
 typedef DWORD (WINAPI* PFN_XInputGetState)(DWORD dwUserIndex, XINPUT_STATE* pState);
 
 static PFN_SetFullscreenState g_pOrigSetFullscreenState = nullptr;
@@ -61,8 +59,77 @@ static PFN_CreateDXGIFactory2 g_pOrigCreateDXGIFactory2 = nullptr;
 
 static PFN_ResizeBuffers g_pOrigResizeBuffers = nullptr;
 static PFN_ResizeTarget g_pOrigResizeTarget = nullptr;
+static PFN_Present g_pOrigPresent = nullptr;
+static PFN_Present1 g_pOrigPresent1 = nullptr;
 static PFN_XInputGetState g_pOrigXInputGetState = nullptr;
 static HANDLE g_hPanelActiveEvent = nullptr;
+
+// Cờ tắt an toàn: khi tool thoát, toàn bộ hook chuyển sang chế độ "pass-through" (không sửa hành vi
+// của game nữa) thay vì tháo MinHook — MH_DisableHook có thể deadlock nếu luồng render đang chạy
+// bên trong một detour tại thời điểm đó.
+static std::atomic<bool> g_bShutdownRequested(false);
+static HANDLE g_hShutdownEvent = nullptr;
+
+// ===== CHẨN ĐOÁN 1.12: Nhịp khung hình (frame cadence) & kết quả Present =====
+// Chỉ đo và ghi log, tuyệt đối không thay đổi giá trị trả về hay hành vi của hook.
+static void DiagWrite(const char* format, ...);  // Định nghĩa ở phần chẩn đoán bên dưới
+
+static std::atomic<unsigned long long> g_qpcFrequency(0);
+static std::atomic<unsigned> g_presentCount(0);      // số lần engine gọi Present trong 1 giây
+static std::atomic<unsigned> g_frameCount(0);        // số khoảng thời gian giữa 2 lần Present
+static std::atomic<long long> g_frameQpcSum(0);      // tổng thời gian các khoảng (QPC ticks)
+static std::atomic<long long> g_maxFrameQpc(0);      // khoảng lớn nhất trong 1 giây
+static std::atomic<long long> g_lastPresentQpc(0);
+static std::atomic<unsigned> g_presentOk(0);
+static std::atomic<unsigned> g_presentOccluded(0);
+static std::atomic<unsigned> g_presentFailed(0);
+static std::atomic<long> g_lastPresentHr(0);
+static std::atomic<unsigned> g_lastSyncInterval(0);
+static std::atomic<unsigned> g_lastPresentFlags(0);
+static std::atomic<unsigned> g_swapChainFlags(0);
+static std::atomic<unsigned> g_swapChainBufferCount(0);
+
+// ===== Chống "khoá nhịp" 60 ↔ 30 fps của cửa sổ Borderless =====
+// Với swapchain flip 2 buffer, Present(syncInterval=0) vẫn chờ nhịp composition 60Hz của DWM.
+// Khi frame time chỉ hơn 16,67ms một chút, mọi frame bị đẩy sang vblank kế tiếp -> tụt đúng 30 fps.
+// Bật ALLOW_TEARING để Present không chờ vblank, game chạy đúng nhịp thật của nó (vd 52-58 fps).
+static std::atomic<bool> g_bTearingSwapChain(false);
+static std::atomic<bool> g_bTearingUnsupported(false);
+
+static void RecordPresentTiming(HRESULT hr, UINT syncInterval, UINT flags) {
+    if (g_qpcFrequency.load() == 0) {
+        LARGE_INTEGER f;
+        if (QueryPerformanceFrequency(&f)) {
+            g_qpcFrequency.store((unsigned long long)f.QuadPart);
+        }
+    }
+
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+
+    long long prev = g_lastPresentQpc.exchange(now.QuadPart);
+    if (prev > 0 && now.QuadPart > prev) {
+        long long delta = now.QuadPart - prev;
+        g_frameQpcSum.fetch_add(delta);
+        g_frameCount.fetch_add(1);
+
+        long long curMax = g_maxFrameQpc.load();
+        while (delta > curMax && !g_maxFrameQpc.compare_exchange_weak(curMax, delta)) {
+        }
+    }
+
+    g_presentCount.fetch_add(1);
+    if (hr == S_OK) {
+        g_presentOk.fetch_add(1);
+    } else if (hr == DXGI_STATUS_OCCLUDED) {
+        g_presentOccluded.fetch_add(1);
+    } else {
+        g_presentFailed.fetch_add(1);
+    }
+    g_lastPresentHr.store((long)hr);
+    g_lastSyncInterval.store(syncInterval);
+    g_lastPresentFlags.store(flags);
+}
 
 // Ép nhận thức Per-Monitor V2 DPI cho tiến trình Game để triệt tiêu việc Windows ảo hóa tọa độ chuột
 static int g_dpiSetResult = -1; // 1 = OK, >1 = mã lỗi Win32 (5 = đã bị khóa DPI), -1 = chưa gọi
@@ -110,6 +177,141 @@ static bool IsPanelActive() {
     return false;
 }
 
+// Tool đã thoát hẳn hay chưa (Named Event do WindowManager bật lúc cleanup)
+static bool IsShutdownRequested() {
+    if (g_bShutdownRequested.load()) return true;
+    if (!g_hShutdownEvent) {
+        g_hShutdownEvent = OpenEventW(SYNCHRONIZE, FALSE, L"Global\\HandheldTool_Shutdown");
+        if (!g_hShutdownEvent) {
+            g_hShutdownEvent = OpenEventW(SYNCHRONIZE, FALSE, L"HandheldTool_Shutdown");
+        }
+    }
+    if (g_hShutdownEvent && WaitForSingleObject(g_hShutdownEvent, 0) == WAIT_OBJECT_0) {
+        g_bShutdownRequested.store(true);
+        return true;
+    }
+    return false;
+}
+
+// Bản nhẹ dùng trong các đường nóng (mỗi thông điệp chuột / mỗi khung hình): chỉ đọc cờ đã cache.
+static inline bool IsHookInert() {
+    return g_bShutdownRequested.load(std::memory_order_relaxed);
+}
+
+// ===== Chẩn đoán 1.13: khớp display mode với độ phân giải render (tuỳ chọn, mặc định TẮT) =====
+// Khi buffer swapchain nhỏ hơn cửa sổ, DWM phải chạy một pass scale mỗi frame (rất tốn với APU yếu).
+// Hạ mode màn hình xuống đúng độ phân giải render thì cửa sổ game 1:1 với buffer, phần phóng lên
+// tấm nền do scaler phần cứng (hoặc AMD RSR) đảm nhận -> không còn pass scale trong composition.
+// App bật tính năng này bằng cách tạo Named Event HandheldTool_MatchDisplayMode.
+static std::atomic<bool> g_bMatchDisplayMode(false);
+static HANDLE g_hMatchDisplayModeEvent = nullptr;
+static bool g_bDisplayModeChanged = false;
+static bool g_bOriginalDisplayModeSaved = false;
+static DEVMODEW g_originalDisplayMode = {};
+
+static void RefreshMatchDisplayModeFlag() {
+    if (!g_hMatchDisplayModeEvent) {
+        g_hMatchDisplayModeEvent = OpenEventW(SYNCHRONIZE, FALSE, L"Global\\HandheldTool_MatchDisplayMode");
+        if (!g_hMatchDisplayModeEvent) {
+            g_hMatchDisplayModeEvent = OpenEventW(SYNCHRONIZE, FALSE, L"HandheldTool_MatchDisplayMode");
+        }
+    }
+    if (g_hMatchDisplayModeEvent) {
+        g_bMatchDisplayMode.store(WaitForSingleObject(g_hMatchDisplayModeEvent, 0) == WAIT_OBJECT_0);
+    }
+}
+
+static bool IsMatchDisplayModeEnabled() {
+    if (!g_bMatchDisplayMode.load()) {
+        RefreshMatchDisplayModeFlag();
+    }
+    return g_bMatchDisplayMode.load();
+}
+
+static void SaveOriginalDisplayMode() {
+    if (g_bOriginalDisplayModeSaved) return;
+    ZeroMemory(&g_originalDisplayMode, sizeof(g_originalDisplayMode));
+    g_originalDisplayMode.dmSize = sizeof(g_originalDisplayMode);
+    // Ưu tiên mode trong registry (mode desktop người dùng đã chọn): nếu lần chạy trước bị crash
+    // giữa chừng, mode hiện tại có thể đang là 720p và không còn là mode gốc nữa.
+    if (EnumDisplaySettingsW(NULL, ENUM_REGISTRY_SETTINGS, &g_originalDisplayMode)) {
+        g_bOriginalDisplayModeSaved = true;
+        return;
+    }
+    if (EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &g_originalDisplayMode)) {
+        g_bOriginalDisplayModeSaved = true;
+    } else {
+        g_originalDisplayMode.dmSize = 0;
+    }
+}
+
+static void RestoreDisplayMode() {
+    if (!g_bDisplayModeChanged) return;
+    g_bDisplayModeChanged = false;
+
+    LONG res = DISP_CHANGE_BADMODE;
+    if (g_bOriginalDisplayModeSaved) {
+        DEVMODEW dm = g_originalDisplayMode;
+        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+        res = ChangeDisplaySettingsExW(NULL, &dm, NULL, 0, NULL);
+    }
+    if (res != DISP_CHANGE_SUCCESSFUL) {
+        res = ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL);
+    }
+    DiagWrite("[DISPMODE] Khôi phục display mode gốc (code=%ld)", res);
+}
+
+static void MatchDisplayModeToBuffer(HWND hWnd, UINT bufW, UINT bufH) {
+    if (IsHookInert() || g_bDisplayModeChanged) return;
+    if (!hWnd || !IsWindow(hWnd) || bufW < 320 || bufH < 240) return;
+    if (!IsMatchDisplayModeEnabled()) return;
+
+    MONITORINFO mi = { sizeof(mi) };
+    HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+    if (!hMon || !GetMonitorInfoW(hMon, &mi)) return;
+
+    UINT monW = (UINT)(mi.rcMonitor.right - mi.rcMonitor.left);
+    UINT monH = (UINT)(mi.rcMonitor.bottom - mi.rcMonitor.top);
+    if (bufW >= monW || bufH >= monH) return;  // game đã render bằng/hơn native, không cần hạ mode
+
+    DEVMODEW cur = { sizeof(cur) };
+    if (!EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &cur)) return;
+    if (cur.dmPelsWidth == bufW && cur.dmPelsHeight == bufH) {
+        // Mode đã khớp sẵn (hoặc còn sót từ lần chạy trước): vẫn đánh dấu để lúc game đóng
+        // khôi phục về mode desktop gốc trong registry.
+        SaveOriginalDisplayMode();
+        g_bDisplayModeChanged = true;
+        return;
+    }
+
+    SaveOriginalDisplayMode();
+
+    DEVMODEW dm = { sizeof(dm) };
+    dm.dmSize = sizeof(dm);
+    dm.dmPelsWidth = bufW;
+    dm.dmPelsHeight = bufH;
+    dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+    UINT hz = g_bOriginalDisplayModeSaved ? g_originalDisplayMode.dmDisplayFrequency : 0;
+    if (hz > 1) {
+        dm.dmDisplayFrequency = hz;
+        dm.dmFields |= DM_DISPLAYFREQUENCY;
+    }
+
+    LONG res = ChangeDisplaySettingsExW(NULL, &dm, NULL, CDS_FULLSCREEN, NULL);
+    if (res != DISP_CHANGE_SUCCESSFUL) {
+        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+        res = ChangeDisplaySettingsExW(NULL, &dm, NULL, CDS_FULLSCREEN, NULL);
+    }
+
+    if (res == DISP_CHANGE_SUCCESSFUL) {
+        g_bDisplayModeChanged = true;
+        DiagWrite("[DISPMODE] Hạ mode màn hình xuống %ux%u@%uHz để buffer 1:1 (scaler phần cứng phóng lên panel)",
+            bufW, bufH, hz);
+    } else {
+        DiagWrite("[DISPMODE] Không đổi được mode sang %ux%u (code=%ld) -> giữ mode hiện tại", bufW, bufH, res);
+    }
+}
+
 // Con trỏ hàm gốc của API vị trí chuột màn hình và hàng đợi thông điệp
 typedef BOOL (WINAPI* PFN_GetCursorPos)(LPPOINT lpPoint);
 typedef BOOL (WINAPI* PFN_SetCursorPos)(int X, int Y);
@@ -125,6 +327,7 @@ static PFN_GetMessageW g_pOrigGetMessageW = nullptr;
 
 // Lấy hệ số Client/Buffer và gốc Client của cửa sổ game. Trả về false nếu không cần ánh xạ (tỉ lệ 1:1)
 static bool GetCursorMappingParams(double& ratioX, double& ratioY, POINT& origin) {
+    if (IsHookInert()) return false;
     HWND hGame = g_hGameWnd.load();
     UINT bufW = g_uBufferWidth.load(), bufH = g_uBufferHeight.load();
     if (!hGame || bufW == 0 || bufH == 0 || !IsWindow(hGame)) return false;
@@ -227,121 +430,75 @@ BOOL WINAPI Hooked_GetMessageW(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT 
     return res;
 }
 
-static void QueryNativeDisplayResolution() {
-    if (g_uNativeWidth.load() != 0 && g_uNativeHeight.load() != 0) return;
-
-    DEVMODEW dm = { sizeof(dm) };
-    if (EnumDisplaySettingsW(NULL, ENUM_REGISTRY_SETTINGS, &dm)) {
-        if (dm.dmPelsWidth > 0 && dm.dmPelsHeight > 0) {
-            g_uNativeWidth.store(dm.dmPelsWidth);
-            g_uNativeHeight.store(dm.dmPelsHeight);
-            g_uNativeRefreshRate.store(dm.dmDisplayFrequency);
-            LogDebug("[DXGI_HOOK] Native resolution detected (registry): %ux%u@%uHz\n",
-                dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency);
-            return;
-        }
-    }
-
-    if (EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &dm)) {
-        if (dm.dmPelsWidth > 0 && dm.dmPelsHeight > 0) {
-            g_uNativeWidth.store(dm.dmPelsWidth);
-            g_uNativeHeight.store(dm.dmPelsHeight);
-            g_uNativeRefreshRate.store(dm.dmDisplayFrequency);
-            LogDebug("[DXGI_HOOK] Native resolution detected (current): %ux%u@%uHz\n",
-                dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency);
-            return;
-        }
-    }
-
-    int cx = GetSystemMetrics(SM_CXSCREEN);
-    int cy = GetSystemMetrics(SM_CYSCREEN);
-    g_uNativeWidth.store(cx > 0 ? (UINT)cx : 1920);
-    g_uNativeHeight.store(cy > 0 ? (UINT)cy : 1080);
-    g_uNativeRefreshRate.store(60);
-    LogDebug("[DXGI_HOOK] Native resolution fallback to metrics: %ux%u\n", g_uNativeWidth.load(), g_uNativeHeight.load());
-}
-
-static void RestoreNativeDisplayMode() {
-    if (g_bDisplayModeSwitched.exchange(false)) {
-        LogDebug("[DXGI_HOOK] Restoring native display mode: %ux%u\n", g_uNativeWidth.load(), g_uNativeHeight.load());
-        ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL);
-    }
-}
-
-static void ApplyDynamicDisplayMode(HWND hWnd, UINT bufW, UINT bufH) {
-    QueryNativeDisplayResolution();
-
-    if (bufW == 0 || bufH == 0) return;
-
-    UINT nativeW = g_uNativeWidth.load();
-    UINT nativeH = g_uNativeHeight.load();
-    UINT nativeHz = g_uNativeRefreshRate.load();
-
-    if (bufW < nativeW && bufH < nativeH) {
-        // Game renders at a lower resolution than native display (e.g. 1600x900 or 1280x720 on 1080p panel)
-        // Switch display mode using CDS_FULLSCREEN.
-        // This makes AMD Display Driver see Active Display Mode < Native EDID Panel Resolution,
-        // automatically triggering AMD Radeon Super Resolution (RSR) hardware upscaling!
-        DEVMODEW dm = { sizeof(dm) };
-        dm.dmSize = sizeof(dm);
-        dm.dmPelsWidth = bufW;
-        dm.dmPelsHeight = bufH;
-        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
-        if (nativeHz > 0) {
-            dm.dmDisplayFrequency = nativeHz;
-            dm.dmFields |= DM_DISPLAYFREQUENCY;
-        }
-
-        LONG res = ChangeDisplaySettingsExW(NULL, &dm, NULL, CDS_FULLSCREEN, NULL);
-        if (res == DISP_CHANGE_SUCCESSFUL) {
-            g_bDisplayModeSwitched.store(true);
-            LogDebug("[DXGI_HOOK] ChangeDisplaySettingsExW(CDS_FULLSCREEN) SUCCESS: %ux%u@%uHz (AMD RSR Active)\n",
-                bufW, bufH, dm.dmDisplayFrequency);
-        } else {
-            // Fallback without specifying display frequency
-            dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
-            res = ChangeDisplaySettingsExW(NULL, &dm, NULL, CDS_FULLSCREEN, NULL);
-            if (res == DISP_CHANGE_SUCCESSFUL) {
-                g_bDisplayModeSwitched.store(true);
-                LogDebug("[DXGI_HOOK] ChangeDisplaySettingsExW(CDS_FULLSCREEN) SUCCESS (no Hz): %ux%u (AMD RSR Active)\n",
-                    bufW, bufH);
-            } else {
-                LogDebug("[DXGI_HOOK] ChangeDisplaySettingsExW(CDS_FULLSCREEN) returned code %ld for %ux%u\n", res, bufW, bufH);
-            }
-        }
-    } else if (bufW >= nativeW || bufH >= nativeH) {
-        // Game matches or exceeds native resolution -> ensure native display mode is restored
-        RestoreNativeDisplayMode();
-    }
-}
-
 void ForceBorderlessWindow(HWND hWnd);
 
-static LRESULT CALLBACK GameSubclassWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (uMsg == WM_ACTIVATEAPP) {
-        BOOL bActive = (BOOL)wParam;
-        LogDebug("[DXGI_HOOK] GameSubclassWndProc WM_ACTIVATEAPP: bActive=%d, PanelActive=%d\n",
-            bActive, IsPanelActive() ? 1 : 0);
+// ===== CHẨN ĐOÁN 1.12: Ghi lại đúng những thông điệp kích hoạt/tiêu điểm engine thật sự nhận =====
+static const char* DiagMsgName(UINT m) {
+    switch (m) {
+    case WM_ACTIVATE: return "WM_ACTIVATE";
+    case WM_ACTIVATEAPP: return "WM_ACTIVATEAPP";
+    case WM_NCACTIVATE: return "WM_NCACTIVATE";
+    case WM_SETFOCUS: return "WM_SETFOCUS";
+    case WM_KILLFOCUS: return "WM_KILLFOCUS";
+    case WM_CANCELMODE: return "WM_CANCELMODE";
+    case WM_SHOWWINDOW: return "WM_SHOWWINDOW";
+    case WM_ENABLE: return "WM_ENABLE";
+    case WM_SIZE: return "WM_SIZE";
+    case WM_DISPLAYCHANGE: return "WM_DISPLAYCHANGE";
+    case WM_WINDOWPOSCHANGED: return "WM_WINDOWPOSCHANGED";
+    case WM_STYLECHANGING: return "WM_STYLECHANGING";
+    case WM_STYLECHANGED: return "WM_STYLECHANGED";
+    case WM_SYSCOMMAND: return "WM_SYSCOMMAND";
+    case WM_ENTERMENULOOP: return "WM_ENTERMENULOOP";
+    case WM_EXITMENULOOP: return "WM_EXITMENULOOP";
+    case WM_SYSKEYDOWN: return "WM_SYSKEYDOWN";
+    case WM_SYSKEYUP: return "WM_SYSKEYUP";
+    case WM_SYSCHAR: return "WM_SYSCHAR";
+    case WM_SETTINGCHANGE: return "WM_SETTINGCHANGE";
+    case WM_NCLBUTTONDOWN: return "WM_NCLBUTTONDOWN";
+    default: return nullptr;
+    }
+}
 
-        if (!bActive) {
-            // If our Quick Panel is currently open, the user hasn't switched away from the game,
-            // so do NOT reset display mode.
-            if (!IsPanelActive() && g_bDisplayModeSwitched.load()) {
-                LogDebug("[DXGI_HOOK] Application lost focus (Alt+Tab) -> Temporarily restoring desktop resolution\n");
-                ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL);
-            }
-        } else {
-            // Game regained focus -> re-apply dynamic mode if needed
-            UINT bw = g_uBufferWidth.load();
-            UINT bh = g_uBufferHeight.load();
-            if (bw > 0 && bh > 0 && bw < g_uNativeWidth.load() && bh < g_uNativeHeight.load()) {
-                ApplyDynamicDisplayMode(hWnd, bw, bh);
-                ForceBorderlessWindow(hWnd);
-            }
+static void DiagLogGameMessage(const char* where, HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    const char* name = DiagMsgName(uMsg);
+    if (!name) return;
+
+    // Giới hạn 60 dòng/giây: WM_SIZE và WM_WINDOWPOSCHANGED có thể bắn liên tục khi đổi mode
+    static DWORD s_budgetTick = 0;
+    static LONG s_budget = 0;
+    DWORD now = GetTickCount();
+    if (now - s_budgetTick >= 1000) {
+        s_budgetTick = now;
+        s_budget = 60;
+    }
+    if (s_budget-- <= 0) return;
+
+    HWND fg = GetForegroundWindow();
+    DiagWrite("[MSG] %s uMsg=0x%04X (%s) wParam=0x%llX lParam=0x%llX PanelActive=%d FgMatch=%d FgHwnd=0x%p",
+        where, uMsg, name, (unsigned long long)wParam, (unsigned long long)lParam,
+        IsPanelActive() ? 1 : 0, (fg == hWnd) ? 1 : 0, (void*)fg);
+}
+
+static LRESULT CALLBACK GameSubclassWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (IsHookInert()) {
+        return g_pOrigGameWndProc ? CallWindowProcW(g_pOrigGameWndProc, hWnd, uMsg, wParam, lParam)
+                                  : DefWindowProcW(hWnd, uMsg, wParam, lParam);
+    }
+
+    DiagLogGameMessage("GameWndProc", hWnd, uMsg, wParam, lParam);
+
+    if (uMsg == WM_ACTIVATEAPP) {
+        // Game vừa lấy lại activation: siết lại borderless phòng khi engine tự khôi phục viền/kích thước.
+        // Không đổi display mode ở đây (chỉ đổi một lần khi tạo swapchain, xem MatchDisplayModeToBuffer).
+        if (wParam) {
+            ForceBorderlessWindow(hWnd);
         }
+        LogDebug("[DXGI_HOOK] GameSubclassWndProc WM_ACTIVATEAPP: bActive=%d, PanelActive=%d\n",
+            (BOOL)wParam, IsPanelActive() ? 1 : 0);
     } else if (uMsg == WM_DESTROY) {
-        LogDebug("[DXGI_HOOK] Game window destroyed -> Restoring native display mode\n");
-        RestoreNativeDisplayMode();
+        // Game đóng: trả màn hình về mode gốc ngay, không đợi tool thoát
+        RestoreDisplayMode();
     }
 
     if (g_pOrigGameWndProc) {
@@ -366,6 +523,7 @@ static void SubclassGameWindow(HWND hWnd) {
 // Cưỡng bức chuyển cửa sổ sang Borderless Fullscreen triệt để (Chuẩn hóa cả Style, ExStyle và Scaling)
 void ForceBorderlessWindow(HWND hWnd) {
     if (!hWnd || !IsWindow(hWnd)) return;
+    if (IsHookInert()) return;  // Tool đã thoát: để game tự quản lý cửa sổ của nó
 
     SubclassGameWindow(hWnd);
 
@@ -416,6 +574,9 @@ void ForceBorderlessWindow(HWND hWnd) {
         SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW
     );
 
+    DiagWrite("[BORDERLESS] Applied HWND=0x%p rect=(%d,%d,%dx%d) styleChange=%d geoChange=%d PanelActive=%d",
+        hWnd, mi.rcMonitor.left, mi.rcMonitor.top, screen_w, screen_h,
+        needsStyleUpdate ? 1 : 0, needsGeoUpdate ? 1 : 0, IsPanelActive() ? 1 : 0);
     LogDebug("[DXGI_HOOK] ForceBorderlessWindow applied to HWND=0x%p: (%d, %d, %dx%d)\n", hWnd, mi.rcMonitor.left, mi.rcMonitor.top, screen_w, screen_h);
 }
 
@@ -434,6 +595,12 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(
     // Xóa cờ cho phép mode switch
     SwapChainFlags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
+    // Giữ ALLOW_TEARING qua mọi lần ResizeBuffers: nếu rơi cờ này, Present(ALLOW_TEARING) sẽ lỗi
+    // và game quay lại bị khoá nhịp 60 ↔ 30 fps.
+    if (g_bTearingSwapChain.load() && !g_bTearingUnsupported.load()) {
+        SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    }
+
     if (Width > 0 && Height > 0) {
         g_uBufferWidth.store(Width);
         g_uBufferHeight.store(Height);
@@ -445,7 +612,7 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(
     DXGI_SWAP_CHAIN_DESC desc;
     if (SUCCEEDED(This->GetDesc(&desc)) && desc.OutputWindow) {
         g_hGameWnd.store(desc.OutputWindow);
-        ApplyDynamicDisplayMode(desc.OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
+        MatchDisplayModeToBuffer(desc.OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
         ForceBorderlessWindow(desc.OutputWindow);
     }
 
@@ -469,7 +636,7 @@ HRESULT STDMETHODCALLTYPE Hooked_ResizeTarget(
     DXGI_SWAP_CHAIN_DESC desc;
     if (SUCCEEDED(This->GetDesc(&desc)) && desc.OutputWindow) {
         g_hGameWnd.store(desc.OutputWindow);
-        ApplyDynamicDisplayMode(desc.OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
+        MatchDisplayModeToBuffer(desc.OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
         ForceBorderlessWindow(desc.OutputWindow);
     }
 
@@ -499,7 +666,7 @@ HRESULT STDMETHODCALLTYPE Hooked_SetFullscreenState(
         DXGI_SWAP_CHAIN_DESC desc;
         if (SUCCEEDED(This->GetDesc(&desc)) && desc.OutputWindow) {
             g_hGameWnd.store(desc.OutputWindow);
-            ApplyDynamicDisplayMode(desc.OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
+            MatchDisplayModeToBuffer(desc.OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
             ForceBorderlessWindow(desc.OutputWindow);
         }
 
@@ -555,7 +722,7 @@ DWORD WINAPI Hooked_XInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
     if (!g_pOrigXInputGetState) return ERROR_DEVICE_NOT_CONNECTED;
 
     DWORD res = g_pOrigXInputGetState(dwUserIndex, pState);
-    if (res == ERROR_SUCCESS && pState && IsPanelActive()) {
+    if (res == ERROR_SUCCESS && pState && !IsHookInert() && IsPanelActive()) {
         // Khi Quick Panel đang mở: Xóa sạch dữ liệu nút bấm và cần gạt để game không nhận diện
         pState->Gamepad.wButtons = 0;
         pState->Gamepad.bLeftTrigger = 0;
@@ -566,6 +733,47 @@ DWORD WINAPI Hooked_XInputGetState(DWORD dwUserIndex, XINPUT_STATE* pState) {
         pState->Gamepad.sThumbRY = 0;
     }
     return res;
+}
+
+// 3b. Hook Present / Present1 để đo nhịp khung hình thực tế và kết quả DXGI trả về
+// (Giữ nguyên giá trị trả về; chỉ thêm cờ ALLOW_TEARING khi swapchain được tạo kèm cờ đó.)
+static inline UINT ApplyTearingToPresentFlags(UINT syncInterval, UINT presentFlags) {
+    if (g_bTearingSwapChain.load() && syncInterval == 0 && !g_bTearingUnsupported.load() &&
+        (presentFlags & DXGI_PRESENT_ALLOW_TEARING) == 0) {
+        return presentFlags | DXGI_PRESENT_ALLOW_TEARING;
+    }
+    return presentFlags;
+}
+
+static inline void DisableTearingAfterFailure(HRESULT hr) {
+    g_bTearingSwapChain.store(false);
+    g_bTearingUnsupported.store(true);
+    DiagWrite("[TEARING] Present(ALLOW_TEARING) thất bại hr=0x%08lX -> tắt tearing, trình bày lại kiểu cũ",
+        (unsigned long)hr);
+}
+
+HRESULT STDMETHODCALLTYPE Hooked_Present(IDXGISwapChain* This, UINT SyncInterval, UINT PresentFlags) {
+    UINT flags = ApplyTearingToPresentFlags(SyncInterval, PresentFlags);
+    HRESULT hr = g_pOrigPresent ? g_pOrigPresent(This, SyncInterval, flags) : E_FAIL;
+    if (flags != PresentFlags && FAILED(hr)) {
+        DisableTearingAfterFailure(hr);
+        flags = PresentFlags;
+        hr = g_pOrigPresent ? g_pOrigPresent(This, SyncInterval, flags) : E_FAIL;
+    }
+    RecordPresentTiming(hr, SyncInterval, flags);
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE Hooked_Present1(IDXGISwapChain1* This, UINT SyncInterval, UINT PresentFlags, const DXGI_PRESENT_PARAMETERS* pPresentParameters) {
+    UINT flags = ApplyTearingToPresentFlags(SyncInterval, PresentFlags);
+    HRESULT hr = g_pOrigPresent1 ? g_pOrigPresent1(This, SyncInterval, flags, pPresentParameters) : E_FAIL;
+    if (flags != PresentFlags && FAILED(hr)) {
+        DisableTearingAfterFailure(hr);
+        flags = PresentFlags;
+        hr = g_pOrigPresent1 ? g_pOrigPresent1(This, SyncInterval, flags, pPresentParameters) : E_FAIL;
+    }
+    RecordPresentTiming(hr, SyncInterval, flags);
+    return hr;
 }
 
 // Đăng ký hook cho instance SwapChain
@@ -579,6 +787,25 @@ void HookSwapChainInstance(IDXGISwapChain* pSwapChain) {
         if (scDesc.BufferDesc.Width > 0) g_uBufferWidth.store(scDesc.BufferDesc.Width);
         if (scDesc.BufferDesc.Height > 0) g_uBufferHeight.store(scDesc.BufferDesc.Height);
         if (scDesc.OutputWindow) g_hGameWnd.store(scDesc.OutputWindow);
+
+        // Bỏ qua swapchain 100x100 của Dummy Window dùng để lấy con trỏ VMT
+        bool realSurface = (scDesc.BufferDesc.Width >= 200 && scDesc.BufferDesc.Height >= 200);
+        if (realSurface) {
+            g_swapChainFlags.store(scDesc.Flags);
+            g_swapChainBufferCount.store(scDesc.BufferCount);
+
+            static unsigned s_lastDescHash = 0;
+            unsigned descHash = (unsigned)(scDesc.BufferDesc.Width * 73856093u)
+                              ^ (unsigned)(scDesc.BufferDesc.Height * 19349663u)
+                              ^ (unsigned)scDesc.Flags;
+            if (descHash != s_lastDescHash) {
+                s_lastDescHash = descHash;
+                DiagWrite("[SWAPCHAIN] Windowed=%d BufferCount=%u Format=%d SwapEffect=%d Flags=0x%X (TEARING=%d) Buffer=%ux%u",
+                    scDesc.Windowed, scDesc.BufferCount, (int)scDesc.BufferDesc.Format, (int)scDesc.SwapEffect,
+                    scDesc.Flags, (scDesc.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) ? 1 : 0,
+                    scDesc.BufferDesc.Width, scDesc.BufferDesc.Height);
+            }
+        }
     }
 
     if (!g_bSwapChainHooked.exchange(true)) {
@@ -594,8 +821,23 @@ void HookSwapChainInstance(IDXGISwapChain* pSwapChain) {
         MH_CreateHook(vtbl[14], (LPVOID)&Hooked_ResizeTarget, (LPVOID*)&g_pOrigResizeTarget);
         MH_EnableHook(vtbl[14]);
 
-        LogDebug("[DXGI_HOOK] Đã móc thành công IDXGISwapChain VMT: SetFullscreenState=0x%p, GetFullscreenState=0x%p, ResizeBuffers=0x%p, ResizeTarget=0x%p\n",
-            vtbl[10], vtbl[11], vtbl[13], vtbl[14]);
+        // Đo nhịp khung hình: IDXGISwapChain::Present = slot 8, IDXGISwapChain1::Present1 = slot 22
+        if (vtbl[8]) {
+            MH_CreateHook(vtbl[8], (LPVOID)&Hooked_Present, (LPVOID*)&g_pOrigPresent);
+            MH_EnableHook(vtbl[8]);
+        }
+        IDXGISwapChain1* pSc1 = nullptr;
+        if (SUCCEEDED(pSwapChain->QueryInterface(__uuidof(IDXGISwapChain1), (void**)&pSc1)) && pSc1) {
+            void** vtbl1 = *(void***)pSc1;
+            if (vtbl1 && vtbl1[22]) {
+                MH_CreateHook(vtbl1[22], (LPVOID)&Hooked_Present1, (LPVOID*)&g_pOrigPresent1);
+                MH_EnableHook(vtbl1[22]);
+            }
+            pSc1->Release();
+        }
+
+        LogDebug("[DXGI_HOOK] Đã móc thành công IDXGISwapChain VMT: SetFullscreenState=0x%p, GetFullscreenState=0x%p, ResizeBuffers=0x%p, ResizeTarget=0x%p, Present=0x%p, Present1=0x%p\n",
+            vtbl[10], vtbl[11], vtbl[13], vtbl[14], (void*)g_pOrigPresent, (void*)g_pOrigPresent1);
     }
 }
 
@@ -630,7 +872,7 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(
         }
         HookSwapChainInstance(*ppSwapChain);
         if (pDesc && pDesc->OutputWindow) {
-            ApplyDynamicDisplayMode(pDesc->OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
+            MatchDisplayModeToBuffer(pDesc->OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
             ForceBorderlessWindow(pDesc->OutputWindow);
         }
     }
@@ -651,12 +893,24 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
     LogDebug("[DXGI_HOOK] IDXGIFactory2::CreateSwapChainForHwnd intercepted for HWND=0x%p\n", hWnd);
 
     DXGI_SWAP_CHAIN_DESC1 descCopy;
+    bool wantTearing = false;
     if (pDesc) {
         descCopy = *pDesc;
         descCopy.Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
-        if (descCopy.Scaling == DXGI_SCALING_NONE) {
-            descCopy.Scaling = DXGI_SCALING_ASPECT_RATIO_STRETCH;
-            LogDebug("[DXGI_HOOK] Ép Scaling = DXGI_SCALING_ASPECT_RATIO_STRETCH để bung tràn màn hình\n");
+        // Backbuffer của game thường nhỏ hơn cửa sổ (vd render 1280x720 trong cửa sổ 1920x1080).
+        // DXGI_SCALING_NONE sẽ vẽ 1:1 ở góc trên-trái (game không phủ kín màn hình), nên luôn ép STRETCH
+        // để presenter phóng backbuffer phủ kín client area.
+        if (descCopy.Scaling != DXGI_SCALING_STRETCH) {
+            DiagWrite("[SCALING] Swapchain Scaling %d -> 0 (STRETCH) để phủ kín cửa sổ", (int)descCopy.Scaling);
+            descCopy.Scaling = DXGI_SCALING_STRETCH;
+        }
+
+        // Chỉ swapchain FLIP mới nhận ALLOW_TEARING; bitblt (DISCARD) sẽ trả E_INVALIDARG.
+        bool isFlip = (descCopy.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD ||
+                       descCopy.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL);
+        if (isFlip && !g_bTearingUnsupported.load()) {
+            descCopy.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+            wantTearing = true;
         }
         pDesc = &descCopy;
     }
@@ -673,6 +927,23 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
     HRESULT hr = g_pOrigCreateSwapChainForHwnd ?
         g_pOrigCreateSwapChainForHwnd(This, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain) : E_FAIL;
 
+    // Driver/OS không nhận tearing: tạo lại y như cũ để không bao giờ làm hỏng game
+    if (FAILED(hr) && wantTearing) {
+        g_bTearingUnsupported.store(true);
+        DiagWrite("[TEARING] Tạo swapchain kèm ALLOW_TEARING thất bại hr=0x%08lX -> tạo lại không tearing", (unsigned long)hr);
+        wantTearing = false;
+        if (pDesc) descCopy.Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        hr = g_pOrigCreateSwapChainForHwnd ?
+            g_pOrigCreateSwapChainForHwnd(This, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain) : E_FAIL;
+    }
+
+    if (SUCCEEDED(hr)) {
+        g_bTearingSwapChain.store(wantTearing);
+        if (wantTearing) {
+            DiagWrite("[TEARING] Đã bật DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING (SyncInterval=0 sẽ không chờ vblank)");
+        }
+    }
+
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
         if (pDesc) {
             if (pDesc->Width > 0) g_uBufferWidth.store(pDesc->Width);
@@ -681,7 +952,7 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
         if (hWnd) g_hGameWnd.store(hWnd);
         HookSwapChainInstance((IDXGISwapChain*)*ppSwapChain);
         if (hWnd) {
-            ApplyDynamicDisplayMode(hWnd, g_uBufferWidth.load(), g_uBufferHeight.load());
+            MatchDisplayModeToBuffer(hWnd, g_uBufferWidth.load(), g_uBufferHeight.load());
             ForceBorderlessWindow(hWnd);
         }
     }
@@ -735,7 +1006,7 @@ HRESULT WINAPI Hooked_D3D11CreateDeviceAndSwapChain(
         }
         HookSwapChainInstance(*ppSwapChain);
         if (pSwapChainDesc && pSwapChainDesc->OutputWindow) {
-            ApplyDynamicDisplayMode(pSwapChainDesc->OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
+            MatchDisplayModeToBuffer(pSwapChainDesc->OutputWindow, g_uBufferWidth.load(), g_uBufferHeight.load());
             ForceBorderlessWindow(pSwapChainDesc->OutputWindow);
         }
     }
@@ -878,20 +1149,30 @@ static void DiagSnapshot(const char* tag, bool force, char* lastSnapshot, size_t
     double sx = (cw > 0 && bw > 0) ? (double)cw / bw : 0.0;
     double sy = (ch > 0 && bh > 0) ? (double)ch / bh : 0.0;
 
-    char snap[900];
+    // Trạng thái kích hoạt/tiêu điểm thật của luồng UI game (hạch toán thay cho GetForegroundWindow đơn thuần)
+    GUITHREADINFO gti = {0};
+    gti.cbSize = sizeof(gti);
+    DWORD gameTid = GetWindowThreadProcessId(hWnd, NULL);
+    if (gameTid) GetGUIThreadInfo(gameTid, &gti);
+    HWND fgWnd = GetForegroundWindow();
+
+    char snap[1800];
     snprintf(snap, sizeof(snap),
         "HWND=0x%p Buffer=%ux%u Client=%dx%d Window=(%ld,%ld,%ld,%ld) DwmFrame[%d]=(%ld,%ld,%ld,%ld) Monitor=%dx%d@(%ld,%ld) "
         "Scale(Client/Buffer)=%.3fx%.3f DPI(win=%u,sys=%u,awareness=%d,setResult=%d) Clip[%d]=(%ld,%ld,%ld,%ld) "
-        "Cursor=(%ld,%ld) CursorClient=(%ld,%ld) Fg=%d PanelActive=%d",
+        "Cursor=(%ld,%ld) CursorClient=(%ld,%ld) Fg=%d PanelActive=%d "
+        "FgHwnd=0x%p Active=0x%p Focus=0x%p Capture=0x%p MenuOwner=0x%p GuiFlags=0x%X",
         hWnd, bw, bh, cw, ch, wr.left, wr.top, wr.right, wr.bottom,
         dwmOk, dwmR.left, dwmR.top, dwmR.right, dwmR.bottom, mw, mh, mi.rcMonitor.left, mi.rcMonitor.top,
         sx, sy, winDpi, sysDpi, awareness, g_dpiSetResult,
         hasClip, clip.left, clip.top, clip.right, clip.bottom,
         pt.x, pt.y, ptClient.x, ptClient.y,
-        (GetForegroundWindow() == hWnd) ? 1 : 0, IsPanelActive() ? 1 : 0);
+        (fgWnd == hWnd) ? 1 : 0, IsPanelActive() ? 1 : 0,
+        (void*)fgWnd, (void*)gti.hwndActive, (void*)gti.hwndFocus, (void*)gti.hwndCapture,
+        (void*)gti.hwndMenuOwner, gti.flags);
 
     // So sánh bỏ phần vị trí chuột (luôn đổi) để chỉ log khi hình học/trạng thái đổi
-    char key[900];
+    char key[1800];
     strncpy_s(key, sizeof(key), snap, _TRUNCATE);
     char* cur = strstr(key, " Cursor=");
     if (cur) *cur = '\0';
@@ -908,15 +1189,96 @@ static void DiagSnapshot(const char* tag, bool force, char* lastSnapshot, size_t
     }
 }
 
+// Đếm các cửa sổ lớp phủ kiểu Quick Panel đang thật sự hiện diện trên Desktop:
+// visible + WS_EX_LAYERED + WS_EX_NOACTIVATE + kích thước đáng kể. Dùng để đối chiếu "app còn chạy"
+// với nhịp khung hình, độc lập với Named Event PanelActive (panel đóng vẫn để cửa sổ xuyên thấu trên màn hình).
+struct OverlayScan {
+    int count;
+    DWORD pids[4];
+    RECT rects[4];
+};
+
+static BOOL CALLBACK EnumOverlayWindowsProc(HWND h, LPARAM lp) {
+    OverlayScan* scan = (OverlayScan*)lp;
+    if (!scan || !IsWindowVisible(h)) return TRUE;
+
+    LONG ex = GetWindowLongW(h, GWL_EXSTYLE);
+    if ((ex & (WS_EX_LAYERED | WS_EX_NOACTIVATE)) != (WS_EX_LAYERED | WS_EX_NOACTIVATE)) return TRUE;
+
+    RECT r;
+    if (!GetWindowRect(h, &r)) return TRUE;
+    if ((r.right - r.left) < 64 || (r.bottom - r.top) < 64) return TRUE;
+
+    if (scan->count < 4) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        scan->pids[scan->count] = pid;
+        scan->rects[scan->count] = r;
+        scan->count++;
+    }
+    return TRUE;
+}
+
+// Ghi nhịp khung hình thật của engine trong khoảng thời gian kể từ lần gọi trước.
+// FPS suy ra từ thời gian trung bình giữa 2 lần Present nên không phụ thuộc chu kỳ lấy mẫu.
+static void LogFrameStats(int tick) {
+    unsigned presents = g_presentCount.exchange(0);
+    unsigned frames = g_frameCount.exchange(0);
+    long long frameSum = g_frameQpcSum.exchange(0);
+    long long frameMax = g_maxFrameQpc.exchange(0);
+    unsigned okCnt = g_presentOk.exchange(0);
+    unsigned occCnt = g_presentOccluded.exchange(0);
+    unsigned failCnt = g_presentFailed.exchange(0);
+
+    if (presents == 0) {
+        g_lastPresentQpc.store(0);
+        return;
+    }
+
+    double qpcFreq = (double)g_qpcFrequency.load();
+    double avgMs = (frames > 0 && qpcFreq > 0.0) ? ((double)frameSum / (double)frames) / qpcFreq * 1000.0 : 0.0;
+    double maxMs = (frameMax > 0 && qpcFreq > 0.0) ? (double)frameMax / qpcFreq * 1000.0 : 0.0;
+    double fps = (avgMs > 0.01) ? (1000.0 / avgMs) : 0.0;
+
+    if (fps < 40.0 || occCnt > 0 || failCnt > 0 || (tick % 10 == 0)) {
+        HWND gameWnd = g_hGameWnd.load();
+        HWND fgWnd = GetForegroundWindow();
+
+        OverlayScan scan = {};
+        EnumWindows(EnumOverlayWindowsProc, (LPARAM)&scan);
+        char overlayInfo[192];
+        if (scan.count > 0) {
+            snprintf(overlayInfo, sizeof(overlayInfo), " Overlays=%d BgPid=%lu BgRect=(%ld,%ld,%ld,%ld)",
+                scan.count, (unsigned long)scan.pids[0],
+                scan.rects[0].left, scan.rects[0].top, scan.rects[0].right, scan.rects[0].bottom);
+        } else {
+            snprintf(overlayInfo, sizeof(overlayInfo), " Overlays=0");
+        }
+
+        DiagWrite("[FPS] fps=%.1f avgFrame=%.2fms maxFrame=%.2fms presents=%u hr[ok=%u occ=%u fail=%u] lastHr=0x%08lX syncInt=%u flags=0x%X PanelActive=%d Fg=%d FgHwnd=0x%p SWFlags=0x%X BufCount=%u%s",
+            fps, avgMs, maxMs, presents, okCnt, occCnt, failCnt, (unsigned long)g_lastPresentHr.load(),
+            g_lastSyncInterval.load(), g_lastPresentFlags.load(), IsPanelActive() ? 1 : 0,
+            (gameWnd && fgWnd == gameWnd) ? 1 : 0, (void*)fgWnd,
+            g_swapChainFlags.load(), g_swapChainBufferCount.load(), overlayInfo);
+    }
+}
+
 static DWORD WINAPI DiagThreadProc(LPVOID) {
     DiagWrite("===== DXGI Hook Diagnostic thread started (exe pid=%lu) =====", GetCurrentProcessId());
-    char last[900] = {0};
+    char last[1800] = {0};
     bool lastPanel = false;
     int tick = 0;
     for (; g_bInitialized.load();) {
+        if (IsShutdownRequested()) {
+            DiagWrite("[SHUTDOWN] HandheldTool_Shutdown signaled -> hooks chuyển sang pass-through (giữ MinHook để tránh deadlock luồng render)");
+            RestoreDisplayMode();
+            break;
+        }
+
         bool panel = IsPanelActive();
         if (panel != lastPanel) {
             lastPanel = panel;
+            LogFrameStats(tick);
             // Chụp ngay tại thời điểm chuyển trạng thái, và thêm 1 mẫu sau 300ms để thấy game phản ứng
             DiagSnapshot(panel ? "PANEL_OPEN" : "PANEL_CLOSE", true, last, sizeof(last));
             Sleep(300);
@@ -925,6 +1287,7 @@ static DWORD WINAPI DiagThreadProc(LPVOID) {
             DiagSnapshot(panel ? "PANEL_OPEN+1.5s" : "PANEL_CLOSE+1.5s", true, last, sizeof(last));
             continue;
         }
+        LogFrameStats(tick);
         // Mỗi 1s kiểm tra thay đổi; mỗi 10s ghi một mẫu định kỳ để đối chiếu vị trí chuột
         DiagSnapshot((tick % 10 == 0) ? "PERIODIC" : "CHANGE", (tick % 10 == 0), last, sizeof(last));
         tick++;
@@ -1094,8 +1457,7 @@ bool InitDxgiHook() {
 void ShutdownDxgiHook() {
     if (!g_bInitialized.exchange(false)) return;
 
-    // Restore native desktop resolution
-    RestoreNativeDisplayMode();
+    RestoreDisplayMode();
 
     if (g_hHookedGameWnd.load() && g_pOrigGameWndProc) {
         HWND hWnd = g_hHookedGameWnd.load();

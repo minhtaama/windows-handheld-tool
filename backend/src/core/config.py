@@ -27,6 +27,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "system": {
         "autostart": False,
     },
+    "dxgi_hook": {
+        "enabled": True,
+        "auto_borderless": True,
+        "match_display_mode": True,
+    },
     "hardware": {
         "tdp": {
             "min": 5,

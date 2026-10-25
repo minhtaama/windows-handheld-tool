@@ -70,6 +70,7 @@
     },
     "dxgi_hook": {
         "enabled": true,
-        "auto_borderless": true
+        "auto_borderless": true,
+        "match_display_mode": true
     }
 }

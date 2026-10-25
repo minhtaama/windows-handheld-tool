@@ -48,6 +48,9 @@ class WebBridge(QObject):
         self.timer.timeout.connect(self._push_telemetry)
         self.timer.start(1000)
 
+        # Chẩn đoán: đếm nhịp telemetry để ghi log nhiệt độ / công suất / quạt mỗi 5 giây
+        self._diag_tick = 0
+
     def _push_telemetry(self):
         try:
             snap = self.telemetry_svc.get_snapshot()
@@ -59,6 +62,19 @@ class WebBridge(QObject):
             snap["volume"] = self.audio_svc.get_volume()
             snap["is_muted"] = self.audio_svc.is_muted()
             snap["brightness"] = self.bright_svc.get_brightness()
+
+            # Chẩn đoán 1.12: đối chiếu nhịp khung hình của game (dxgi_diag.log) với
+            # nhiệt độ, công suất thực, giới hạn SMU và tốc độ quạt trong cùng mốc thời gian.
+            self._diag_tick += 1
+            if self._diag_tick % 5 == 0:
+                logger.info(
+                    f"[TELEMETRY] cpu={snap.get('cpu_percent')}% temp={snap.get('cpu_temp')}C "
+                    f"power={snap.get('live_tdp')}W fast_limit={snap.get('fast_limit')}W "
+                    f"fan={snap.get('fan_speed')}% fan_auto={snap.get('is_fan_auto')} "
+                    f"fan_profile={snap.get('fan_profile')} fps={snap.get('live_fps')} "
+                    f"game={snap.get('active_game')}"
+                )
+
             self.telemetryUpdated.emit(json.dumps(snap))
         except Exception as e:
             logger.error(f"Lỗi khi gửi telemetry sang JS: {e}")
