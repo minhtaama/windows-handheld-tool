@@ -276,6 +276,20 @@ Cập nhật lần cuối: 24/10/2026 20:05
       - frontend/build/web/assets/FontManifest.json: Xác nhận tạo thành công mục ánh xạ font offline, trình duyệt nhúng nạp trực tiếp từ máy chủ tĩnh cục bộ mà không cần kết nối internet.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+  + [26/10/2026 11:20] Panel trong suốt / không có giao diện khi thiết bị không có mạng:
+    Hiện tượng: Máy không có internet → mở panel chỉ thấy overlay trong suốt; `app.log` vẫn ghi `Frontend page load finished: ok=True` (HTML từ `127.0.0.1:8766` tải được bình thường).
+    Nguyên nhân: Flutter Web vẫn lấy 2 tài nguyên từ CDN dù app được phục vụ từ máy cục bộ:
+      - **CanvasKit**: `flutter_bootstrap.js` sinh ra có `buildConfig.engineRevision` nhưng **không** có `useLocalCanvasKit`, nên hàm chọn base URL rơi vào nhánh `https://www.gstatic.com/flutter-canvaskit/<rev>` thay vì `canvaskit/` local.
+      - **Font Roboto mặc định**: `assets/FontManifest.json` chỉ có MaterialIcons/CupertinoIcons → engine tải Roboto từ `fonts.gstatic.com`.
+      Offline → engine không khởi tạo được → không có frame đầu tiên; do cửa sổ panel dùng `WA_TranslucentBackground` nên biểu hiện là "khung trong suốt".
+    Code thực tế:
+      - `frontend/web/flutter_bootstrap.js` (mới): template `{{flutter_js}}` + `{{flutter_build_config}}` kèm `_flutter.loader.load({config: {canvasKitBaseUrl: "canvaskit/"}})` → luôn nạp CanvasKit từ build output local.
+      - `frontend/pubspec.yaml` + `frontend/fonts/Roboto-{Regular,Medium,Bold,Black}.ttf`: bundle Roboto (400/500/700/900) copy từ Flutter SDK cache → `FontManifest.json` có family Roboto, không còn gọi `fonts.gstatic.com`.
+      - `scripts/deploy/deploy_test.bat`: thêm cờ `--no-web-resources-cdn` cho `flutter build web`.
+      - `backend/main.py`: bổ sung cờ Chromium `--no-proxy-server --disable-background-networking --disable-component-update --disable-domain-reliability` để không dò proxy/WPAD và không tải tài nguyên nền khi mất mạng.
+      - `backend/src/overlay/quick_panel.py`: `LoggingWebPage` ghi mọi thông điệp console JS vào `app.log` (`[QuickPanel][JS]`), bắt `renderProcessTerminated`, và watchdog 8 giây — nếu engine chưa khởi tạo thì hiển thị màn hình thông báo có nền đục (F5 tải lại) thay vì im lặng trong suốt.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
 - [ ] **Biểu tượng ứng dụng và Khay hệ thống (App Icon & System Tray)**
   + [Initial] Code thực tế: Sử dụng biểu tượng Gamepad màu trắng đặt trên nền hình tròn màu xanh (#0067C0).
     Tình trạng: Hoạt động ổn định.

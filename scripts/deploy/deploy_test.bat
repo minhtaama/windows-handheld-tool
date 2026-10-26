@@ -53,7 +53,9 @@ echo.
 echo [*] Step 3/6: Packaging Frontend and Python Application...
 echo [*] Compiling Flutter Web Frontend...
 pushd "%PROJECT_ROOT%\frontend"
-call flutter build web --release --pwa-strategy=none --no-tree-shake-icons
+:: --no-web-resources-cdn keeps CanvasKit inside build/web/canvaskit so the panel also
+:: loads when the device has no internet connection.
+call flutter build web --release --pwa-strategy=none --no-tree-shake-icons --no-web-resources-cdn
 set "FLUTTER_ERR=!errorlevel!"
 popd
 if !FLUTTER_ERR! neq 0 (

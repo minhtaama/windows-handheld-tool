@@ -18,7 +18,13 @@ except Exception:
     dpi_set_ok = False
 
 # Thiết lập cờ Chromium hỗ trợ trong suốt và tương thích với tiến trình đặc quyền TokenUIAccess trước khi nạp QtWebEngine
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-transparent-visuals --no-sandbox --disable-gpu-sandbox"
+# Các cờ mạng bị tắt để panel vẫn nạp được khi thiết bị không có internet: không dò proxy/WPAD,
+# không tải tài nguyên nền (component updater, domain reliability) làm nghẽn request tới 127.0.0.1.
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+    "--enable-transparent-visuals --no-sandbox --disable-gpu-sandbox "
+    "--no-proxy-server --disable-background-networking "
+    "--disable-component-update --disable-domain-reliability"
+)
 os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
 
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QWidget

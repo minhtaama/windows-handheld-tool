@@ -22,6 +22,27 @@ if TYPE_CHECKING:
 
 logger = setup_logger("QuickPanel")
 
+
+class LoggingWebPage(QWebEnginePage):
+    """QWebEnginePage that forwards JavaScript console output to the application log.
+
+    Offline failures of the Flutter engine (missing CanvasKit or font assets) surface here
+    first, so every console message is persisted to app.log for later diagnosis.
+    """
+
+    _LEVELS = {0: "INFO", 1: "WARNING", 2: "ERROR"}
+
+    def javaScriptConsoleMessage(self, level, message, line, source):
+        tag = self._LEVELS.get(int(level), "INFO")
+        text = f"[QuickPanel][JS] {tag}: {message} ({source}:{line})"
+        if tag == "ERROR":
+            logger.error(text)
+        elif tag == "WARNING":
+            logger.warning(text)
+        else:
+            logger.info(text)
+
+
 class QuickPanel(QWidget):
     request_close = Signal()
     request_width_change = Signal(int)
@@ -52,6 +73,9 @@ class QuickPanel(QWidget):
         self.static_server = None
         self.dev_tools_view = None
         self.is_dev_mode = False
+        self._flutter_ready = False
+        self._showing_fallback = False
+        self._load_retries = 0
         self._setup_ui()
         self._connect_bridge_signals()
 
@@ -103,12 +127,25 @@ class QuickPanel(QWidget):
 
     def _on_page_load_finished(self, ok: bool):
         logger.info(f"[QuickPanel] Frontend page load finished: ok={ok}, url={self.view.url().toString()}")
-        if not ok and self.is_dev_mode:
-            logger.warning("[QuickPanel] Dev server web page failed to load initially. Auto-reloading in 1.5s...")
-            QTimer.singleShot(1500, self.view.reload)
-        elif ok and self.is_dev_mode:
+        if self._showing_fallback:
+            return
+
+        if not ok:
+            logger.error("[QuickPanel] Trang giao diện tải thất bại (ok=False).")
+            if self._load_retries < 2:
+                self._load_retries += 1
+                logger.warning(f"[QuickPanel] Thử tải lại giao diện (lần {self._load_retries})...")
+                QTimer.singleShot(1500, self.view.reload)
+            else:
+                self._show_load_failure()
+            return
+
+        self._load_retries = 0
+        if self.is_dev_mode:
             # DDC can stall while loading modules when the dev server is still compiling: verify the app started
             QTimer.singleShot(self.DEV_APP_CHECK_MS, self._ensure_dev_app_started)
+        else:
+            QTimer.singleShot(self.APP_CHECK_MS, self._ensure_app_started)
 
         proxy = self.view.focusProxy()
         if proxy:
@@ -116,6 +153,52 @@ class QuickPanel(QWidget):
             proxy.installEventFilter(self)
         if self.win_mgr:
             self.win_mgr.enforce_no_activate_children()
+
+    APP_CHECK_MS = 8000
+
+    def _on_render_process_terminated(self, status, exit_code):
+        logger.error(f"[QuickPanel] Renderer process kết thúc: status={status}, exitCode={exit_code}")
+
+    def _ensure_app_started(self):
+        """Kiểm tra engine Flutter đã thực sự khởi tạo chưa; nếu chưa thì hiện thông báo lỗi đục."""
+        if self._showing_fallback:
+            return
+
+        def _on_result(started):
+            if self._showing_fallback:
+                return
+            if started:
+                self._flutter_ready = True
+                return
+            logger.error(
+                f"[QuickPanel] Flutter engine chưa khởi tạo sau {self.APP_CHECK_MS}ms "
+                "(thiếu CanvasKit/font khi offline?) -> hiển thị thông báo thay vì overlay trong suốt."
+            )
+            self._show_load_failure()
+
+        self.page.runJavaScript(
+            "!!document.querySelector('flt-glass-pane, flt-scene-host')",
+            _on_result,
+        )
+
+    def _show_load_failure(self):
+        """Hiển thị thông báo lỗi có nền đục để panel không còn là một khung trong suốt câm lặng."""
+        self._showing_fallback = True
+        self.page.setHtml(
+            """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+            html,body{margin:0;height:100%;background:#0f1116;color:#e6e6e6;
+            font-family:'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center}
+            .box{padding:24px;text-align:center;max-width:420px}
+            h1{font-size:16px;margin:0 0 10px;color:#ff8a65}
+            p{font-size:13px;line-height:1.5;margin:6px 0;color:#b0b6c3}
+            code{background:#1c2029;padding:2px 6px;border-radius:4px;color:#ffd54f}
+            </style></head><body><div class="box">
+            <h1>Không tải được giao diện</h1>
+            <p>Flutter engine không khởi tạo được. Xem <code>app.log</code> mục <code>[QuickPanel][JS]</code>.</p>
+            <p>Nhấn <code>F5</code> để tải lại.</p>
+            </div></body></html>"""
+        )
+        logger.warning("[QuickPanel] Đã hiển thị màn hình thông báo lỗi (fallback).")
 
     DEV_APP_CHECK_MS = 12000
     DEV_APP_MAX_RETRIES = 6
@@ -155,7 +238,11 @@ class QuickPanel(QWidget):
         self.view = QWebEngineView(self)
         self.view.setStyleSheet("background: transparent;")
         self.view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.view.page().setBackgroundColor(QColor(0, 0, 0, 0))
+        # Page tùy biến: log console JS + bắt renderer crash để chẩn đoán lỗi nạp (đặc biệt khi offline)
+        self.page = LoggingWebPage(self.view)
+        self.page.setBackgroundColor(QColor(0, 0, 0, 0))
+        self.view.setPage(self.page)
+        self.page.renderProcessTerminated.connect(self._on_render_process_terminated)
         self.view.installEventFilter(self)
         self.view.loadFinished.connect(self._on_page_load_finished)
 
@@ -170,7 +257,7 @@ class QuickPanel(QWidget):
         # 2. Khởi tạo QWebChannel cầu nối
         self.channel = QWebChannel(self)
         self.channel.registerObject("backend", self.bridge)
-        self.view.page().setWebChannel(self.channel)
+        self.page.setWebChannel(self.channel)
 
         # 3. Phím tắt F12 để mở Chromium DevTools kiểm tra và debug web
         self.shortcut_f12 = QShortcut(QKeySequence("F12"), self)
@@ -236,6 +323,9 @@ class QuickPanel(QWidget):
 
     def _reload_frontend(self):
         logger.info("[QuickPanel] Reloading frontend view (F5 / Ctrl+R)...")
+        self._showing_fallback = False
+        self._flutter_ready = False
+        self._load_retries = 0
         self.view.reload()
 
     def _toggle_dev_tools(self):
