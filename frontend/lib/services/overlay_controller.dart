@@ -4,14 +4,14 @@ import '../core/config.dart';
 import '../core/logger.dart';
 import 'bridge_service.dart';
 
-/// Quản lý trạng thái và cấu hình hiển thị của Side Dock Panel trên Windows.
+/// Manages overlay visibility state and dimension scaling for Windows Side Dock Panel.
 class OverlayController extends ChangeNotifier {
   static const logger = AppLogger('OverlayController');
   static final OverlayController instance = OverlayController._();
 
   OverlayController._();
 
-  bool _isVisible = true;
+  bool _isVisible = false;
   bool get isVisible => _isVisible;
 
   ConfigManager? config;
@@ -32,6 +32,13 @@ class OverlayController extends ChangeNotifier {
   void updateScale(double newScale) {
     config?.set("overlay.scale", newScale);
     BridgeService.instance.setPanelScale(newScale);
+    notifyListeners();
+  }
+
+  /// Sets visibility state directly from backend WebSocket events without echoing closeOverlay back.
+  void setVisibilityFromBackend(bool visible) {
+    if (_isVisible == visible) return;
+    _isVisible = visible;
     notifyListeners();
   }
 

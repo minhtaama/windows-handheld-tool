@@ -1,4 +1,5 @@
 import json
+import ctypes
 from typing import List
 from PySide6.QtCore import QObject, Slot, Qt
 from PySide6.QtNetwork import QHostAddress
@@ -7,6 +8,7 @@ from src.bridge.web_bridge import WebBridge
 from src.core.logger import setup_logger
 
 logger = setup_logger("WsServer")
+user32 = ctypes.windll.user32
 
 class WsServer(QObject):
     def __init__(self, bridge: WebBridge, port: int = 8765, parent=None):
@@ -14,16 +16,17 @@ class WsServer(QObject):
         self.bridge = bridge
         self.port = port
         self.clients: List[QWebSocket] = []
+        self.win_mgr = None
 
         self.server = QWebSocketServer("HandheldWsServer", QWebSocketServer.SslMode.NonSecureMode, self)
         if self.server.listen(QHostAddress.SpecialAddress.LocalHost, self.port):
-            logger.info(f"WebSocket Server đã lắng nghe thành công tại ws://127.0.0.1:{self.port}")
+            logger.info(f"WebSocket Server listening successfully at ws://127.0.0.1:{self.port}")
             self.server.newConnection.connect(self._on_new_connection)
         else:
-            logger.error(f"Không thể khởi động WebSocket Server tại cổng {self.port}: {self.server.errorString()}")
+            logger.error(f"Failed to start WebSocket Server on port {self.port}: {self.server.errorString()}")
 
-        # Lắng nghe Signal đẩy dữ liệu cảm biến và trạng thái hiển thị từ WebBridge
-        # BẮT BUỘC dùng QueuedConnection để đảm bảo luồng phụ (GamepadService/HotkeyCapture) không gọi trực tiếp QWebSocket ngoài Main Thread
+        # Listen to signals pushing sensor telemetry and visibility updates from WebBridge
+        # QueuedConnection ensures worker threads do not directly invoke QWebSocket methods outside Main Thread
         self.bridge.telemetryUpdated.connect(self._broadcast_telemetry, Qt.ConnectionType.QueuedConnection)
         self.bridge.configUpdated.connect(self._broadcast_config, Qt.ConnectionType.QueuedConnection)
         self.bridge.overlayVisibilityChanged.connect(self._broadcast_visibility, Qt.ConnectionType.QueuedConnection)
@@ -35,24 +38,29 @@ class WsServer(QObject):
         self.clients.append(client)
         client.textMessageReceived.connect(lambda msg, c=client: self._on_message(c, msg))
         client.disconnected.connect(lambda c=client: self._on_disconnected(c))
-        logger.info(f"[WS] Client mới kết nối từ {client.peerAddress().toString()}:{client.peerPort()}")
+        logger.info(f"[WS] Client connected from {client.peerAddress().toString()}:{client.peerPort()}")
 
-        # Gửi ngay trạng thái ban đầu cho Client
+        win_mgr = getattr(self, "win_mgr", None) or (getattr(self.parent(), "win_mgr", None) if self.parent() else None)
+        if win_mgr:
+            # If the UI window wasn't ready during initial startup, bind to it now that client connected
+            if not win_mgr.hwnd or not win_mgr.hwnd.value or not user32.IsWindow(win_mgr.hwnd):
+                win_mgr.ensure_flutter_ui()
+
+        # Send initial state to newly connected client
         try:
             init_json = self.bridge.getInitialState()
             client.sendTextMessage(json.dumps({"type": "init", "data": json.loads(init_json)}))
-            # Đồng bộ ngay trạng thái ẩn/hiện thực tế của cửa sổ khi trình duyệt vừa kết nối
-            parent_panel = self.parent()
-            if parent_panel and hasattr(parent_panel, "win_mgr") and parent_panel.win_mgr:
-                is_vis = bool(parent_panel.win_mgr.is_visible)
+            if win_mgr:
+                is_vis = bool(win_mgr.is_visible)
                 client.sendTextMessage(json.dumps({"type": "visibility", "data": {"visible": is_vis}}))
+                logger.info(f"[WS] Initial visibility={is_vis} sent to new client")
         except Exception as e:
-            logger.error(f"Lỗi khi gửi initial state sang client: {e}")
+            logger.error(f"Error sending initial state to client: {e}")
 
     def _on_disconnected(self, client: QWebSocket):
         if client in self.clients:
             self.clients.remove(client)
-            logger.info(f"[WS] Client đã ngắt kết nối.")
+            logger.info("[WS] Client disconnected.")
 
     def _broadcast_telemetry(self, snap_json_str: str):
         if not self.clients:
@@ -62,7 +70,7 @@ class WsServer(QObject):
             for client in list(self.clients):
                 client.sendTextMessage(payload)
         except Exception as e:
-            logger.error(f"Lỗi broadcast telemetry: {e}")
+            logger.error(f"Error broadcasting telemetry: {e}")
 
     def _broadcast_config(self, cfg_json_str: str):
         if not self.clients:
@@ -72,17 +80,19 @@ class WsServer(QObject):
             for client in list(self.clients):
                 client.sendTextMessage(payload)
         except Exception as e:
-            logger.error(f"Lỗi broadcast config: {e}")
+            logger.error(f"Error broadcasting config: {e}")
 
     def _broadcast_visibility(self, is_visible: bool):
         if not self.clients:
+            logger.warning(f"[WS] Visibility={bool(is_visible)} requested but no Flutter UI client is connected")
             return
         try:
             payload = json.dumps({"type": "visibility", "data": {"visible": bool(is_visible)}})
             for client in list(self.clients):
                 client.sendTextMessage(payload)
+            logger.info(f"[WS] Broadcast visibility={bool(is_visible)} to {len(self.clients)} client(s)")
         except Exception as e:
-            logger.error(f"Lỗi broadcast visibility: {e}")
+            logger.error(f"Error broadcasting visibility: {e}")
 
     def _broadcast_hotkey_event(self, event_json_str: str):
         if not self.clients:
@@ -91,7 +101,7 @@ class WsServer(QObject):
             for client in list(self.clients):
                 client.sendTextMessage(event_json_str)
         except Exception as e:
-            logger.error(f"Lỗi broadcast hotkey event: {e}")
+            logger.error(f"Error broadcasting hotkey event: {e}")
 
     def _broadcast_gamepad_button(self, button_name: str):
         if not self.clients:
@@ -101,7 +111,7 @@ class WsServer(QObject):
             for client in list(self.clients):
                 client.sendTextMessage(payload)
         except Exception as e:
-            logger.error(f"Lỗi broadcast gamepad button: {e}")
+            logger.error(f"Error broadcasting gamepad button: {e}")
 
     def _on_message(self, client: QWebSocket, msg: str):
         try:
@@ -169,13 +179,12 @@ class WsServer(QObject):
             elif action == "cancelCaptureHotkey":
                 self.bridge.cancelCaptureHotkey()
             else:
-                logger.warning(f"[WS] Không nhận diện được action: {action}")
+                logger.warning(f"[WS] Unrecognized action: {action}")
         except Exception as e:
-            logger.error(f"Lỗi xử lý tin nhắn từ client: {e}")
+            logger.error(f"Error handling message from client: {e}")
 
     def close(self):
         for client in self.clients:
             client.close()
         self.clients.clear()
         self.server.close()
-

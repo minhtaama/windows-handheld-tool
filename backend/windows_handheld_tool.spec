@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('config.json', '.'), ('assets', 'assets'), ('bin', 'bin'), ('../frontend/build/web', 'build/web')],
+    datas=[('config.json', '.'), ('assets', 'assets'), ('bin', 'bin')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -33,7 +33,6 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=True,
-    uac_uiaccess=True,
     icon=['assets/app_icon.ico'],
     manifest='app.manifest',
 )

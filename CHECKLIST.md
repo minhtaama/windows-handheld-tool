@@ -1,5 +1,5 @@
 # Trạng thái hiện tại của dự án (Project Status)
-Cập nhật lần cuối: 24/10/2026 20:05
+Cập nhật lần cuối: 26/10/2026 20:10
 
 > [!IMPORTANT]
 > **Quy tắc duy trì tài liệu**:
@@ -65,9 +65,64 @@ Cập nhật lần cuối: 24/10/2026 20:05
 
 ## 1. Cơ chế chuyển cảnh liền mạch & Lớp phủ in-game (Seamless Transition & Overlay)
 
-- [x] **Cơ chế hiển thị đặc quyền & Cách ly tiêu điểm (Z-Band & Focus Management)**
+- [ ] **Cơ chế hiển thị đặc quyền & Cách ly tiêu điểm (Z-Band & Focus Management)**
   + [Initial] Code thực tế: `backend/src/overlay/window_manager.py` chạy quyền Administrator, nhúng chữ ký số (`HandheldToolsSigner`) và manifest `uiAccess="true"` thực thi từ `C:\Program Files` để DWM phân bổ vào dải đặc quyền `ZBID_UIACCESS` (Band 2), luôn nổi đè lên game thuộc Band 1 (Desktop). Cửa sổ neo cố định mép phải màn hình (`Side-Dock Viewport`), khi đóng chỉ bật cờ xuyên thấu `WS_EX_TRANSPARENT` (Click-Through 100%) mà không di dời hay hủy cửa sổ. Cửa sổ con Chromium được ép cờ `WS_EX_NOACTIVATE`. Khi đóng panel, hàm `restore_foreground_window` dùng kỹ thuật giả lập phím ALT (`keybd_event` VK_MENU) trước và sau lệnh `SetForegroundWindow` để phá vỡ `ForegroundLockTimeout`, giúp game nhận lại tiêu điểm tức thì mà không bị nuốt cú nhấp chuột đầu tiên.
     Tình trạng: Hoạt động ổn định.
+  + [26/10/2026 20:10] Chuyển đổi toàn diện sang kiến trúc Flutter Windows Desktop (`windows_handheld_ui.exe`) & Khắc phục 5 lỗi hậu kiểm tra:
+    Code thực tế:
+      - `frontend/windows/runner/win32_window.cpp`: Khởi tạo cửa sổ `WS_POPUP` với `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`, kích hoạt trong suốt per-pixel cho DirectComposition (`FLUTTERVIEW`) bằng tổ hợp `DwmExtendFrameIntoClientArea({-1, -1, -1, -1})`, `DwmEnableBlurBehindWindow` (vùng rỗng `CreateRectRgn(0, 0, -1, -1)`) và `SetWindowCompositionAttribute` (`WCA_ACCENT_POLICY = 19`, `ACCENT_ENABLE_TRANSPARENTGRADIENT = 2`, `GradientColor = 0x00000000`). Xử lý `WM_ERASEBKGND` ở cả cửa sổ chính và `ChildWndProc` bằng `FillRect` với `BLACK_BRUSH` (`0x00000000`). Gỡ bỏ đoạn chặn thừa `case WM_ACTIVATE: return 0;` và khôi phục leo thang Z-Order Band (`ZBID_UIACCESS` -> `ZBID_SYSTEM_TOOLS`).
+      - `frontend/windows/runner/flutter_window.cpp`: Đổi lambda `[&]()` sang `[this]()` trong `SetNextFrameCallback` tránh bắt tham chiếu biến cục bộ đã hủy; gỡ bỏ chặn sớm `WM_ERASEBKGND` để chuyển xuống `Win32Window::MessageHandler`.
+      - `backend/src/overlay/window_manager.py`: Tích hợp `SetLayeredWindowAttributes` (`LWA_ALPHA = 0x02`) trong `_set_click_through()` để tự động hạ độ đục xuống `bAlpha = 0` khi đóng panel (`click_through=True`) và nâng lên `bAlpha = 255` khi mở panel (`click_through=False`), giúp DWM bỏ qua hoàn toàn bề mặt khi ẩn (0% FPS drop, vô hình 100%). Khôi phục gọi `pfnSetWindowBand` dự phòng phía Python trong `_init_win32_attributes()`.
+      - `backend/main.py`: Sửa lỗi gọi hàm không tồn tại `user32.GetProcessDpiAwarenessContext` bằng cặp hàm chuẩn `user32.GetThreadDpiAwarenessContext()` và `user32.GetAwarenessFromDpiAwarenessContext()`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [26/10/2026 20:55] Sửa hồi quy hậu chuyển Flutter Windows: panel chỉ còn khung trong suốt, menu System Tray không mở, host tự thoát sau khi mở panel:
+    Hiện tượng:
+      - Ấn hotkey mở panel chỉ thấy một vùng trong suốt, không có Tab Bar/UI; chuột phải System Tray không hiện menu.
+      - `app.log` ghi nhận host gọi `cleanup()` (SetEvent `HandheldTool_Shutdown` + WM_CLOSE) chỉ 1-2 giây sau `Show overlay requested`; sau đó còn 1-2 tiến trình UI mồ côi vẫn giữ cửa sổ topmost.
+    Nguyên nhân kỹ thuật:
+      - `frontend/windows/runner/win32_window.cpp` dựng cửa sổ `WS_EX_LAYERED` + `DwmExtendFrameIntoClientArea({-1,-1,-1,-1})` + `DwmEnableBlurBehindWindow` với vùng rỗng + `SetWindowCompositionAttribute(ACCENT_ENABLE_TRANSPARENTGRADIENT, GradientColor alpha 0)`; `backend/src/overlay/window_manager.py` lại gọi `SetLayeredWindowAttributes(hwnd, 0, 0/255, LWA_ALPHA)`. Tổ hợp này làm surface DirectComposition của `FLUTTERVIEW` không được composite → cửa sổ còn nguyên nhưng rỗng, trong suốt, vẫn topmost che System Tray.
+      - Host/UI chạy khác integrity level (dev `python main.py` không admin, UI `uiAccess` trong `Program Files`) nên `WM_CLOSE`/`SetWindowBand` bị UIPI lọc, UI cũ không thoát và tồn tại song song (2 WS client).
+    Code thực tế:
+      - `frontend/windows/runner/win32_window.cpp`: Bỏ toàn bộ `WS_EX_LAYERED`, `SetLayeredWindowAttributes`, `DwmExtendFrameIntoClientArea`, `DwmEnableBlurBehindWindow`, `SetWindowCompositionAttribute`. Cửa sổ dùng `WS_POPUP | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT`, nền đục `RGB(0x0A,0x0B,0x0E)` qua brush dùng chung (`BackgroundBrush()`), bo góc bằng `DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND)`. `WM_ERASEBKGND` ở cả cửa sổ chính và `ChildWndProc` dùng brush nền thay `BLACK_BRUSH`.
+      - `backend/src/overlay/window_manager.py`: Bỏ `WS_EX_LAYERED` và alpha `LWA_ALPHA`; đóng/mở panel bằng `ShowWindow(SW_HIDE)` / `ShowWindow(SW_SHOWNOACTIVATE)` thay vì hạ alpha. Bổ sung `_is_window_responsive()` (`SendMessageTimeoutW` WM_NULL, `SMTO_ABORTIFHUNG`), `_get_window_process_id()`, `_terminate_process()`, `_close_duplicate_ui_windows()` (`FindWindowExW` lớp `FLUTTER_RUNNER_WIN32_WINDOW`) và `_ui_pid`; `cleanup()` chờ 0.8 giây sau `WM_CLOSE` rồi `TerminateProcess` nếu UI còn sống, đồng thời dọn mọi UI mồ côi.
+      - `backend/main.py`, `backend/src/bridge/web_bridge.py`, `backend/src/bridge/ws_server.py`: Ghi log `[EXIT]` cho `aboutToQuit`, `requestExitApp`, `exitApp`; ghi log mỗi lần broadcast `visibility` kèm số client và log visibility gửi cho client mới.
+      - `frontend/lib/services/bridge_service.dart`: Thêm watchdog 10 giây — nếu mất kết nối backend quá lâu thì `exit(0)` để không để lại overlay mồ côi.
+      - `frontend/lib/core/app_theme.dart`: Đổi `AppTheme.background` sang đục hoàn toàn `0xFF0A0B0E`.
+      - `scripts/run.bat`: Tự nâng quyền Administrator (`whoami /groups` + `S-1-16-12288`) để host và UI cùng integrity level, tránh UIPI chặn `WM_CLOSE`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [26/10/2026 21:20] Bổ sung sau smoke test: runner C++ tự `Show()` ở frame đầu làm dải đen phủ taskbar/tray; ưu tiên bản build dev và sửa watchdog UI mồ côi:
+    Hiện tượng: Ngay sau khi host khởi động (panel đang đóng), mép phải màn hình xuất hiện dải đen 672x1080 phủ lên taskbar và khay hệ thống; chuột phải tray không mở menu. Sau khi mở panel thì UI hiển thị đúng.
+    Nguyên nhân kỹ thuật:
+      - `frontend/windows/runner/flutter_window.cpp` đăng ký `SetNextFrameCallback([this]{ Show(); })`. Host gọi `hide()` trước khi frame đầu tiên hoàn tất, nên callback `Show()` chạy sau và bật lại cửa sổ đen (nền đục) dù panel đang đóng.
+      - `_find_flutter_ui_exe()` ưu tiên bản cài trong `C:\Program Files\WindowsHandheldTools\ui` (build cũ 20:27) thay vì bản vừa build trong repo, nên khi chạy từ source vẫn nạp UI cũ còn lớp layered/DWM.
+      - `_startOrphanTimer()` hủy và tạo lại timer 10 giây sau mỗi lần reconnect thất bại (chu kỳ 2 giây), nên timer không bao giờ tới hạn và UI mồ côi không tự thoát.
+    Code thực tế:
+      - `frontend/windows/runner/flutter_window.cpp`: Bỏ hoàn toàn `SetNextFrameCallback(... Show())`; quyền hiển thị/ẩn do host quyết định qua `ShowWindow(SW_SHOWNOACTIVATE)` / `ShowWindow(SW_HIDE)`.
+      - `backend/src/overlay/window_manager.py`: `_find_flutter_ui_exe()` ưu tiên `frontend/build/windows/x64/runner/Release` khi chạy từ source; chỉ dùng bản trong `Program Files` khi frozen hoặc không có bản dev.
+      - `frontend/lib/services/bridge_service.dart`: `_startOrphanTimer()` giữ nguyên deadline đầu tiên (không reset khi reconnect thất bại), nhờ đó UI tự `exit(0)` sau 10 giây mất kết nối.
+    Kiểm chứng smoke test (26/10 21:18):
+      - Panel Flutter render đầy đủ 4 tab, đồng hồ, độ sáng, âm lượng, pin và telemetry; ảnh chụp màn hình xác nhận.
+      - Không còn cửa sổ PowerShell định kỳ; số tiến trình `powershell` ổn định qua nhiều mẫu 2 giây.
+      - Menu tray hiện đúng "Open / Close Quick Panel" và "Exit Completely"; chọn Exit thoát host sạch, log `[EXIT] QApplication aboutToQuit` + `WM_CLOSE` ghi nhận.
+      - Kill cứng host → UI tự thoát sau 10 giây, không còn cửa sổ mồ côi.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [26/10/2026 21:45] Chốt nguyên nhân bản deploy "đen sì": UIAccess/ZBID_UIACCESS (Band 2) làm mất cửa sổ con Flutter; bỏ Band 2 và UIAccess khỏi host/UI:
+    Hiện tượng: Bản build dev chạy từ repo (Band 1) render bình thường; bản deploy trong `C:\Program Files\WindowsHandheldTools` (Band 2) chỉ có cửa sổ đen, `EnumChildWindows` trả 0 cửa sổ con, dù log vẫn ghi `Spawning ... ui\windows_handheld_ui.exe`, WS client kết nối và `visibility=True` được broadcast.
+    Nguyên nhân kỹ thuật:
+      - Cửa sổ overlay nằm trong `ZBID_UIACCESS` (Band 2). Ở band này, cửa sổ con `FLUTTERVIEW` của Flutter không còn tồn tại/không được composite → panel chỉ còn nền đen.
+      - Đặt `uiAccess="false"` trong manifest của UI là chưa đủ: host chạy `--uac-uiaccess` nên tiến trình UI con **thừa hưởng TokenUIAccess**, và Windows vẫn đưa cửa sổ vào Band 2.
+      - Thử chuyển `SetWindowBand` ra sau `OnCreate()` vẫn lỗi; chỉ khi bỏ hẳn Band 2 thì cửa sổ con Flutter mới xuất hiện.
+    Code thực tế:
+      - `frontend/windows/runner/win32_window.cpp`: Bỏ hoàn toàn `SetWindowBand`; cửa sổ ở Band desktop, vẫn `WS_EX_TOPMOST`.
+      - `backend/src/overlay/window_manager.py`: Bỏ `pfnSetWindowBand`/`pfnGetWindowBand`, `ZBID_SYSTEM_TOOLS`; `current_band` luôn là `ZBID_DESKTOP`.
+      - `backend/app.manifest`, `backend/windows_handheld_tool.spec`, `scripts/deploy/deploy_test.bat`: Bỏ `uiAccess="true"` / `--uac-uiaccess`; host vẫn `requireAdministrator` (đủ cho RyzenAdj, inject DLL và Win32).
+      - `scripts/deploy/ui_privileged.manifest`: `uiAccess="false"`.
+    Kiểm chứng (26/10 21:44): `GetWindowBand` = 1, `ChildrenSynced=1`, panel render đầy đủ trên bản cài `Program Files`; ẩn/mở bằng hotkey bình thường.
+    Đánh đổi: Overlay không còn ở Band 2 nên không đè được exclusive fullscreen thật; game đã bị `dxgi_hook` ép borderless nên `TOPMOST` vẫn nổi trên game. Nếu sau này cần exclusive fullscreen, phải tách cửa sổ Flutter khỏi tiến trình UIAccess.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [x] **Can thiệp đồ họa DirectX nội tiến trình (DXGI Hook Engine)**
   + [Initial] Code thực tế: `backend/native/dxgi_hook/src/dxgi_hook.cpp` (MinHook x64) can thiệp bảng VMT SwapChain. `Hooked_SetFullscreenState` chặn `Fullscreen = TRUE`, ép `FALSE`, gọi `ForceBorderlessWindow` chuẩn hóa style Win32 (xóa `WS_CAPTION`, `WS_THICKFRAME`...) và trả về `S_OK`. `Hooked_GetFullscreenState` ép báo cáo `*pFullscreen = FALSE` để engine (Unreal Slate UI, Unity) dùng nhánh tọa độ chuột chuẩn Client Rect của Borderless Windowed. `Hooked_ResizeBuffers` & `Hooked_ResizeTarget` xóa cờ `ALLOW_MODE_SWITCH` và chặn game co rút cửa sổ Win32 khi render nhỏ hơn màn hình. Hook Factory (`CreateSwapChain`, `CreateSwapChainForHwnd`, `D3D11CreateDeviceAndSwapChain`) tự động xóa `ALLOW_MODE_SWITCH`, ép `Windowed = TRUE`, ép `Scaling = DXGI_SCALING_ASPECT_RATIO_STRETCH`.
@@ -541,6 +596,17 @@ Cập nhật lần cuối: 24/10/2026 20:05
       - Siết chặt dxva2: Chỉ chấp nhận DDC/CI khi cả `GetMonitorBrightness` thành công (loại bỏ hoàn toàn fake success trên eDP). Ưu tiên số 1 của màn hình Handheld eDP chuyển thẳng sang WMI ACPI phần cứng.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+  + [26/10/2026 20:55] Sửa lỗi cửa sổ PowerShell bật lên mỗi 2 giây:
+    Hiện tượng: Sau khi chuyển sang Flutter Windows, mỗi 2 giây có một cửa sổ PowerShell hiện lên kèm lỗi WMI.
+    Nguyên nhân kỹ thuật:
+      - `BrightnessService._sync_worker` chạy chu kỳ `time.sleep(2.0)` trên một thread mới nhưng không gọi `pythoncom.CoInitialize()`, nên `win32com.client.GetObject("winmgmts:\\.\root\wmi")` ném lỗi COM trên thread đó.
+      - `_read_wmi_brightness()` rơi xuống fallback `subprocess.check_output(["powershell", ...])` **không có `CREATE_NO_WINDOW`**, đồng thời chạy lại mỗi 2 giây → console PowerShell nhấp nháy liên tục và in lỗi.
+    Code thực tế:
+      - `backend/src/hardware/brightness_service.py`: Thêm `_co_initialize()` gọi `pythoncom.CoInitialize()`/`CoUninitialize()` trong cả `_apply_worker` và `_sync_worker`; loại bỏ hoàn toàn PowerShell khỏi `_read_wmi_brightness()` (đọc chỉ dùng WMI COM + dxva2).
+      - Thêm helper `_run_powershell_hidden()` dùng `CREATE_NO_WINDOW` + `STARTUPINFO` ẩn cửa sổ; chỉ dùng cho thao tác **set** độ sáng khi COM thất bại.
+      - `_sync_worker` đếm số lần đọc thất bại: sau 3 lần liên tiếp giãn chu kỳ poll từ 2 giây lên 30 giây và ghi log một lần, không spawn tiến trình phụ.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
 - [ ] **Âm lượng hệ thống & Tắt tiếng (Volume & Mute)**
   + [Initial] Code thực tế: `backend/src/hardware/audio_service.py` tương tác Windows CoreAudio qua thư viện `pycaw`.
     Tình trạng: Hoạt động ổn định.
@@ -588,6 +654,16 @@ Cập nhật lần cuối: 24/10/2026 20:05
       - Phối hợp các sắc độ trắng khác nhau (Fluent White Shades) cho thân vỏ, D-pad, nút bấm ABXY và cần gạt Analog tạo chiều sâu đa lớp đồng bộ hoàn hảo với Windows 11.
       - Sinh lại `backend/assets/app_icon.png` (512x512) và `backend/assets/app_icon.ico` (7 layer: 16 đến 256 px); cập nhật fallback SVG trong `backend/main.py`.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [26/10/2026 20:55] Menu chuột phải System Tray không mở sau khi chuyển Flutter Windows:
+    Hiện tượng: Chuột phải icon khay hệ thống không thấy menu "Open / Close Quick Panel" và "Exit Completely".
+    Nguyên nhân kỹ thuật:
+      - Panel trong suốt nhưng vẫn là cửa sổ `TOPMOST` phủ toàn bộ mép phải màn hình (bao gồm vùng tray), nên click phải rơi vào panel thay vì icon khay.
+      - Host Python đã thoát ngay sau khi mở panel, icon còn lại là icon "ghost" của tiến trình đã chết nên không có menu.
+    Code thực tế:
+      - `backend/src/overlay/window_manager.py`: Panel đóng bằng `ShowWindow(SW_HIDE)` nên không còn phủ vùng tray; UI mồ côi bị dọn trong `cleanup()` và `ensure_flutter_ui()`.
+      - `backend/main.py`: Tray vẫn do `QSystemTrayIcon` + `QMenu` quản lý; bổ sung log `[EXIT]` để xác định chính xác nguồn gọi thoát host.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 ---
 
 ## 7. Tính năng dự kiến mở rộng (Backlog)
@@ -627,4 +703,19 @@ Cập nhật lần cuối: 24/10/2026 20:05
     Code thực tế:
       - `backend/src/overlay/quick_panel.py`: Bản đóng gói (frozen) không còn dò Flutter dev server cổng 5173 (nguyên nhân mục 4 bám nhầm dev server của mục 2 rồi bị refused khi server tắt), luôn nạp build tĩnh. Ở chế độ dev, thêm watchdog `_ensure_dev_app_started`: sau 12s nếu chưa có `flt-glass-pane` (DDC treo ở bước nạp module khi server còn biên dịch) thì tự reload, tối đa 6 lần.
       - `scripts/run.bat`: Vòng chờ mục 2 kiểm tra `/main.dart.js` (chỉ trả về sau khi biên dịch xong) thay cho trang index.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [26/10/2026 19:20] Nâng cấp toàn diện scripts/run.bat hỗ trợ kiến trúc Flutter Windows Desktop và kiểm thử tự động cả 4 mục:
+    Code thực tế:
+      - Menu chuẩn hóa 4 tùy chọn: `[1] Run Gaming Overlay`, `[2] Run Dev Hot Reload (Flutter Windows)`, `[3] Build Release Package and Install to Program Files`, `[4] Uninstall Application from System`.
+      - **Mục [1] Gaming Overlay**: Tự động gọi `windows_handheld_ui.exe`, gắn kết HWND `FLUTTER_RUNNER_WIN32_WINDOW`, xác lập ExStyle `0x080800A8` (`WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`), DWM alpha multiplier `ret=1, bAlpha=255, dwFlags=2`, WebSocket cổng 8765 lắng nghe hai chiều.
+      - **Mục [2] Dev Hot Reload**: Mở Flutter runner trước độc lập với `flutter run -d windows` (hỗ trợ phím `r`/`R`), Python backend khởi động sau tự động phát hiện HWND `WindowsHandheldOverlay`, cấu hình Window styles và gắn kết WebSocket mà không sinh tiến trình thừa.
+      - **Mục [3] Build & Deploy**: Tối ưu hóa `deploy_test.bat` loại bỏ trùng lặp thư mục `_internal/ui`, dùng `mt.exe` nhúng `ui_privileged.manifest`, dùng `signtool.exe` ký số Authenticode `HandheldToolsSigner` cho cả hai executable và deploy vào `C:\Program Files\WindowsHandheldTools`.
+      - **Mục [4] Uninstall**: Quy trình clean kill hai tiến trình, gỡ driver `WinRing0`, xóa Task Scheduler và xóa thư mục an toàn.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [26/10/2026 20:10] Chuẩn hóa spec PyInstaller, bình luận tiếng Anh & Kiểm thử tự động E2E (Alpha/Z-Band/DPI/WebSocket):
+    Code thực tế:
+      - `backend/windows_handheld_tool.spec`: Xóa bỏ đường dẫn cứng tuyệt đối `D:/dev-projects/.../Release` khỏi `datas` (ngăn đóng gói trùng lặp ~40MB vào `_internal/ui`), khôi phục `datas=[('config.json', '.'), ('assets', 'assets'), ('bin', 'bin')]` và `hiddenimports=['win32com', 'win32com.client', 'wmi', 'pythoncom']`.
+      - `frontend/lib/services/bridge_service.dart` & `scripts/deploy/deploy_test.bat`: Chuyển toàn bộ comment, docstring và thông báo log còn sót sang 100% tiếng Anh theo đúng tiêu chuẩn mã nguồn.
+      - Kiểm thử E2E xác nhận: `flutter analyze` đạt 0 issues; `flutter build windows --release` biên dịch thành công `windows_handheld_ui.exe`; kiểm thử runtime xác nhận DPI Awareness (`Context=0x22, Awareness=2`), trạng thái ẩn (`Alpha=0, Flags=2`), trạng thái hiện (`Alpha=255, Flags=2`) và sự kiện bấm nút `B` tay cầm qua WebSocket đóng panel trả về `Alpha=0, is_visible=False`.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).

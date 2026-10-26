@@ -22,6 +22,29 @@ class PHYSICAL_MONITOR(ctypes.Structure):
         ("szPhysicalMonitorDescription", wintypes.WCHAR * 128)
     ]
 
+# Windows CreateProcess flag: never allocate a console for helper processes.
+CREATE_NO_WINDOW = 0x08000000
+
+
+def _run_powershell_hidden(args: list, timeout: float, capture_output: bool = True):
+    """Runs PowerShell without flashing a console window and without inheriting stdio handles."""
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    try:
+        return subprocess.run(
+            args,
+            stdout=subprocess.PIPE if capture_output else subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=timeout,
+            creationflags=CREATE_NO_WINDOW,
+            startupinfo=startupinfo,
+        )
+    except Exception as e:
+        logger.debug(f"Hidden PowerShell call failed: {e}")
+        return None
+
 class BrightnessService:
     _instance = None
 
@@ -132,15 +155,8 @@ class BrightnessService:
         except Exception as e:
             logger.debug(f"win32com WmiMonitorBrightness query error: {e}")
 
-        # Fallback: PowerShell CIM
-        try:
-            cmd = "(Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorBrightness)[0].CurrentBrightness"
-            out = subprocess.check_output(["powershell", "-NoProfile", "-Command", cmd], text=True, timeout=1.5).strip()
-            if out.isdigit():
-                return int(out)
-        except Exception:
-            pass
-
+        # Reading brightness must never spawn a console helper: this runs every 2s
+        # from the sync worker and previously flashed a PowerShell window each time.
         return None
 
     def _set_wmi_brightness(self, percent: int) -> bool:
@@ -160,15 +176,14 @@ class BrightnessService:
         except Exception as e:
             logger.debug(f"win32com WmiSetBrightness error: {e}")
 
-        # Fallback: PowerShell WMI command
-        try:
-            ps_cmd = f"(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {percent})"
-            ret = subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, timeout=2.0)
-            return ret.returncode == 0
-        except Exception as e:
-            logger.debug(f"PowerShell WmiSetBrightness error: {e}")
-
-        return False
+        # Fallback: PowerShell WMI command (only on an explicit set, hidden window)
+        ps_cmd = f"(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {percent})"
+        ret = _run_powershell_hidden(
+            ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps_cmd],
+            timeout=2.0,
+            capture_output=False,
+        )
+        return bool(ret and ret.returncode == 0)
 
     def _set_gdi_gamma(self, percent: int) -> bool:
         """Fallback software dimming via GDI DeviceGammaRamp"""
@@ -202,45 +217,86 @@ class BrightnessService:
             return val
         return None
 
+    @staticmethod
+    def _co_initialize():
+        """Initializes COM for a worker thread (win32com requires it per thread)."""
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            return pythoncom
+        except Exception as e:
+            logger.debug(f"COM initialization failed on worker thread: {e}")
+            return None
+
     def _apply_worker(self):
         """Debounced background worker to apply brightness without I2C/ACPI contention"""
-        while not self._stop_event.is_set():
-            if self._apply_event.wait(timeout=0.5):
-                self._apply_event.clear()
-                with self._lock:
-                    target = self._target_brightness
+        pythoncom = self._co_initialize()
+        try:
+            while not self._stop_event.is_set():
+                if self._apply_event.wait(timeout=0.5):
+                    self._apply_event.clear()
+                    with self._lock:
+                        target = self._target_brightness
 
-                # 1. Primary path for Handheld/Laptop internal display (WMI ACPI)
-                ok = self._set_wmi_brightness(target)
+                    # 1. Primary path for Handheld/Laptop internal display (WMI ACPI)
+                    ok = self._set_wmi_brightness(target)
 
-                # 2. Secondary path for external monitor (dxva2 DDC/CI)
-                if not ok:
-                    ok = self._set_dxva2_brightness(target)
+                    # 2. Secondary path for external monitor (dxva2 DDC/CI)
+                    if not ok:
+                        ok = self._set_dxva2_brightness(target)
 
-                # 3. Final fallback: Software GDI Gamma Ramp
-                if not ok:
-                    ok = self._set_gdi_gamma(target)
+                    # 3. Final fallback: Software GDI Gamma Ramp
+                    if not ok:
+                        ok = self._set_gdi_gamma(target)
 
-                if ok:
-                    self.current_brightness = target
+                    if ok:
+                        self.current_brightness = target
 
-                time.sleep(0.04)  # 40ms debounce
+                    time.sleep(0.04)  # 40ms debounce
+        finally:
+            if pythoncom:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
     def _sync_worker(self):
-        """Periodically sync brightness if changed externally from Windows Action Center or hotkeys"""
-        while not self._stop_event.is_set():
-            time.sleep(2.0)
-            if self._is_setting:
-                continue
-            try:
-                hw_val = self._read_hardware_brightness()
-                if hw_val is not None and abs(hw_val - self.current_brightness) >= 2:
-                    logger.info(f"Syncing brightness from Windows: {self.current_brightness}% -> {hw_val}%")
-                    with self._lock:
-                        self.current_brightness = hw_val
-                        self._target_brightness = hw_val
-            except Exception:
-                pass
+        """Periodically sync brightness if changed externally from Windows Action Center or hotkeys."""
+        pythoncom = self._co_initialize()
+        failures = 0
+        interval = 2.0
+        try:
+            while not self._stop_event.is_set():
+                time.sleep(interval)
+                if self._is_setting:
+                    continue
+                try:
+                    hw_val = self._read_hardware_brightness()
+                    if hw_val is None:
+                        failures += 1
+                        if failures == 3:
+                            interval = 30.0
+                            logger.info(
+                                "Brightness sensor unavailable after 3 polls; "
+                                "slowing sync to 30s (no console helpers will be spawned)"
+                            )
+                        continue
+
+                    failures = 0
+                    interval = 2.0
+                    if abs(hw_val - self.current_brightness) >= 2:
+                        logger.info(f"Syncing brightness from Windows: {self.current_brightness}% -> {hw_val}%")
+                        with self._lock:
+                            self.current_brightness = hw_val
+                            self._target_brightness = hw_val
+                except Exception:
+                    pass
+        finally:
+            if pythoncom:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
     def get_brightness(self) -> int:
         return self.current_brightness

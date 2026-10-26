@@ -258,6 +258,7 @@ class WebBridge(QObject):
 
     @Slot()
     def exitApp(self):
+        logger.warning("[EXIT] exitApp action received from Flutter UI")
         self.requestExitApp.emit()
 
     @Slot()

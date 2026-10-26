@@ -4,6 +4,15 @@ set "SCRIPT_DIR=%~dp0"
 set "PROJECT_ROOT=%~dp0.."
 cd /d "%PROJECT_ROOT%"
 
+:: Host and UIAccess UI must run at the same integrity level; otherwise Windows
+:: UIPI filters WM_CLOSE/SetWindowBand between them and leaves orphan overlays.
+whoami /groups | findstr /C:"S-1-16-12288" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [*] Requesting Administrator privileges...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/c \"\"%~f0\" %*\"' -Verb RunAs"
+    exit /b
+)
+
 if exist "%PROJECT_ROOT%\.venv\Scripts\python.exe" (
     set "PYTHON_CMD=%PROJECT_ROOT%\.venv\Scripts\python.exe"
 ) else (
@@ -12,9 +21,8 @@ if exist "%PROJECT_ROOT%\.venv\Scripts\python.exe" (
 
 if "%1"=="1" goto RUN_APP
 if "%1"=="2" goto RUN_DEV_HOTRELOAD
-if "%1"=="3" goto RUN_CHROME
-if "%1"=="4" goto RUN_DEPLOY
-if "%1"=="5" goto RUN_UNINSTALL
+if "%1"=="3" goto RUN_DEPLOY
+if "%1"=="4" goto RUN_UNINSTALL
 if "%1"=="0" exit /b 0
 
 :MENU
@@ -23,21 +31,19 @@ echo ========================================================
 echo   Windows Handheld Tool - Control Center
 echo ========================================================
 echo.
-echo   [1] Run Gaming Overlay (Python + Flutter Web)
-echo   [2] Run Dev Hot Reload (Flutter Server + Overlay)
-echo   [3] Open Flutter Web in Chrome (UI Inspector ^& Mock Data)
-echo   [4] Build Release Package and Install to Program Files
-echo   [5] Uninstall Application from System
+echo   [1] Run Gaming Overlay (Python + Flutter Desktop)
+echo   [2] Run Dev Hot Reload (Flutter Windows + Overlay)
+echo   [3] Build Release Package and Install to Program Files
+echo   [4] Uninstall Application from System
 echo   [0] Exit
 echo.
 echo ========================================================
-set /p choice="Enter your choice [1-5]: "
+set /p choice="Enter your choice [1-4]: "
 
 if "%choice%"=="1" goto RUN_APP
 if "%choice%"=="2" goto RUN_DEV_HOTRELOAD
-if "%choice%"=="3" goto RUN_CHROME
-if "%choice%"=="4" goto RUN_DEPLOY
-if "%choice%"=="5" goto RUN_UNINSTALL
+if "%choice%"=="3" goto RUN_DEPLOY
+if "%choice%"=="4" goto RUN_UNINSTALL
 if "%choice%"=="0" exit /b 0
 echo Invalid choice!
 timeout /t 2 >nul
@@ -82,12 +88,19 @@ exit /b 0
 
 :CLEAN_PREVIOUS_INSTANCE
 taskkill /F /IM windows_handheld_tool.exe >nul 2>&1
+taskkill /F /IM windows_handheld_ui.exe >nul 2>&1
 taskkill /F /IM WindowsHandheldTools.exe >nul 2>&1
 exit /b 0
 
 :RUN_APP
 call :ENSURE_RTSS
 call :CLEAN_PREVIOUS_INSTANCE
+if not exist "%PROJECT_ROOT%\frontend\build\windows\x64\runner\Release\windows_handheld_ui.exe" (
+    echo [*] Flutter Windows release binary not found. Compiling now...
+    pushd "%PROJECT_ROOT%\frontend"
+    call flutter build windows --release
+    popd
+)
 echo [*] Starting Windows Handheld Tool via Python...
 pushd "%PROJECT_ROOT%\backend"
 %PYTHON_CMD% main.py
@@ -103,24 +116,24 @@ exit /b
 :RUN_DEV_HOTRELOAD
 call :ENSURE_RTSS
 call :CLEAN_PREVIOUS_INSTANCE
-echo [*] Starting Flutter Web Server on port 5173 (Supports Hot Reload via r/R key)...
-start "Flutter Web Dev Server (Port 5173)" /D "%PROJECT_ROOT%\frontend" cmd /k "flutter run -d web-server --web-port 5173 --web-hostname 127.0.0.1"
+echo [*] Starting Flutter Windows in Dev Mode (Supports Hot Reload via r/R key)...
+start "Flutter Windows Dev Runner" /D "%PROJECT_ROOT%\frontend" cmd /k "flutter run -d windows"
 
-echo [*] Waiting for Flutter Web Server to become ready on port 5173...
+echo [*] Waiting for Flutter Windows UI window to appear...
 set "WAIT_COUNT=0"
-:WAIT_PORT_5173
-%PYTHON_CMD% -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5173/main.dart.js', timeout=2).status == 200 else 1)" >nul 2>&1
-if %errorlevel% equ 0 goto DEV_SERVER_READY
+:WAIT_FLUTTER_WINDOW
+%PYTHON_CMD% -c "import ctypes, sys; sys.exit(0 if ctypes.windll.user32.FindWindowW('FLUTTER_RUNNER_WIN32_WINDOW', 'WindowsHandheldOverlay') else 1)" >nul 2>&1
+if %errorlevel% equ 0 goto DEV_WINDOW_READY
 timeout /t 1 >nul
 set /a WAIT_COUNT+=1
 if %WAIT_COUNT% geq 60 (
-    echo [WARNING] Flutter Web Server took too long to start. Launching backend anyway...
-    goto DEV_SERVER_READY
+    echo [WARNING] Flutter UI window took too long to appear. Launching backend anyway...
+    goto DEV_WINDOW_READY
 )
-goto WAIT_PORT_5173
+goto WAIT_FLUTTER_WINDOW
 
-:DEV_SERVER_READY
-echo [OK] Flutter Web Server is ready on http://127.0.0.1:5173!
+:DEV_WINDOW_READY
+echo [OK] Flutter Windows UI is active!
 echo [*] Starting Windows Handheld Tool via Python...
 pushd "%PROJECT_ROOT%\backend"
 %PYTHON_CMD% main.py
@@ -131,14 +144,6 @@ if %errorlevel% neq 0 (
 ) else (
     popd
 )
-exit /b
-
-:RUN_CHROME
-echo [*] Starting Flutter Web directly in Google Chrome (UI Inspector ^& DevTools)...
-pushd "%PROJECT_ROOT%\frontend"
-flutter run -d chrome
-popd
-pause
 exit /b
 
 :RUN_DEPLOY

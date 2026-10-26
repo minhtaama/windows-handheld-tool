@@ -26,7 +26,7 @@ NON_GAME_PROCESSES = {
     "firefox.exe",
     "discord.exe",
     "windows_handheld_tool.exe",
-    "qtwebengineprocess.exe",
+    "windows_handheld_ui.exe",
     "shellexperiencehost.exe",
     "searchapp.exe",
     "startmenuexperiencehost.exe",

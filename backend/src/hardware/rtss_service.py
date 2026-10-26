@@ -190,7 +190,7 @@ class RtssService:
         # 2. Exclude Quick Panel & Tool processes from hooking and OSD
         exclude_apps = [
             "windows_handheld_tool.exe",
-            "QtWebEngineProcess.exe",
+            "windows_handheld_ui.exe",
             "python.exe",
             "pythonw.exe",
         ]
@@ -422,7 +422,7 @@ class RtssService:
 
     _IGNORED_APPS = {
         "windows_handheld_tool.exe",
-        "qtwebengineprocess.exe",
+        "windows_handheld_ui.exe",
         "python.exe",
         "pythonw.exe",
         "rtss.exe",

@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 class AppTheme {
   AppTheme._();
 
-  // Nền tối OLED Stealth Black Acrylic
-  static const Color background = Color(0xF20A0B0E);
+  // Nền tối OLED Stealth Black. Opaque because the overlay window is no longer
+  // a layered/DWM-glass surface (that combination hid the Flutter frame).
+  static const Color background = Color(0xFF0A0B0E);
 
   // Nền thẻ Matte Gunmetal kim loại
   static const Color cardBackground = Color(0xFF14151B);

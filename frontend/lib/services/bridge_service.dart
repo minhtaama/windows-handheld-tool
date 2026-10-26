@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show exit;
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../core/logger.dart';
@@ -7,8 +8,8 @@ import 'overlay_controller.dart';
 import 'system_telemetry_service.dart';
 import '../input/gamepad_service.dart';
 
-/// Dịch vụ cầu nối WebSocket giao tiếp thời gian thực giữa giao diện Flutter Web
-/// và tiến trình dịch vụ hệ thống Python (PySide6 Backend).
+/// Real-time WebSocket bridge service connecting the Flutter Desktop UI
+/// with the Python (PySide6) system backend.
 class BridgeService {
   static const _logger = AppLogger('BridgeService');
   static final BridgeService instance = BridgeService._();
@@ -18,6 +19,7 @@ class BridgeService {
   WebSocketChannel? _channel;
   Timer? _reconnectTimer;
   Timer? _mockTimer;
+  Timer? _orphanTimer;
 
   final ValueNotifier<bool> isConnected = ValueNotifier<bool>(false);
   final StreamController<SystemTelemetryData> _telemetryController =
@@ -28,7 +30,7 @@ class BridgeService {
   Stream<SystemTelemetryData> get telemetryStream => _telemetryController.stream;
   Stream<Map<String, dynamic>> get hotkeyEventsStream => _hotkeyEventsController.stream;
 
-  // Trạng thái phần cứng phản ánh từ backend
+  // Hardware states synchronized from the backend
   final ValueNotifier<int> tdp = ValueNotifier<int>(15);
   final ValueNotifier<int> fanSpeed = ValueNotifier<int>(50);
   final ValueNotifier<bool> isFanAuto = ValueNotifier<bool>(true);
@@ -56,11 +58,11 @@ class BridgeService {
 
   void _connect() {
     try {
-      _logger.info('Đang kết nối WebSocket tới ws://127.0.0.1:8765...');
+      _logger.info('Connecting to WebSocket server at ws://127.0.0.1:8765...');
       final uri = Uri.parse('ws://127.0.0.1:8765');
       _channel = WebSocketChannel.connect(uri);
 
-      // Catch channel.ready future to avoid unhandled promise rejection on Web platform
+      // Catch channel.ready future to avoid unhandled exception on handshake failure
       _channel!.ready.then((_) {
         _logger.info('WebSocket channel connection established.');
       }).catchError((error) {
@@ -73,21 +75,22 @@ class BridgeService {
           if (!isConnected.value) {
             isConnected.value = true;
             _stopMockTimer();
-            _logger.info('Đã kết nối thành công tới Python WebSocket Server.');
+            _cancelOrphanTimer();
+            _logger.info('Connected successfully to Python WebSocket Server.');
           }
           _handleMessage(message.toString());
         },
         onError: (error) {
-          _logger.warning('Lỗi WebSocket stream: $error');
+          _logger.warning('WebSocket stream error: $error');
           _onDisconnected();
         },
         onDone: () {
-          _logger.info('WebSocket đã đóng kết nối.');
+          _logger.info('WebSocket connection closed.');
           _onDisconnected();
         },
       );
     } catch (e) {
-      _logger.warning('Không thể mở kết nối WebSocket: $e');
+      _logger.warning('Could not open WebSocket connection: $e');
       _onDisconnected();
     }
   }
@@ -96,14 +99,34 @@ class BridgeService {
     isConnected.value = false;
     _channel = null;
     _startMockTimer();
+    _startOrphanTimer();
 
-    // Tự động kết nối lại sau 2 giây
+    // Automatically reconnect after 2 seconds
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 2), () {
       if (!isConnected.value) {
         _connect();
       }
     });
+  }
+
+  /// Kills the UI process when the Python host is gone, so a stale window can
+  /// never stay on screen as an invisible/transparent overlay.
+  void _startOrphanTimer() {
+    // Reconnect attempts call _onDisconnected repeatedly; keep the first
+    // deadline instead of pushing it forward on every failed retry.
+    if (_orphanTimer?.isActive ?? false) return;
+    _orphanTimer = Timer(const Duration(seconds: 10), () {
+      if (!isConnected.value) {
+        _logger.warning('Backend unavailable for 10s; exiting UI to avoid an orphan overlay window.');
+        exit(0);
+      }
+    });
+  }
+
+  void _cancelOrphanTimer() {
+    _orphanTimer?.cancel();
+    _orphanTimer = null;
   }
 
   void _handleMessage(String rawJson) {
@@ -121,12 +144,8 @@ class BridgeService {
       } else if (type == 'config') {
         config.value = data;
       } else if (type == 'visibility') {
-        final visible = (data['visible'] as bool?) ?? true;
-        if (visible) {
-          OverlayController.instance.showOverlay();
-        } else {
-          OverlayController.instance.hideOverlay();
-        }
+        final visible = (data['visible'] as bool?) ?? false;
+        OverlayController.instance.setVisibilityFromBackend(visible);
       } else if (type == 'hotkeyProgress' || type == 'hotkeyCaptured' || type == 'hotkeyCancelled') {
         _hotkeyEventsController.add({
           'type': type,
@@ -142,7 +161,7 @@ class BridgeService {
         }
       }
     } catch (e) {
-      _logger.error('Lỗi phân tích cú pháp gói tin WS: $e');
+      _logger.error('Failed to parse WebSocket packet: $e');
     }
   }
 
@@ -196,7 +215,7 @@ class BridgeService {
     final isTdpHardwareActive = data['is_tdp_hardware_active'] as bool? ?? false;
     final isHvciBlocked = data['is_hvci_blocked'] as bool? ?? false;
 
-    // Đồng bộ lại các trạng thái phần cứng nếu có gửi kèm trong telemetry
+    // Synchronize hardware states included in telemetry snapshots
     if (data.containsKey('is_touch_enabled')) {
       isTouchEnabled.value = data['is_touch_enabled'] as bool;
     }
@@ -254,20 +273,20 @@ class BridgeService {
     _send({'action': 'installRtss'});
   }
 
-  /// Gửi lệnh thao tác sang Python Backend qua WebSocket
+  /// Sends an action command to the Python Backend over WebSocket.
   void _send(Map<String, dynamic> payload) {
     if (isConnected.value && _channel != null) {
       try {
         _channel!.sink.add(jsonEncode(payload));
       } catch (e) {
-        _logger.error('Lỗi khi gửi gói tin sang backend: $e');
+        _logger.error('Failed to send packet to backend: $e');
       }
     } else {
       _logger.info('[MOCK SEND] $payload');
     }
   }
 
-  // --- Các hàm API điều khiển phần cứng ---
+  // --- Hardware control API methods ---
 
   void setTdp(int watts) {
     tdp.value = watts;
@@ -297,7 +316,6 @@ class BridgeService {
     isMuted.value = !isMuted.value;
     _send({'action': 'toggleMute'});
   }
-
 
   void setBrightness(int percent) {
     brightness.value = percent;
@@ -385,7 +403,7 @@ class BridgeService {
     _send({'action': 'cancelCaptureHotkey'});
   }
 
-  // --- Chế độ giả lập khi chạy độc lập trên Chrome (Mock Data) ---
+  // --- Standalone Mock Telemetry Mode ---
   void _startMockTimer() {
     _mockTimer?.cancel();
     _mockTimer = Timer.periodic(const Duration(seconds: 1), (_) {

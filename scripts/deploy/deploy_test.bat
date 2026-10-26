@@ -41,7 +41,7 @@ echo.
 :: 3. Terminate running process and stop driver service to avoid file lock
 echo [*] Step 2/6: Stopping active processes and driver service...
 taskkill /F /T /IM "windows_handheld_tool.exe" 2>nul
-taskkill /F /T /IM "QtWebEngineProcess.exe" 2>nul
+taskkill /F /T /IM "windows_handheld_ui.exe" 2>nul
 taskkill /F /IM "python.exe" /FI "WINDOWTITLE eq Windows Handheld Tool*" 2>nul
 net stop "WinRing0_1_2_0" 2>nul
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-MpPreference -ExclusionPath '%PROJECT_ROOT%' -ErrorAction SilentlyContinue" 2>nul
@@ -51,15 +51,13 @@ echo.
 
 :: 4. Build Standalone Executable via PyInstaller with UIAccess Manifest
 echo [*] Step 3/6: Packaging Frontend and Python Application...
-echo [*] Compiling Flutter Web Frontend...
+echo [*] Compiling Flutter Windows Desktop Frontend...
 pushd "%PROJECT_ROOT%\frontend"
-:: --no-web-resources-cdn keeps CanvasKit inside build/web/canvaskit so the panel also
-:: loads when the device has no internet connection.
-call flutter build web --release --pwa-strategy=none --no-tree-shake-icons --no-web-resources-cdn
+call flutter build windows --release
 set "FLUTTER_ERR=!errorlevel!"
 popd
 if !FLUTTER_ERR! neq 0 (
-    echo [ERROR] Flutter Web build failed!
+    echo [ERROR] Flutter Windows build failed!
     pause
     exit /b !FLUTTER_ERR!
 )
@@ -74,13 +72,11 @@ if exist "windows_handheld_tool.spec" del /F /Q "windows_handheld_tool.spec"
     --distpath "%PROJECT_ROOT%\dist" ^
     --workpath "%PROJECT_ROOT%\build" ^
     --uac-admin ^
-    --uac-uiaccess ^
     --manifest "app.manifest" ^
     --add-data "config.json;." ^
     --icon "assets\app_icon.ico" ^
     --add-data "assets;assets" ^
     --add-data "bin;bin" ^
-    --add-data "..\frontend\build\web;build\web" ^
     "main.py"
 set "PYINST_ERR=!errorlevel!"
 popd
@@ -93,8 +89,8 @@ if !PYINST_ERR! neq 0 (
 echo [OK] PyInstaller build completed.
 echo.
 
-:: 5. Copy clean runtime driver binaries, web assets and config.json to Release folder
-echo [*] Step 4/6: Synchronizing driver binaries and web assets to dist folder...
+:: 5. Copy clean runtime driver binaries, UI assets and config.json to Release folder
+echo [*] Step 4/6: Synchronizing driver binaries and UI assets to dist folder...
 if not exist "%DIST_DIR%\bin" mkdir "%DIST_DIR%\bin"
 if not exist "%DIST_DIR%\assets" mkdir "%DIST_DIR%\assets"
 if exist "%PROJECT_ROOT%\backend\assets" (
@@ -113,20 +109,36 @@ for %%F in (
         copy /Y "%PROJECT_ROOT%\backend\bin\%%~F" "%DIST_DIR%\bin\" >nul
     )
 )
-:: Đồng bộ WinRing0 trực tiếp tại thư mục chứa windows_handheld_tool.exe
+:: Synchronize WinRing0 directly to the executable directory
 if exist "%PROJECT_ROOT%\backend\bin\WinRing0x64.sys" copy /Y "%PROJECT_ROOT%\backend\bin\WinRing0x64.sys" "%DIST_DIR%\" >nul
 if exist "%PROJECT_ROOT%\backend\bin\WinRing0x64.dll" copy /Y "%PROJECT_ROOT%\backend\bin\WinRing0x64.dll" "%DIST_DIR%\" >nul
 if exist "%PROJECT_ROOT%\backend\config.json" copy /Y "%PROJECT_ROOT%\backend\config.json" "%DIST_DIR%\config.json" >nul
 
-if exist "%PROJECT_ROOT%\frontend\build\web" (
-    if not exist "%DIST_DIR%\build\web" mkdir "%DIST_DIR%\build\web"
-    robocopy "%PROJECT_ROOT%\frontend\build\web" "%DIST_DIR%\build\web" /E >nul
+if exist "%PROJECT_ROOT%\frontend\build\windows\x64\runner\Release" (
+    if not exist "%DIST_DIR%\ui" mkdir "%DIST_DIR%\ui"
+    robocopy "%PROJECT_ROOT%\frontend\build\windows\x64\runner\Release" "%DIST_DIR%\ui" /E >nul
 )
-echo [OK] Driver binaries and web assets synchronized.
+echo [OK] Driver binaries and UI assets synchronized.
 echo.
 
-:: 6. Locate signtool.exe and sign the release executable
-echo [*] Step 5/6: Signing windows_handheld_tool.exe with Authenticode...
+:: 6. Locate mt.exe and signtool.exe to embed UIAccess manifest and sign
+echo [*] Step 5/6: Embedding UIAccess manifest and signing executables...
+set "MT_EXE="
+for /f "delims=" %%I in ('dir /b /s "C:\Program Files (x86)\Windows Kits\10\bin\*mt.exe" 2^>nul ^| findstr /i "\\x64\\mt.exe"') do (
+    if exist "%%I" (
+        set "MT_EXE=%%I"
+        goto :FOUND_MT
+    )
+)
+
+:FOUND_MT
+if defined MT_EXE (
+    if exist "%DIST_DIR%\ui\windows_handheld_ui.exe" (
+        echo [*] Embedding UIAccess manifest into ui\windows_handheld_ui.exe...
+        "!MT_EXE!" -manifest "%SCRIPT_DIR%ui_privileged.manifest" -outputresource:"%DIST_DIR%\ui\windows_handheld_ui.exe;#1"
+    )
+)
+
 set "SIGNTOOL="
 for /f "delims=" %%I in ('dir /b /s "C:\Program Files (x86)\Windows Kits\10\bin\*signtool.exe" 2^>nul ^| findstr /i "\\x64\\signtool.exe"') do (
     if exist "%%I" (
@@ -148,12 +160,25 @@ if %errorlevel% neq 0 (
     echo [!] Timestamp server unreachable. Signing without timestamp...
     "!SIGNTOOL!" sign /sm /s My /n "HandheldToolsSigner" /fd SHA256 "%DIST_DIR%\windows_handheld_tool.exe"
     if !errorlevel! neq 0 (
-        echo [ERROR] Code signing failed!
+        echo [ERROR] Code signing failed for windows_handheld_tool.exe!
         pause
-        exit /b !errorlevel%
+        exit /b !errorlevel!
     )
 )
-echo [OK] Executable signed successfully with Authenticode UIAccess signature.
+
+if exist "%DIST_DIR%\ui\windows_handheld_ui.exe" (
+    echo [*] Signing windows_handheld_ui.exe with Authenticode...
+    "!SIGNTOOL!" sign /sm /s My /n "HandheldToolsSigner" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "%DIST_DIR%\ui\windows_handheld_ui.exe"
+    if !errorlevel! neq 0 (
+        "!SIGNTOOL!" sign /sm /s My /n "HandheldToolsSigner" /fd SHA256 "%DIST_DIR%\ui\windows_handheld_ui.exe"
+        if !errorlevel! neq 0 (
+            echo [ERROR] Code signing failed for windows_handheld_ui.exe!
+            pause
+            exit /b !errorlevel!
+        )
+    )
+)
+echo [OK] Executables signed successfully with Authenticode UIAccess signature.
 echo.
 
 :: 7. Synchronize to Secure Location (C:\Program Files\WindowsHandheldTools)

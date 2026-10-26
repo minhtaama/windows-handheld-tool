@@ -18,8 +18,9 @@ echo.
 set "TARGET_DIR=C:\Program Files\WindowsHandheldTools"
 
 :: 1. Force terminate all running instances
-echo [*] Terminating windows_handheld_tool.exe...
+echo [*] Terminating windows_handheld_tool.exe and windows_handheld_ui.exe...
 taskkill /F /IM "windows_handheld_tool.exe" /T >nul 2>&1
+taskkill /F /IM "windows_handheld_ui.exe" /T >nul 2>&1
 
 :: 2. Release legacy global hooks if dxgi_hook.dll exists
 if exist "%TARGET_DIR%\dxgi_hook.dll" (
