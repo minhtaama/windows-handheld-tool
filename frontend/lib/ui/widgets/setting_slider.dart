@@ -291,8 +291,11 @@ class SettingSlider extends StatelessWidget {
             ),
           ),
 
-          // 3. Dãy mốc lựa chọn nhanh (Presets) nếu có
-          if (quickPresets != null && quickPresets!.isNotEmpty) ...[
+          // 3. Quick-pick presets. Hidden together with the thumb and the target
+          // track: in auto mode there is no target value to pick.
+          if (shouldShowSlider &&
+              quickPresets != null &&
+              quickPresets!.isNotEmpty) ...[
             const SizedBox(height: 8),
             PresetSelector<int>(
               presets: quickPresets!,

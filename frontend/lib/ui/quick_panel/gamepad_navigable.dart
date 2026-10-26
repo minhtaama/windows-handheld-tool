@@ -30,7 +30,10 @@ mixin GamepadNavigableMixin<T extends StatefulWidget> on State<T>
     implements GamepadNavigableTabState {
   final ScrollController scrollController = ScrollController();
   final Map<int, GlobalKey> itemKeys = {};
-  int focusedIndex = 0;
+
+  /// -1 means "nothing focused". With no gamepad attached the panel opens with
+  /// no highlight at all instead of a focus ring parked on the first row.
+  int focusedIndex = -1;
 
   GlobalKey getItemKey(int index) =>
       itemKeys.putIfAbsent(index, () => GlobalKey());
@@ -46,15 +49,28 @@ mixin GamepadNavigableMixin<T extends StatefulWidget> on State<T>
 
   @override
   void resetFocus() {
-    if (focusedIndex != 0 && mounted) {
-      setState(() => focusedIndex = 0);
-      _autoScrollToFocused();
-    }
+    final target = GamepadService.isConnected.value ? _firstItemIndex() : -1;
+    if (focusedIndex == target || !mounted) return;
+    setState(() => focusedIndex = target);
+    if (target >= 0) _autoScrollToFocused();
+  }
+
+  int _firstItemIndex() {
+    final layout = navigationLayout;
+    return layout.isEmpty ? -1 : layout.first.first;
   }
 
   /// Nhận tín hiệu nút bấm từ QuickPanel chuyển xuống
   @override
   void handleGamepadButton(GamepadButton button) {
+    if (focusedIndex < 0) {
+      // The first press after launch or reconnect only establishes focus;
+      // consuming it avoids the highlight jumping one step past the user intent.
+      final first = _firstItemIndex();
+      if (first < 0) return;
+      setFocus(first);
+      return;
+    }
     switch (button) {
       case GamepadButton.dpadUp:
         _handleGamepadUp();

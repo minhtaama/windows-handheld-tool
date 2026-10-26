@@ -144,6 +144,9 @@ class PerformanceTabState extends State<PerformanceTab>
     final next = !_tdpAuto;
     setState(() => _tdpAuto = next);
     widget.config?.set("hardware.tdp.auto", next);
+    // The slider leaves the navigation grid in auto mode; never leave focus on
+    // a control that is no longer rendered.
+    if (next && focusedIndex == 1) setFocus(0);
   }
 
   void _toggleFanAuto() {
@@ -185,7 +188,8 @@ class PerformanceTabState extends State<PerformanceTab>
   @override
   List<List<int>> get navigationLayout => [
         const [0],
-        const [1],
+        // The TDP slider is not navigable while auto mode owns the power limit.
+        if (!_tdpAuto) const [1],
         const [2],
         if (!_fanAuto) ...[
           const [3],
@@ -278,7 +282,8 @@ class PerformanceTabState extends State<PerformanceTab>
           accentColor: AppTheme.tdp,
           quickPresets: const [10, 15, 20, 25, 30],
           onChanged: _updateTdp,
-          shouldShowSlider: true,
+          // Auto mode owns the power limit: hide thumb, target track and presets.
+          shouldShowSlider: !_tdpAuto,
           isFocused: focusedIndex == 1,
           isWarning: !_tdpCtrl.isAvailable() || _tdpCtrl.isHvciBlocked(),
           warningTooltip: _tdpCtrl.isHvciBlocked()

@@ -239,6 +239,14 @@ class BridgeService {
     if (data.containsKey('brightness')) {
       brightness.value = (data['brightness'] as num).toInt();
     }
+    if (data.containsKey('gamepad_connected')) {
+      GamepadService.isConnected.value = data['gamepad_connected'] as bool;
+    }
+    // The backend reports the OS-level autostart state, so a failed registry
+    // write reverts the toggle instead of leaving it lying to the user.
+    if (data.containsKey('autostart')) {
+      autostart.value = data['autostart'] as bool;
+    }
 
     final batterySecsLeft = data['battery_secs_left'] != null
         ? (data['battery_secs_left'] as num).toInt()

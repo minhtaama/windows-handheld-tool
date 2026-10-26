@@ -1,5 +1,5 @@
 # Trạng thái hiện tại của dự án (Project Status)
-Cập nhật lần cuối: 26/10/2026 20:10
+Cập nhật lần cuối: 26/10/2026 23:29
 
 > [!IMPORTANT]
 > **Quy tắc duy trì tài liệu**:
@@ -319,6 +319,18 @@ Cập nhật lần cuối: 26/10/2026 20:10
       - `frontend/lib/ui/quick_panel/quick_panel.dart`: Cập nhật 4 tab theo thứ tự mới: 1. Trang chủ, 2. Hiệu năng, 3. RTSS / OSD, 4. Cài đặt; xóa bỏ hoàn toàn tệp thừa `frontend/lib/ui/tabs/device_tab.dart`.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+  + [26/10/2026 23:26] Không focus mặc định khi chưa kết nối tay cầm:
+    Hiện tượng: Mở Quick Panel bằng chuột/bàn phím vẫn thấy viền focus trắng ở ô cài đặt đầu tiên, dù không có tay cầm nào kết nối.
+    Nguyên nhân kỹ thuật: `GamepadNavigableMixin.focusedIndex` khởi tạo `0`; `GamepadService.isConnected` là `static bool = true` cố định nên frontend không có trạng thái kết nối thật.
+    Code thực tế:
+      - `frontend/lib/ui/quick_panel/gamepad_navigable.dart`: `focusedIndex` mặc định `-1`; `resetFocus()` đặt `-1` khi chưa có tay cầm và về item đầu của `navigationLayout` khi có; lần bấm nút đầu tiên chỉ xác lập focus (không nhảy thêm một bước); thêm `_firstItemIndex()` dùng chung.
+      - `frontend/lib/input/gamepad_service.dart`: `isConnected` chuyển thành `ValueNotifier<bool>` (mặc định `false`) thay cho `static bool`.
+      - `backend/src/bridge/web_bridge.py`: Bổ sung `gamepad_connected` vào snapshot telemetry từ `GamepadService().is_connected`.
+      - `frontend/lib/services/bridge_service.dart`: Đồng bộ `GamepadService.isConnected` theo telemetry.
+      - `frontend/lib/ui/quick_panel/quick_panel.dart`: Lắng nghe `isConnected` để reset focus của tab đang mở khi cắm/rút tay cầm.
+      - `frontend/lib/ui/tabs/settings_tab.dart`: Card "Tay cầm Gamepad" đọc `.value` và rebuild khi trạng thái kết nối đổi.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
 - [ ] **Đóng gói hiển thị biểu tượng Material Icons Offline (Offline Font Assets)**
   + [Initial] Code thực tế: Sử dụng cấu hình mặc định uses-material-design: true của Flutter Web.
     Hiện tượng: Khi thiết bị offline hoặc trình duyệt nhúng QtWebEngine không tải được font từ CDN fonts.gstatic.com, toàn bộ biểu tượng (Icons) bị lỗi biến thành các ô chữ nhật có dấu gạch chéo (Missing Glyph / Tofu Box).
@@ -364,6 +376,22 @@ Cập nhật lần cuối: 26/10/2026 20:10
       - `frontend/lib/core/app_theme.dart`: Xóa hằng `panelRadius` không còn sử dụng.
     Kết quả: Nền panel liền một khối, không còn dải đen ngoài panel; footer giữ 20px với taskbar; đã `flutter analyze` (0 issues), build và deploy bản cài, kiểm tra bằng ảnh chụp màn hình.
     Ghi chú: Transparency/region bo góc được tạm hoãn; hiện chọn full-bleed để UI khớp tuyệt đối bề mặt cửa sổ.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+- [ ] **Chrome thanh Tab Bar, phím LB/RB và thanh Footer (Hybrid Tab Bar Chrome)**
+  + [Initial] Hiện trạng: `AppTabBar` dùng `cardBackground` cho cả thanh lẫn ô tab chưa chọn nên ô tab vô hình; ô đang chọn `tabSelected #23252E` chỉ sáng hơn nền 6 đơn vị (tương phản 1.18:1) và bù bằng viền `accent` alpha 0.8 + bóng trắng `primary` alpha 0.35 nên đọc thành outline neon. `BumperButton` tự vẽ path trong hộp 38x20 nhưng hình chỉ rộng 28px giữa hộp, viền xám sáng ngang nút đang bật, splash của `InkWell` bị lớp `CustomPaint` che nên bấm không có phản hồi. Footer dùng badge tròn trắng 18% rời rạc với phần còn lại của panel.
+  + [26/10/2026 23:15] Chuyển Tab Bar sang tông Hybrid (rãnh tối + ô nổi + rail accent theo tab):
+    Code thực tế:
+      - `frontend/lib/core/app_theme.dart`: Xóa `tabSelected`; thêm `tabTrack #0E1016`, `tabIdleIcon #6F7686`, `tabSelectedTop/Bottom #2B2F3C → #1D2029`, `tabSelectedBorder` (trắng 14%) cùng 3 gradient `tabBarGradient`, `tabSelectedGradient`, `tabIdleGradient`.
+      - `frontend/lib/ui/widgets/tab_bar.dart`: Thanh tab dùng gradient + hairline `cardBorder` ở đáy; ô chưa chọn trong suốt (chỉ còn icon mờ); ô chọn nổi bằng gradient kim loại, viền 1px cố định (chỉ đổi màu nên hết rung 0.2px), bóng đen 0.55 + quầng accent; thêm rail accent 2.5px ở đáy ô theo từng tab.
+      - `frontend/lib/ui/quick_panel/quick_panel.dart`: `AppTabItem` nhận thuộc tính `accent` (Trang chủ `info`, Hiệu năng `tdp`, RTSS `fan`, Cài đặt `ramAccent`) để mỗi tab tự khai báo màu định vị.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [26/10/2026 23:22] Thiết kế lại phím LB/RB, bỏ đường kẻ bóng và đồng bộ nút X/A/B ở Footer:
+    Code thực tế:
+      - `frontend/lib/ui/widgets/cap_surface.dart` (mới): Module dùng chung `CapSurface` + `CapShape { shoulderLeft, shoulderRight, circle }`, vẽ một chất liệu duy nhất (gradient kim loại, bóng đổ đen, viền hairline, quầng accent tùy chọn) cho toàn bộ phím phần cứng.
+      - `frontend/lib/ui/widgets/bumper_button.dart`: `BumperType` rút gọn còn `lb`/`rb` (xóa `lt`/`rt`, `fromLabel`, `fromString`, override `label` vì không còn call site); dùng `CapSurface` dạng vai D-shape (cạnh ngoài bo 0.42h, cạnh trong 3.5px), thêm chevron chỉ hướng, `MouseRegion` cursor và press dip 0.94 qua `AnimatedScale`; bỏ hẳn đường kẻ gloss trên đỉnh phím.
+      - `frontend/lib/ui/quick_panel/panel_footer.dart`: Footer dùng chung `tabBarGradient` + hairline trên; badge X/A/B chuyển sang `CapSurface(circle)` 20px, viền và chữ tô màu semantic (`info`/`success`/`danger`), thân phím giữ nguyên gradient kim loại.
+    Kết quả kiểm chứng cục bộ: `flutter analyze` đạt 0 issues.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 ---
@@ -510,6 +538,14 @@ Cập nhật lần cuối: 26/10/2026 20:10
       - frontend/lib/services/overlay_controller.dart: Xóa bỏ các callback animation thừa thãi (onAnimateShow, onAnimateHide). Trách nhiệm hiển thị, kích thước khung viền Side-Dock và cờ xuyên thấu WS_EX_TRANSPARENT (Click-through 100%) khi đóng đã được WindowManager Win32 đảm trách hoàn toàn.
       - frontend/build/web: Biên dịch lại thành công toàn bộ bản build web tĩnh (flutter build web), flutter analyze đạt 0 issues.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+- [ ] **Ẩn Slider và dãy Preset khi bật chế độ TDP tự động**
+  + [Initial] Hiện trạng: Khi bật "Chế độ TDP tự động", `SettingSlider` được gọi với `shouldShowSlider: false` nên đã ẩn thumb và dải target, nhưng dãy preset nhanh `[10, 15, 20, 25, 30]` vẫn hiển thị và vẫn nhận thao tác; `navigationLayout` vẫn giữ ô slider nên D-pad/A vẫn chỉnh được một giá trị không còn ý nghĩa.
+  + [26/10/2026 23:25] Ẩn thumb + preset khi TDP ở chế độ tự động:
+    Code thực tế:
+      - `frontend/lib/ui/widgets/setting_slider.dart`: Dãy preset chỉ render khi `shouldShowSlider` bật, để widget tự giữ bất biến "không có target track thì cũng không có preset", callers không phải nhớ điều kiện này.
+      - `frontend/lib/ui/tabs/performance_tab.dart`: `shouldShowSlider: !_tdpAuto`; `navigationLayout` bỏ ô slider khi TDP tự động; `_toggleTdpAuto()` đưa focus về ô đầu nếu đang đứng ở slider, tránh focus trỏ vào control đã biến mất.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
 ---
 
 ## 4. Hiển thị OSD thông số in-game qua RivaTuner (RTSS Overlay)
@@ -632,9 +668,21 @@ Cập nhật lần cuối: 26/10/2026 20:10
 
 ## 6. Khởi động app cùng Windows (Autostart) & Khay hệ thống (System Tray)
 
-- [x] **Đăng ký tự khởi chạy ngầm**
+- [ ] **Đăng ký tự khởi chạy ngầm**
   + [Initial] Code thực tế: `backend/src/services/autostart_service.py` ghi đường dẫn vào Registry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Khởi chạy ứng dụng ở chế độ thu nhỏ vào khay hệ thống (System Tray).
     Tình trạng: Hoạt động ổn định.
+  + [26/10/2026 23:28] Autostart không chạy sau khi đăng nhập Windows:
+    Hiện tượng: Bật "Khởi động cùng Windows" trong tab Cài đặt nhưng sau khi đăng nhập app không tự mở; toggle vẫn hiển thị bật.
+    Nguyên nhân kỹ thuật:
+      - `.exe` khai báo `requestedExecutionLevel level="requireAdministrator"` (`backend/app.manifest`), trong khi mục `HKCU\...\Run` không được Windows tự nâng quyền lúc đăng nhập: entry yêu cầu admin mà không có ai bấm UAC nên tiến trình không khởi chạy.
+      - Đường dẫn ghi vào Run key dùng `os.path.abspath(sys.argv[0])` nên phụ thuộc CWD tại thời điểm đăng ký.
+      - Backend ghi `config.autostart` đúng theo giá trị UI gửi lên, không đọc lại trạng thái OS thật, nên toggle hiển thị sai khi đăng ký thất bại.
+    Code thực tế:
+      - `backend/src/services/autostart_service.py`: Bỏ Run key, đăng ký Scheduled Task đăng nhập `WindowsHandheldTool_AutoStart` qua `schtasks /Create /XML` với `LogonTrigger` theo user hiện tại (delay 10s), `LogonType=InteractiveToken`, `RunLevel=HighestAvailable`, chạy được khi dùng pin; `is_enabled()` kiểm tra bằng `schtasks /Query`; mỗi lần đổi trạng thái đều dọn mục Run cũ; log nguyên văn thông báo lỗi của schtasks.
+      - `backend/src/bridge/web_bridge.py`: Cache `_autostart_enabled` (đọc 1 lần lúc khởi động), `setAutostart` đọc lại trạng thái OS sau khi đăng ký rồi mới ghi config; đẩy `autostart` và `gamepad_connected` vào telemetry.
+      - `frontend/lib/services/bridge_service.dart`: Đồng bộ `autostart` từ telemetry, toggle tự khớp với trạng thái OS thật.
+    Kết quả kiểm chứng cục bộ: XML task parse hợp lệ (HighestAvailable/InteractiveToken/LogonTrigger đúng), `is_enabled()` trả `False` khi chưa có task, nhánh lỗi trả `False` và ghi log rõ lý do. Chưa tạo được task thật trong phiên shell hiện tại vì Task Scheduler RPC bị chặn.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [ ] **Biểu tượng ứng dụng & Khay hệ thống (App & Tray Icon)**
   + [Initial] Code thực tế: `backend/main.py` hàm `create_tray_icon()` đang vẽ tạm một hình tròn màu tím có chữ "H" bằng `QPainter`, file `.exe` chưa được gán tệp icon `.ico` riêng.

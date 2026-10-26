@@ -109,8 +109,6 @@ class _AppTabBarState extends State<AppTabBar> {
           const SizedBox(width: 6),
           BumperButton(
             type: BumperType.lb,
-            width: 38,
-            height: 20,
             isEnabled: widget.selectedIndex > 0,
             onTap: _prevTab,
           ),
@@ -144,8 +142,6 @@ class _AppTabBarState extends State<AppTabBar> {
           // Fixed RB bumper shortcut (next tab)
           BumperButton(
             type: BumperType.rb,
-            width: 38,
-            height: 20,
             isEnabled: widget.selectedIndex < widget.items.length - 1,
             onTap: _nextTab,
           ),
@@ -190,23 +186,6 @@ class _AppTabBarState extends State<AppTabBar> {
                   ? AppTheme.tabSelectedBorder
                   : AppTheme.transparent,
             ),
-            // boxShadow: isSelected
-            //     ? [
-            //         // Depth: the drop shadow must be dark; white glows only
-            //         // produce a halo around the tile.
-            //         BoxShadow(
-            //           color: AppTheme.shadow.withValues(alpha: 0.55),
-            //           blurRadius: 10,
-            //           offset: const Offset(0, 3),
-            //         ),
-            //         // // Orientation: faint accent bloom under the active tab.
-            //         // BoxShadow(
-            //         //   color: accent.withValues(alpha: 0.16),
-            //         //   blurRadius: 16,
-            //         //   spreadRadius: -2,
-            //         // ),
-            //       ]
-            //     : null,
           ),
           child: Stack(
             alignment: Alignment.center,

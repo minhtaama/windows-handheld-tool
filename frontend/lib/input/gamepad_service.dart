@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import '../core/logger.dart';
 
 /// Danh sách các nút tay cầm hỗ trợ tương tác với giao diện Quick Settings.
@@ -20,7 +21,10 @@ enum GamepadButton {
 /// Dịch vụ quản lý sự kiện tay cầm (Gamepad) cho giao diện Quick Settings.
 class GamepadService {
   static const _logger = AppLogger('GamepadService');
-  static bool isConnected = true;
+
+  /// Live XInput connection state, pushed by the backend telemetry snapshot.
+  /// Defaults to false: no focus ring is drawn until a pad is actually there.
+  static final ValueNotifier<bool> isConnected = ValueNotifier<bool>(false);
 
   static final StreamController<GamepadButton> _buttonEventsController =
       StreamController<GamepadButton>.broadcast();

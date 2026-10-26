@@ -45,6 +45,7 @@ class _OverlayScreenState extends State<OverlayScreen> {
 
     // Lắng nghe sự kiện phím bấm từ tay cầm Gamepad
     _gamepadSub = GamepadService.buttonEvents.listen(_onGamepadButton);
+    GamepadService.isConnected.addListener(_onGamepadConnectionChanged);
 
     // Lắng nghe đồng bộ cấu hình từ Python WebSocket Server
     BridgeService.instance.config.addListener(_onConfigUpdated);
@@ -83,6 +84,13 @@ class _OverlayScreenState extends State<OverlayScreen> {
     }
   }
 
+  /// Clears the focus ring when the pad disconnects and restores it when a pad
+  /// is present again.
+  void _onGamepadConnectionChanged() {
+    if (!mounted) return;
+    _getActiveTabState()?.resetFocus();
+  }
+
   void _onGamepadButton(GamepadButton button) {
     if (!mounted || !OverlayController.instance.isVisible) return;
 
@@ -106,6 +114,7 @@ class _OverlayScreenState extends State<OverlayScreen> {
   @override
   void dispose() {
     BridgeService.instance.config.removeListener(_onConfigUpdated);
+    GamepadService.isConnected.removeListener(_onGamepadConnectionChanged);
     _gamepadSub?.cancel();
     super.dispose();
   }

@@ -78,6 +78,11 @@ class SettingsTabState extends State<SettingsTab>
     _widthPercent = cfg.get("overlay.width_percent", 35);
 
     BridgeService.instance.autostart.addListener(_onBridgeAutostartChanged);
+    GamepadService.isConnected.addListener(_onGamepadConnectionChanged);
+  }
+
+  void _onGamepadConnectionChanged() {
+    if (mounted) setState(() {});
   }
 
   void _onBridgeAutostartChanged() {
@@ -138,19 +143,19 @@ class SettingsTabState extends State<SettingsTab>
 
   @override
   List<List<int>> get navigationLayout => const [
-        [0, 1],
-        [2, 3],
-        [4],
-        [5],
-        [6],
-        [7],
-        [8],
-        [9],
-        [10],
-        [11],
-        [12],
-        [13],
-      ];
+    [0, 1],
+    [2, 3],
+    [4],
+    [5],
+    [6],
+    [7],
+    [8],
+    [9],
+    [10],
+    [11],
+    [12],
+    [13],
+  ];
 
   @override
   void onGamepadActionA(int focusedIndex) async {
@@ -177,7 +182,12 @@ class SettingsTabState extends State<SettingsTab>
         cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, 1, _updateScale);
         break;
       case 8:
-        cyclePreset(const [30, 35, 40, 45], _widthPercent, 1, _updateWidthPercent);
+        cyclePreset(
+          const [30, 35, 40, 45],
+          _widthPercent,
+          1,
+          _updateWidthPercent,
+        );
         break;
     }
   }
@@ -186,10 +196,20 @@ class SettingsTabState extends State<SettingsTab>
   void onGamepadAdjustSlider(int focusedIndex, int direction) {
     switch (focusedIndex) {
       case 7:
-        cyclePreset(const [0.9, 1.0, 1.1, 1.2], _scale, direction, _updateScale);
+        cyclePreset(
+          const [0.9, 1.0, 1.1, 1.2],
+          _scale,
+          direction,
+          _updateScale,
+        );
         break;
       case 8:
-        cyclePreset(const [30, 35, 40, 45], _widthPercent, direction, _updateWidthPercent);
+        cyclePreset(
+          const [30, 35, 40, 45],
+          _widthPercent,
+          direction,
+          _updateWidthPercent,
+        );
         break;
     }
   }
@@ -349,8 +369,8 @@ class SettingsTabState extends State<SettingsTab>
           title: "RivaTuner RTSS",
           statusText: isRtssRunning
               ? (activeGame != null
-                  ? "Đang hook game: $activeGame"
-                  : "Đang chạy (Sẵn sàng đo FPS)")
+                    ? "Đang hook game: $activeGame"
+                    : "Đang chạy (Sẵn sàng đo FPS)")
               : "Chưa kết nối RTSS",
           isActive: isRtssRunning,
           isFocused: focusedIndex == 9,
@@ -366,8 +386,8 @@ class SettingsTabState extends State<SettingsTab>
           statusText: telem.isTdpHardwareActive
               ? "WinRing0 Ring 0 Driver Hoạt động"
               : (telem.isHvciBlocked
-                  ? "Bị chặn bởi Memory Integrity (HVCI) - Cần tắt HVCI"
-                  : "Chưa nạp được driver Ring 0"),
+                    ? "Bị chặn bởi Memory Integrity (HVCI) - Cần tắt HVCI"
+                    : "Chưa nạp được driver Ring 0"),
           isActive: telem.isTdpHardwareActive,
           isFocused: focusedIndex == 10,
         ),
@@ -387,12 +407,12 @@ class SettingsTabState extends State<SettingsTab>
           key: getItemKey(12),
           icon: Icons.sports_esports_rounded,
           title: "Tay cầm Gamepad",
-          statusText: GamepadService.isConnected
+          statusText: GamepadService.isConnected.value
               ? (_overlayHotkeyDevice == 'gamepad' && _overlayHotkey.isNotEmpty
-                  ? "Đã kết nối (Phím tắt: $_overlayHotkey)"
-                  : "Đã kết nối (Sẵn sàng)")
+                    ? "Đã kết nối (Phím tắt: $_overlayHotkey)"
+                    : "Đã kết nối (Sẵn sàng)")
               : "Chưa phát hiện tay cầm XInput",
-          isActive: GamepadService.isConnected,
+          isActive: GamepadService.isConnected.value,
           isFocused: focusedIndex == 12,
         ),
 
@@ -403,7 +423,7 @@ class SettingsTabState extends State<SettingsTab>
           duration: const Duration(milliseconds: 150),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            color: AppTheme.info,
+            color: const Color.fromARGB(255, 40, 132, 243),
             borderRadius: BorderRadius.circular(AppTheme.cardRadius),
             border: Border.all(
               color: focusedIndex == 13
@@ -432,20 +452,20 @@ class SettingsTabState extends State<SettingsTab>
                 child: const Icon(
                   Icons.info_outline_rounded,
                   size: 14,
-                  color: AppTheme.accent,
+                  color: AppTheme.background,
                 ),
               ),
               const SizedBox(width: 8),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  "Windows Handheld Tool v1.2.1-oct12 • Portable",
+                  "Windows Handheld Tool v1.4-oct26",
                   style: TextStyle(
-                    fontSize: 10,
+                    fontSize: AppTheme.scaled(12),
                     fontWeight: FontWeight.w500,
-                    color: AppTheme.textPrimary,
+                    color: AppTheme.background,
                   ),
                 ),
-              )
+              ),
             ],
           ),
         ),

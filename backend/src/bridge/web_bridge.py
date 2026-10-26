@@ -11,6 +11,7 @@ from src.services.system_telemetry import SystemTelemetryService
 from src.services.virtual_keyboard import VirtualKeyboardService
 from src.services.autostart_service import AutostartService
 from src.services.system_optimizer import SystemOptimizerService
+from src.input.gamepad_service import GamepadService
 from src.input.hotkey_capture import HotkeyCaptureService
 from src.core.logger import setup_logger
 
@@ -44,6 +45,10 @@ class WebBridge(QObject):
         self.touch_svc = TouchscreenService()
         self.rtss_svc = RtssService()
         self.telemetry_svc = SystemTelemetryService()
+        self.gamepad_svc = GamepadService()
+        # Read once at startup, then updated from setAutostart: polling the Task
+        # Scheduler on every telemetry tick would be wasteful.
+        self._autostart_enabled = AutostartService.is_enabled()
 
         # Telemetry timer pushing real-time hardware data to JS at 1000ms
         self.timer = QTimer(self)
@@ -64,6 +69,8 @@ class WebBridge(QObject):
             snap["volume"] = self.audio_svc.get_volume()
             snap["is_muted"] = self.audio_svc.is_muted()
             snap["brightness"] = self.bright_svc.get_brightness()
+            snap["gamepad_connected"] = self.gamepad_svc.is_connected
+            snap["autostart"] = self._autostart_enabled
 
             # Chẩn đoán 1.12: đối chiếu nhịp khung hình của game (dxgi_diag.log) với
             # nhiệt độ, công suất thực, giới hạn SMU và tốc độ quạt trong cùng mốc thời gian.
@@ -98,7 +105,7 @@ class WebBridge(QObject):
                     "is_muted": self.audio_svc.is_muted(),
                     "brightness": self.bright_svc.get_brightness(),
                     "touch_enabled": self.touch_svc.is_enabled,
-                    "autostart": AutostartService.is_enabled(),
+                    "autostart": self._autostart_enabled,
                     "is_tdp_hardware_active": self.tdp_svc.is_active,
                     "is_hvci_blocked": getattr(self.tdp_svc, "is_hvci_blocked", False),
                 }
@@ -211,10 +218,9 @@ class WebBridge(QObject):
     def setHotkey(self, target: str, hotkey: str, device: str = "keyboard"):
         """target: 'overlay' hoặc 'keyboard'; device: 'keyboard' hoặc 'gamepad'"""
         from src.input.hotkey_service import HotkeyService
-        from src.input.gamepad_service import GamepadService
 
         hotkey_svc = HotkeyService()
-        gamepad_svc = GamepadService()
+        gamepad_svc = self.gamepad_svc
 
         if device == "gamepad":
             if target == "overlay":
@@ -245,8 +251,16 @@ class WebBridge(QObject):
 
     @Slot(bool)
     def setAutostart(self, enabled: bool):
-        AutostartService.set_enabled(enabled)
-        self.config.set(enabled, "system", "autostart")
+        try:
+            AutostartService.set_enabled(enabled)
+        except Exception as exc:
+            # Never let a Task Scheduler failure break the bridge slot.
+            logger.error(f"[Bridge] Autostart toggle failed: {exc}")
+        # Re-read the real OS state: registering the logon task can fail (UAC,
+        # policy, missing Task Scheduler) and the toggle must not keep lying.
+        self._autostart_enabled = AutostartService.is_enabled()
+        self.config.set(self._autostart_enabled, "system", "autostart")
+        logger.info(f"[Bridge] Autostart = {self._autostart_enabled}")
 
     @Slot()
     def bringToFront(self):
