@@ -20,6 +20,11 @@
     "system": {
         "autostart": false
     },
+    "dxgi_hook": {
+        "enabled": true,
+        "auto_borderless": true,
+        "match_display_mode": true
+    },
     "hardware": {
         "tdp": {
             "min": 5,
@@ -36,13 +41,40 @@
             "max": 100,
             "step": 5,
             "current": 50,
-            "auto": true
+            "auto": true,
+            "profile": "balanced",
+            "custom_curve": [
+                [
+                    40,
+                    30
+                ],
+                [
+                    50,
+                    45
+                ],
+                [
+                    60,
+                    60
+                ],
+                [
+                    70,
+                    75
+                ],
+                [
+                    80,
+                    90
+                ],
+                [
+                    90,
+                    100
+                ]
+            ]
         },
         "brightness": {
             "min": 0,
             "max": 100,
             "step": 5,
-            "current": 47
+            "current": 50
         },
         "volume": {
             "min": 0,
@@ -62,15 +94,11 @@
             "osd_show_battery": true,
             "osd_show_fan": false,
             "osd_layout": "compact",
-            "osd_position": "topLeft"
+            "osd_position": "topLeft",
+            "osd_show_osd_enabled": true
         },
         "audio": {
             "current": 60
         }
-    },
-    "dxgi_hook": {
-        "enabled": true,
-        "auto_borderless": true,
-        "match_display_mode": true
     }
 }

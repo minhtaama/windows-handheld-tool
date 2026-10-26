@@ -10,7 +10,7 @@ class PanelFooter extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
       decoration: BoxDecoration(
         color: AppTheme.cardBackground.withValues(alpha: 0.9),
         border: const Border(
@@ -21,9 +21,9 @@ class PanelFooter extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
           _buildHintBadge("X", "Thông tin"),
-          const SizedBox(width: 10),
+          const SizedBox(width: 16),
           _buildHintBadge("A", "Chọn"),
-          const SizedBox(width: 10),
+          const SizedBox(width: 16),
           _buildHintBadge("B", "Đóng"),
         ],
       ),
@@ -44,10 +44,13 @@ class PanelFooter extends StatelessWidget {
             ),
             shape: BoxShape.circle,
           ),
-          child: Text(keyText, style: AppTheme.hint),
+          child: Text(keyText, style: AppTheme.footer),
         ),
         const SizedBox(width: 4),
-        Text(label, style: AppTheme.hint),
+        Text(
+          label,
+          style: AppTheme.footer.copyWith(fontWeight: FontWeight.normal),
+        ),
       ],
     );
   }

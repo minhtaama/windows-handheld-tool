@@ -356,6 +356,16 @@ Cập nhật lần cuối: 26/10/2026 20:10
       - scripts/generate_app_icon.py: Cung cấp công cụ tái tạo icon vector đa độ phân giải (16x16 đến 256x256).
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+- [ ] **Bố cục Full-Bleed khớp bề mặt cửa sổ Win32**
+  + [26/10/2026 22:16] Chuyển Flutter UI sang full-bleed:
+    Hiện tượng: UI Flutter trước đó nằm trong `Padding(20,20,16,8)` + card bo góc/shadow, nên phần ngoài card lộ nền brush của cửa sổ Win32 thành dải đen; panel không phủ kín client area.
+    Code thực tế:
+      - `frontend/lib/ui/quick_panel/quick_panel.dart`: Bỏ `Padding` ngoài và `Container` card (`borderRadius`, `border`, `boxShadow`). `Scaffold` dùng `AppTheme.background`; `Column` gồm `AppTabBar` (đã có padding riêng), gap 6, `Expanded(content)`, `Padding(bottom:20)` + `PanelFooter`. UI phủ kín client area 672x1080.
+      - `frontend/lib/core/app_theme.dart`: Xóa hằng `panelRadius` không còn sử dụng.
+    Kết quả: Nền panel liền một khối, không còn dải đen ngoài panel; footer giữ 20px với taskbar; đã `flutter analyze` (0 issues), build và deploy bản cài, kiểm tra bằng ảnh chụp màn hình.
+    Ghi chú: Transparency/region bo góc được tạm hoãn; hiện chọn full-bleed để UI khớp tuyệt đối bề mặt cửa sổ.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
 ---
 
 ## 3. Điều chỉnh được TDP, Fan curves

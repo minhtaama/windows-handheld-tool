@@ -9,7 +9,7 @@ class AppTheme {
   static const Color background = Color(0xFF0A0B0E);
 
   // Nền thẻ Matte Gunmetal kim loại
-  static const Color cardBackground = Color(0xFF14151B);
+  static const Color cardBackground = Color.fromARGB(255, 21, 22, 29);
 
   // Viền kính mờ titan phay xước siêu mảnh
   static const Color cardBorder = Color(0x1CFFFFFF);
@@ -54,11 +54,20 @@ class AppTheme {
   static const Color fan = Color(0xFF06B6D4);
   static const Color fanColor = fan;
 
-  // Nền thẻ tab Titanium nâng khối
-  static const Color tabSelected = Color(0xFF23252E);
+  // Recessed track behind the tab bar. Darker than content cards so the
+  // selected tile reads as lifted instead of competing with the content.
+  static const Color tabTrack = Color(0xFF0E1016);
 
-  // Nền thẻ tab chưa chọn chìm phẳng
-  static const Color tabUnselected = Color(0xFF0F1014);
+  // Idle tab foreground, one step dimmer than textSecondary to keep the
+  // selected/unselected hierarchy obvious on a small handheld panel.
+  static const Color tabIdleIcon = Color(0xFF6F7686);
+
+  // Selected tab tile: two-stop metal gradient (lit top, shaded bottom).
+  static const Color tabSelectedTop = Color(0xFF2B2F3C);
+  static const Color tabSelectedBottom = Color(0xFF1D2029);
+
+  // Hairline highlight along the selected tile edge (white 14%).
+  static const Color tabSelectedBorder = Color(0x24FFFFFF);
 
   // Chữ trắng tinh khiết tương phản cao
   static const Color textPrimary = Color(0xFFFFFFFF);
@@ -87,7 +96,26 @@ class AppTheme {
     end: Alignment.centerRight,
   );
 
-  static const double panelRadius = 16.0;
+  // Tab bar surface: faintly lit at the top, sinking into the recessed track.
+  static const LinearGradient tabBarGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [Color(0xFF11131A), tabTrack],
+  );
+
+  // Selected tile fill.
+  static const LinearGradient tabSelectedGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [tabSelectedTop, tabSelectedBottom],
+  );
+
+  // Idle counterpart: same gradient type so AnimatedContainer can lerp
+  // between the two states instead of snapping.
+  static const LinearGradient tabIdleGradient = LinearGradient(
+    colors: [transparent, transparent],
+  );
+
   static const double cardRadius = 8.0;
   static const double buttonRadius = 4.0;
 
@@ -115,6 +143,13 @@ class AppTheme {
 
   static TextStyle get hint => TextStyle(
     fontSize: scaledHalf(10),
+    fontWeight: FontWeight.w800,
+    color: AppTheme.accent,
+    letterSpacing: 0.4,
+  );
+
+  static TextStyle get footer => TextStyle(
+    fontSize: scaledHalf(12),
     fontWeight: FontWeight.w800,
     color: AppTheme.accent,
     letterSpacing: 0.4,

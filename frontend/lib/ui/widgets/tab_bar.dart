@@ -3,16 +3,25 @@ import 'package:flutter/material.dart';
 import '../../core/app_theme.dart';
 import 'bumper_button.dart';
 
-/// Dữ liệu định nghĩa một tab trong thanh điều hướng Compact Mode.
+/// Data definition of a single tab in the Compact Mode navigation bar.
 class AppTabItem {
   final IconData icon;
   final String label;
 
-  const AppTabItem({required this.icon, required this.label});
+  /// Per-tab accent hue used by the selected tile rail and glow, so the user
+  /// can locate the active section by colour instead of by reading the label.
+  final Color accent;
+
+  const AppTabItem({
+    required this.icon,
+    required this.label,
+    required this.accent,
+  });
 }
 
-/// Thanh Tab Bar dạng ô vuông co dãn theo UI Scale, hỗ trợ cuộn ngang tự động (Auto-Scroll)
-/// và tự động gom cụm dạt về lề phải khi tổng chiều rộng nhỏ hơn bề ngang panel.
+/// Tab bar made of square tiles that scale with the UI Scale, with automatic
+/// horizontal scrolling and right-aligned collapsing when the tiles are
+/// narrower than the panel.
 class AppTabBar extends StatefulWidget {
   final int selectedIndex;
   final List<AppTabItem> items;
@@ -30,6 +39,9 @@ class AppTabBar extends StatefulWidget {
 }
 
 class _AppTabBarState extends State<AppTabBar> {
+  static const Duration _animDuration = Duration(milliseconds: 180);
+  static const Curve _animCurve = Curves.easeOutCubic;
+
   final ScrollController _scrollController = ScrollController();
 
   @override
@@ -55,7 +67,7 @@ class _AppTabBarState extends State<AppTabBar> {
   void _scrollToSelected() {
     if (!_scrollController.hasClients) return;
     final tabSize = AppTheme.scaled(56.0);
-    final itemWidth = tabSize + 6.0; // padding 3px mỗi bên
+    final itemWidth = tabSize + 6.0; // 3px padding on each side
     final targetCenter = widget.selectedIndex * itemWidth + (itemWidth / 2);
     final viewportWidth = _scrollController.position.viewportDimension;
     final targetOffset = (targetCenter - (viewportWidth / 2)).clamp(
@@ -83,16 +95,18 @@ class _AppTabBarState extends State<AppTabBar> {
 
   @override
   Widget build(BuildContext context) {
-    final tabSize = AppTheme.scaledHalf(85.0);
-    final iconSize = AppTheme.scaled(30.0);
-
     return Container(
-      padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
+      padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+      decoration: const BoxDecoration(
+        gradient: AppTheme.tabBarGradient,
+        border: Border(bottom: BorderSide(color: AppTheme.cardBorder)),
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Nút phím tắt LB (Bumper trái cố định gọn gàng)
+          // Fixed LB bumper shortcut (previous tab)
+          const SizedBox(width: 6),
           BumperButton(
             type: BumperType.lb,
             width: 38,
@@ -102,88 +116,32 @@ class _AppTabBarState extends State<AppTabBar> {
           ),
           const SizedBox(width: 6),
 
-          // Vùng chứa các ô tab vuông: co lại khi ít tab (căn lề phải) và cuộn ngang khi nhiều tab
-          Flexible(
-            child: SingleChildScrollView(
-              controller: _scrollController,
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: List.generate(widget.items.length, (index) {
-                  final item = widget.items[index];
-                  final isSelected = index == widget.selectedIndex;
-
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 3),
-                    child: InkWell(
-                      onTap: () => widget.onTabSelected(index),
-                      borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        width: tabSize,
-                        height: tabSize,
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? AppTheme.tabSelected
-                              : AppTheme.tabUnselected,
-                          borderRadius: BorderRadius.circular(
-                            AppTheme.cardRadius,
-                          ),
-                          border: Border.all(
-                            color: isSelected
-                                ? AppTheme.accent.withValues(alpha: 0.8)
-                                : AppTheme.cardBorder,
-                            width: isSelected ? 1.2 : 1.0,
-                          ),
-                          boxShadow: isSelected
-                              ? [
-                                  BoxShadow(
-                                    color: AppTheme.primary.withValues(
-                                      alpha: 0.35,
-                                    ),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ]
-                              : null,
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              item.icon,
-                              size: iconSize,
-                              color: isSelected
-                                  ? AppTheme.accent
-                                  : AppTheme.textSecondary,
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              item.label,
-                              style: AppTheme.caption.copyWith(
-                                fontWeight: isSelected
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                color: isSelected
-                                    ? AppTheme.textPrimary
-                                    : AppTheme.textSecondary,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                      ),
+          // Tile strip: collapses to the right when there are few tabs and
+          // scrolls horizontally when they overflow the available width.
+          Expanded(
+            child: Center(
+              child: SingleChildScrollView(
+                controller: _scrollController,
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(
+                    widget.items.length,
+                    (index) => _buildTabTile(
+                      index: index,
+                      item: widget.items[index],
+                      isSelected: index == widget.selectedIndex,
                     ),
-                  );
-                }),
+                  ),
+                ),
               ),
             ),
           ),
 
           const SizedBox(width: 6),
-          // Nút phím tắt RB (Bumper phải cố định gọn gàng)
+          // Fixed RB bumper shortcut (next tab)
           BumperButton(
             type: BumperType.rb,
             width: 38,
@@ -191,7 +149,116 @@ class _AppTabBarState extends State<AppTabBar> {
             isEnabled: widget.selectedIndex < widget.items.length - 1,
             onTap: _nextTab,
           ),
+          const SizedBox(width: 6),
         ],
+      ),
+    );
+  }
+
+  /// Builds one tab tile: an invisible idle slot on the recessed track that
+  /// turns into a lifted metal tile with a per-tab accent rail when selected.
+  Widget _buildTabTile({
+    required int index,
+    required AppTabItem item,
+    required bool isSelected,
+  }) {
+    final tabSize = AppTheme.scaledHalf(85.0);
+    final iconSize = AppTheme.scaled(30.0);
+    final accent = item.accent;
+    final foreground = isSelected ? AppTheme.textPrimary : AppTheme.tabIdleIcon;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: GestureDetector(
+        onTap: () => widget.onTabSelected(index),
+        child: AnimatedContainer(
+          duration: _animDuration,
+          curve: _animCurve,
+          width: tabSize,
+          height: tabSize,
+          decoration: BoxDecoration(
+            // Always a gradient so AnimatedContainer can lerp between the idle
+            // (transparent) and selected fills instead of snapping.
+            gradient: isSelected
+                ? AppTheme.tabSelectedGradient
+                : AppTheme.tabIdleGradient,
+            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+            // Constant stroke width: only the colour animates, which avoids
+            // the sub-pixel border jitter of animating the width itself.
+            border: Border.all(
+              color: isSelected
+                  ? AppTheme.tabSelectedBorder
+                  : AppTheme.transparent,
+            ),
+            // boxShadow: isSelected
+            //     ? [
+            //         // Depth: the drop shadow must be dark; white glows only
+            //         // produce a halo around the tile.
+            //         BoxShadow(
+            //           color: AppTheme.shadow.withValues(alpha: 0.55),
+            //           blurRadius: 10,
+            //           offset: const Offset(0, 3),
+            //         ),
+            //         // // Orientation: faint accent bloom under the active tab.
+            //         // BoxShadow(
+            //         //   color: accent.withValues(alpha: 0.16),
+            //         //   blurRadius: 16,
+            //         //   spreadRadius: -2,
+            //         // ),
+            //       ]
+            //     : null,
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    item.icon,
+                    size: iconSize,
+                    color: isSelected ? AppTheme.textPrimary : foreground,
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    item.label,
+                    style: AppTheme.caption.copyWith(
+                      fontWeight: isSelected
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                      color: foreground,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+              // Accent rail: a hardware LED strip rather than a colour block.
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 5,
+                child: AnimatedContainer(
+                  duration: _animDuration,
+                  curve: _animCurve,
+                  height: 2.5,
+                  decoration: BoxDecoration(
+                    color: isSelected ? accent : AppTheme.transparent,
+                    borderRadius: BorderRadius.circular(2),
+                    boxShadow: isSelected
+                        ? [
+                            BoxShadow(
+                              color: accent.withValues(alpha: 0.6),
+                              blurRadius: 6,
+                            ),
+                          ]
+                        : null,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

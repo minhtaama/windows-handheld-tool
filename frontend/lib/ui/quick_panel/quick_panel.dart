@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
@@ -120,73 +121,60 @@ class _OverlayScreenState extends State<OverlayScreen> {
         }
 
         return Scaffold(
-          backgroundColor: AppTheme.transparent,
-          body: Padding(
-            padding: const EdgeInsets.only(
-              top: 20,
-              bottom: 20,
-              right: 16,
-              left: 8,
-            ),
-            child: Column(
-              children: [
-                // 1. Thanh Tab Bar nổi phía trên (Compact Mode với 4 Tab)
-                AppTabBar(
-                  selectedIndex: _selectedTabIndex,
-                  items: const [
-                    AppTabItem(icon: Icons.home_rounded, label: 'Trang chủ'),
-                    AppTabItem(icon: Icons.bolt_rounded, label: 'Hiệu năng'),
-                    AppTabItem(icon: Icons.speed_rounded, label: 'RTSS / OSD'),
-                    AppTabItem(icon: Icons.settings_rounded, label: 'Cài đặt'),
-                  ],
-                  onTabSelected: _switchTab,
-                ),
-                const SizedBox(height: 12),
+          backgroundColor: AppTheme.background,
+          body: Column(
+            children: [
+              // 1. Thanh Tab Bar nổi phía trên (Compact Mode với 4 Tab)
+              AppTabBar(
+                selectedIndex: _selectedTabIndex,
+                items: const [
+                  AppTabItem(
+                    icon: Icons.home_rounded,
+                    label: 'Trang chủ',
+                    accent: AppTheme.info,
+                  ),
+                  AppTabItem(
+                    icon: Icons.bolt_rounded,
+                    label: 'Hiệu năng',
+                    accent: AppTheme.tdp,
+                  ),
+                  AppTabItem(
+                    icon: Icons.speed_rounded,
+                    label: 'RTSS / OSD',
+                    accent: AppTheme.fan,
+                  ),
+                  AppTabItem(
+                    icon: Icons.settings_rounded,
+                    label: 'Cài đặt',
+                    accent: AppTheme.ramAccent,
+                  ),
+                ],
+                onTabSelected: _switchTab,
+              ),
+              const SizedBox(height: 6),
 
-                // 2. Khung nội dung chi tiết nổi bên dưới (Fixed bounds cho ListView)
-                Expanded(
-                  child: Container(
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      color: AppTheme.background,
-                      borderRadius: BorderRadius.circular(AppTheme.panelRadius),
-                      border: Border.all(color: AppTheme.cardBorder, width: 1.0),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppTheme.shadow.withValues(alpha: 0.65),
-                          blurRadius: 28,
-                          offset: const Offset(-4, 10),
-                          spreadRadius: 2,
-                        ),
-                      ],
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: MediaQuery(
-                            data: MediaQuery.of(context).copyWith(
-                              textScaler: TextScaler.linear(_scale),
-                            ),
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 180),
-                              layoutBuilder: (currentChild, previousChildren) {
-                                return Stack(
-                                  fit: StackFit.expand,
-                                  children: [...previousChildren, ?currentChild],
-                                );
-                              },
-                              child: _buildSelectedTabContent(),
-                            ),
-                          ),
-                        ),
-                        const PanelFooter(),
-                      ],
-                    ),
+              // 2. Nội dung tab phủ kín phần còn lại của cửa sổ Win32.
+              // Không còn Padding/card bo góc: nền panel chính là bề mặt cửa sổ.
+              Expanded(
+                child: MediaQuery(
+                  data: MediaQuery.of(context)
+                      .copyWith(textScaler: TextScaler.linear(_scale)),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    layoutBuilder: (currentChild, previousChildren) {
+                      return Stack(
+                        fit: StackFit.expand,
+                        children: [...previousChildren, ?currentChild],
+                      );
+                    },
+                    child: _buildSelectedTabContent(),
                   ),
                 ),
-              ],
-            ),
+              ),
+
+              // 3. Footer giữ khoảng hở 20px với taskbar để không bị che.
+              PanelFooter(),
+            ],
           ),
         );
       },
@@ -208,4 +196,3 @@ class _OverlayScreenState extends State<OverlayScreen> {
     }
   }
 }
-
