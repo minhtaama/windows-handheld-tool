@@ -26,7 +26,7 @@ class OverlayScreen extends StatefulWidget {
   State<OverlayScreen> createState() => _OverlayScreenState();
 }
 
-class _OverlayScreenState extends State<OverlayScreen> {
+class _OverlayScreenState extends State<OverlayScreen> with WidgetsBindingObserver {
   int _selectedTabIndex = 0;
   late double _scale;
 
@@ -40,6 +40,7 @@ class _OverlayScreenState extends State<OverlayScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _scale = (widget.config.get("overlay.scale", 1.0) as num).toDouble();
     AppTheme.uiScale = _scale;
 
@@ -113,10 +114,19 @@ class _OverlayScreenState extends State<OverlayScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     BridgeService.instance.config.removeListener(_onConfigUpdated);
     GamepadService.isConnected.removeListener(_onGamepadConnectionChanged);
     _gamepadSub?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    // The display mode changes when a game starts/stops (the DXGI hook lowers it to the
+    // render resolution). Rebuild so the panel re-lays out for the new window size instead
+    // of staying scaled for the previous resolution until the width slider is touched.
+    if (mounted) setState(() {});
   }
 
   @override

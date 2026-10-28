@@ -26,7 +26,22 @@ class HandheldApp extends StatelessWidget {
       title: 'Handheld Quick Settings',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.themeData,
-      home: OverlayScreen(config: config),
+      // While the panel is hidden the window is SW_HIDE'd but Flutter would still tick its
+      // animations and rasterize frames, stealing GPU time from the game (measured: -16% FPS).
+      // TickerMode stops animation tickers and Offstage skips paint/layout while hidden.
+      home: AnimatedBuilder(
+        animation: OverlayController.instance,
+        builder: (context, _) {
+          final visible = OverlayController.instance.isVisible;
+          return TickerMode(
+            enabled: visible,
+            child: Offstage(
+              offstage: !visible,
+              child: OverlayScreen(config: config),
+            ),
+          );
+        },
+      ),
     );
   }
 }

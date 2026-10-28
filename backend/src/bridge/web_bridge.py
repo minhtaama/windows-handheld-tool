@@ -118,7 +118,14 @@ class WebBridge(QObject):
     def _apply_persisted_tdp(self):
         try:
             if bool(self.config.get("hardware", "tdp", "auto", default=False)):
-                logger.info("[Bridge] TDP đang ở chế độ Auto -> không ghi đè giới hạn lúc khởi động")
+                # "Auto" means the tool picks the limit, not "leave whatever the SMU had":
+                # skipping the write used to leave the APU stuck at 15W after a reboot.
+                max_w = int(self.config.get("hardware", "tdp", "max", default=35))
+                auto_w = int(self.config.get("hardware", "tdp", "auto_watts", default=25))
+                auto_w = max(5, min(max_w, auto_w))
+                if self.tdp_svc.is_active:
+                    self.tdp_svc.set_tdp(auto_w)
+                    logger.info(f"[Bridge] TDP Auto -> áp mức mặc định {auto_w}W")
                 return
             persisted = getattr(self.tdp_svc, "persisted_tdp", None)
             if not persisted:

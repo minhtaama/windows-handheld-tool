@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 echo [BUILD] Dang khoi tao moi truong Visual Studio 64-bit...
-call "D:\dev-tools\VS BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+call "D:\dev-tools\VS\VC\Auxiliary\Build\vcvars64.bat"
 if errorlevel 1 (
     echo [ERROR] Khong the khoi tao vcvars64.bat
     exit /b 1

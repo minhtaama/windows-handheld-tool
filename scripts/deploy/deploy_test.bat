@@ -19,6 +19,10 @@ set "SCRIPT_DIR=%~dp0"
 set "PROJECT_ROOT=%~dp0..\.."
 cd /d "%PROJECT_ROOT%"
 
+:: Clean stale build artifacts (previous elevated runs own build/ and dist/)
+call "%SCRIPT_DIR%clean.bat"
+echo.
+
 if exist "%PROJECT_ROOT%\.venv\Scripts\pyinstaller.exe" (
     set "PYINSTALLER_CMD="%PROJECT_ROOT%\.venv\Scripts\pyinstaller.exe""
 ) else (
@@ -63,8 +67,6 @@ if !FLUTTER_ERR! neq 0 (
 )
 
 set "DIST_DIR=%PROJECT_ROOT%\dist\windows_handheld_tool"
-if exist "%DIST_DIR%" rmdir /S /Q "%DIST_DIR%"
-if exist "%PROJECT_ROOT%\build" rmdir /S /Q "%PROJECT_ROOT%\build"
 
 pushd "%PROJECT_ROOT%\backend"
 if exist "windows_handheld_tool.spec" del /F /Q "windows_handheld_tool.spec"

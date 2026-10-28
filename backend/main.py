@@ -108,6 +108,16 @@ class AppController(QObject):
         self.bridge.requestBringToFront.connect(self.win_mgr.bring_to_front, Qt.ConnectionType.QueuedConnection)
         self.bridge.requestExitApp.connect(self._on_exit_requested, Qt.ConnectionType.QueuedConnection)
         self.win_mgr.visibility_changed.connect(self.bridge.overlayVisibilityChanged.emit, Qt.ConnectionType.QueuedConnection)
+        self.win_mgr.display_mode_changed.connect(self._on_display_mode_changed, Qt.ConnectionType.QueuedConnection)
+
+    @Slot()
+    def _on_display_mode_changed(self):
+        """Pushes the current config to the UI so it rebuilds its layout for the new panel size."""
+        try:
+            import json
+            self.bridge.configUpdated.emit(json.dumps(ConfigManager().data, ensure_ascii=False))
+        except Exception as e:
+            logger.debug(f"[DISPLAY-MODE] Không đẩy được config sang UI: {e}")
 
     @Slot()
     def _on_exit_requested(self):

@@ -261,6 +261,20 @@ static void RestoreDisplayMode() {
     DiagWrite("[DISPMODE] Khôi phục display mode gốc (code=%ld)", res);
 }
 
+static void SyncGameWindowToBuffer(HWND hWnd, UINT bufW, UINT bufH) {
+    if (!hWnd || !IsWindow(hWnd)) return;
+    RECT wr = {};
+    if (!GetWindowRect(hWnd, &wr)) return;
+    int ww = wr.right - wr.left;
+    int wh = wr.bottom - wr.top;
+    if (ww == (int)bufW && wh == (int)bufH) return;
+    // Cửa sổ lớn hơn màn hình (hoặc lệch buffer) buộc DWM composite mỗi frame và khoá FPS
+    // về một nửa nhịp quét (đo được: Metro 1920x1080 trên mode 1280x720 -> đúng 30.0 fps).
+    SetWindowPos(hWnd, nullptr, 0, 0, (int)bufW, (int)bufH,
+                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+    DiagWrite("[DISPMODE] Resize cửa sổ game %dx%d -> %ux%u để khớp mode/buffer", ww, wh, bufW, bufH);
+}
+
 static void MatchDisplayModeToBuffer(HWND hWnd, UINT bufW, UINT bufH) {
     if (IsHookInert()) return;
     if (!hWnd || !IsWindow(hWnd) || bufW < 320 || bufH < 240) return;
@@ -281,6 +295,7 @@ static void MatchDisplayModeToBuffer(HWND hWnd, UINT bufW, UINT bufH) {
         // khôi phục về mode desktop gốc trong registry.
         SaveOriginalDisplayMode();
         g_bDisplayModeChanged = true;
+        SyncGameWindowToBuffer(hWnd, bufW, bufH);
         return;
     }
 
@@ -309,6 +324,7 @@ static void MatchDisplayModeToBuffer(HWND hWnd, UINT bufW, UINT bufH) {
         g_bDisplayModeChanged = true;
         DiagWrite("[DISPMODE] Hạ mode màn hình xuống %ux%u@%uHz để buffer 1:1 (scaler phần cứng phóng lên panel)",
             bufW, bufH, hz);
+        SyncGameWindowToBuffer(hWnd, bufW, bufH);
     } else {
         DiagWrite("[DISPMODE] Không đổi được mode sang %ux%u (code=%ld) -> giữ mode hiện tại", bufW, bufH, res);
     }
@@ -1309,6 +1325,14 @@ static DWORD WINAPI DiagThreadProc(LPVOID) {
             continue;
         }
         LogFrameStats(tick);
+        // Tự chữa lành: một tiến trình khác có thể đã khôi phục display mode trong khi ta vẫn
+        // render ở buffer nhỏ hơn (Client/Buffer != 1.0) -> DWM phải scale mỗi frame, FPS tụt.
+        {
+            HWND healWnd = g_hGameWnd.load();
+            if (healWnd && IsWindow(healWnd) && GetForegroundWindow() == healWnd) {
+                MatchDisplayModeToBuffer(healWnd, g_uBufferWidth.load(), g_uBufferHeight.load());
+            }
+        }
         // Mỗi 1s kiểm tra thay đổi; mỗi 10s ghi một mẫu định kỳ để đối chiếu vị trí chuột
         DiagSnapshot((tick % 10 == 0) ? "PERIODIC" : "CHANGE", (tick % 10 == 0), last, sizeof(last));
         tick++;

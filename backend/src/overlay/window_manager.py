@@ -43,6 +43,16 @@ HWND_NOTOPMOST    = wintypes.HWND(-2)
 ZBID_DESKTOP      = 1
 ZBID_UIACCESS     = 2   # Privileged UIAccess band (not used: hides Flutter's hosted view)
 
+# Identity of our Flutter Desktop UI window. The Flutter Windows runner registers the
+# generic class name "FLUTTER_RUNNER_WIN32_WINDOW", which every Flutter desktop app shares
+# (Cloudflare One Client uses it too). The class alone therefore never proves ownership:
+# matching it grabbed Cloudflare's window and turned the panel hotkey into a show/hide of
+# the Cloudflare client. Ownership is proven by the window title plus the image name of
+# the owning process.
+UI_WINDOW_CLASS   = "FLUTTER_RUNNER_WIN32_WINDOW"
+UI_WINDOW_TITLE   = "WindowsHandheldOverlay"
+UI_EXE_NAME       = "windows_handheld_ui.exe"
+
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
 # 64-bit function prototypes to prevent handle truncation (error 1400)
@@ -81,6 +91,9 @@ user32.SetWindowLongW.restype = wintypes.LONG
 WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 user32.EnumChildWindows.argtypes = [wintypes.HWND, WNDENUMPROC, wintypes.LPARAM]
 user32.EnumChildWindows.restype = wintypes.BOOL
+
+user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
+user32.EnumWindows.restype = wintypes.BOOL
 
 user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
@@ -146,7 +159,13 @@ kernel32.OpenProcess.restype = wintypes.HANDLE
 kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
 kernel32.TerminateProcess.restype = wintypes.BOOL
 
+kernel32.QueryFullProcessImageNameW.argtypes = [
+    wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)
+]
+kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+
 PROCESS_TERMINATE = 0x0001
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
 advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
@@ -208,6 +227,9 @@ def safe_set_window_pos(hwnd, hwnd_insert_after, x, y, cx, cy, flags: int) -> bo
 
 class WindowManager(QObject):
     visibility_changed = Signal(bool)
+    # Emitted when the desktop display mode changed (game entered/exited): the UI must rebuild
+    # its layout for the new window size instead of waiting for a manual width change.
+    display_mode_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -223,6 +245,9 @@ class WindowManager(QObject):
         self._match_mode_event = None
         self._sec_attr = None
         self._ui_pid = 0
+        self._ui_swept = False
+        self._pending_show_retries = 0
+        self._needs_metrics_nudge = False
         self._init_panel_event()
 
         self._hide_timer = QTimer(self)
@@ -240,6 +265,23 @@ class WindowManager(QObject):
         if screen:
             screen.geometryChanged.connect(lambda _: self.update_geometry(self.width_setting))
 
+        # Safety net: the DXGI hook lowers the display mode to the game's render resolution,
+        # which Qt does not always report. Poll the OS metrics so the panel re-docks instead
+        # of staying sized for the old mode (it used to stay zoomed until the width slider
+        # was touched).
+        self._screen_poll_timer = QTimer(self)
+        self._screen_poll_timer.setInterval(1000)
+        self._screen_poll_timer.timeout.connect(self._poll_screen_metrics)
+        self._screen_poll_timer.start()
+
+        # Keep the Flutter UI process warm: a cold start takes ~5s and, until the window
+        # exists, the show request used to do nothing (the user saw whatever window happened
+        # to be on top, e.g. Cloudflare One, instead of the panel).
+        self._ui_watchdog = QTimer(self)
+        self._ui_watchdog.setInterval(5000)
+        self._ui_watchdog.timeout.connect(self._ensure_ui_alive)
+        self._ui_watchdog.start()
+
         # Lifecycle and compatibility management for games (FSO, Borderless, Anti-Minimize, DXGI Hook)
         self.game_compat = GameCompatService(self)
         self.game_compat.install_lifecycle_hooks(
@@ -248,11 +290,74 @@ class WindowManager(QObject):
             screen_dimensions_getter=lambda: (self.screen_w, self.screen_h)
         )
 
+    @staticmethod
+    def _hwnd_int(hwnd) -> int:
+        """Normalizes an HWND value (ctypes object or raw integer) to a plain integer."""
+        return int(hwnd.value if hasattr(hwnd, "value") else hwnd)
+
+    @staticmethod
+    def _process_image_name(pid: int) -> str:
+        """Returns the lower-cased executable file name owned by a process id."""
+        if not pid:
+            return ""
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(len(buf))
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                return ""
+            return Path(buf.value).name.lower()
+        except Exception:
+            return ""
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def _is_own_ui_window(self, hwnd) -> bool:
+        """Returns True only for the overlay window owned by our windows_handheld_ui.exe.
+
+        The Flutter window class is shared by every Flutter desktop application, so the
+        class name alone is not proof of ownership.
+        """
+        if not hwnd:
+            return False
+        try:
+            h = wintypes.HWND(self._hwnd_int(hwnd))
+            if not user32.IsWindow(h):
+                return False
+            buf = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(h, buf, len(buf))
+            if buf.value != UI_WINDOW_TITLE:
+                return False
+            pid = self._get_window_process_id(h)
+            if not pid or pid == os.getpid():
+                return False
+            return self._process_image_name(pid) == UI_EXE_NAME
+        except Exception:
+            return False
+
+    def _find_own_ui_window(self) -> int:
+        """Enumerates top-level windows and returns our overlay HWND, or 0 when absent."""
+        found = []
+
+        def _enum_cb(hwnd, _lparam):
+            if self._is_own_ui_window(hwnd):
+                found.append(int(hwnd))
+                return False
+            return True
+
+        try:
+            user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
+        except Exception as e:
+            logger.debug(f"[SEAMLESS] EnumWindows failed: {e}")
+        return found[0] if found else 0
+
     def _get_window_process_id(self, hwnd) -> int:
         """Returns the owning process id of a window handle."""
         try:
             pid = wintypes.DWORD()
-            user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+            user32.GetWindowThreadProcessId(wintypes.HWND(self._hwnd_int(hwnd)), ctypes.byref(pid))
             return int(pid.value)
         except Exception:
             return 0
@@ -269,8 +374,11 @@ class WindowManager(QObject):
             return False
 
     def _terminate_process(self, pid: int):
-        """Force-terminates a UI process that no longer responds to WM_CLOSE."""
+        """Force-terminates our UI process after it stopped responding to WM_CLOSE."""
         if not pid:
+            return
+        if self._process_image_name(pid) != UI_EXE_NAME:
+            logger.warning(f"[SEAMLESS] Refusing to terminate PID={pid}: not {UI_EXE_NAME}")
             return
         try:
             handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, int(pid))
@@ -282,17 +390,24 @@ class WindowManager(QObject):
             logger.warning(f"[SEAMLESS] Could not terminate UI process PID={pid}: {e}")
 
     def _close_duplicate_ui_windows(self, keep_hwnd):
-        """Closes orphaned Flutter UI windows left behind by a previous host process."""
+        """Closes orphaned overlay windows left behind by a previous host process.
+
+        Only windows owned by windows_handheld_ui.exe are considered: the Flutter window
+        class is shared with unrelated applications (Cloudflare One Client), which must
+        never be touched.
+        """
         try:
             keep = int(keep_hwnd or 0)
             handles = []
-            hwnd = user32.FindWindowExW(None, None, "FLUTTER_RUNNER_WIN32_WINDOW", None)
+            hwnd = user32.FindWindowExW(None, None, UI_WINDOW_CLASS, None)
             while hwnd:
                 handles.append(hwnd)
-                hwnd = user32.FindWindowExW(None, wintypes.HWND(hwnd), "FLUTTER_RUNNER_WIN32_WINDOW", None)
+                hwnd = user32.FindWindowExW(None, wintypes.HWND(hwnd), UI_WINDOW_CLASS, None)
 
             for h in handles:
                 if int(h) == keep:
+                    continue
+                if not self._is_own_ui_window(h):
                     continue
                 pid = self._get_window_process_id(h)
                 logger.info(f"[SEAMLESS] Closing orphan Flutter UI HWND={h} PID={pid}")
@@ -347,12 +462,14 @@ class WindowManager(QObject):
 
     def ensure_flutter_ui(self) -> bool:
         """Ensures the Flutter Desktop UI process is running and binds to its native HWND."""
-        if self.hwnd and self.hwnd.value and user32.IsWindow(self.hwnd):
+        if self._is_own_ui_window(self.hwnd):
             return True
 
-        hwnd = user32.FindWindowW("FLUTTER_RUNNER_WIN32_WINDOW", "WindowsHandheldOverlay")
-        if not hwnd:
-            hwnd = user32.FindWindowW("FLUTTER_RUNNER_WIN32_WINDOW", None)
+        self.hwnd = wintypes.HWND(0)
+        self._ui_pid = 0
+        self._sweep_stale_ui_processes()
+
+        hwnd = self._find_own_ui_window()
 
         if hwnd and not self._is_window_responsive(hwnd):
             hung_pid = self._get_window_process_id(hwnd)
@@ -363,7 +480,10 @@ class WindowManager(QObject):
         if hwnd:
             self.hwnd = wintypes.HWND(hwnd)
             self._ui_pid = self._get_window_process_id(hwnd)
-            logger.info(f"[SEAMLESS] Attached to existing Flutter UI window: HWND={self.hwnd.value}, PID={self._ui_pid}")
+            logger.info(
+                f"[SEAMLESS] Attached to existing Flutter UI window: HWND={self.hwnd.value}, "
+                f"PID={self._ui_pid}, Exe={self._process_image_name(self._ui_pid)}"
+            )
             self._close_duplicate_ui_windows(hwnd)
             self._init_win32_attributes()
             self._set_click_through(True)
@@ -390,13 +510,14 @@ class WindowManager(QObject):
         # Non-blocking quick poll (up to 300ms) to attach immediately if window appears
         for _ in range(6):
             time.sleep(0.05)
-            hwnd = user32.FindWindowW("FLUTTER_RUNNER_WIN32_WINDOW", "WindowsHandheldOverlay")
-            if not hwnd:
-                hwnd = user32.FindWindowW("FLUTTER_RUNNER_WIN32_WINDOW", None)
+            hwnd = self._find_own_ui_window()
             if hwnd:
                 self.hwnd = wintypes.HWND(hwnd)
                 self._ui_pid = self._get_window_process_id(hwnd)
-                logger.info(f"[SEAMLESS] Successfully bound Flutter UI window: HWND={self.hwnd.value}, PID={self._ui_pid}")
+                logger.info(
+                    f"[SEAMLESS] Successfully bound Flutter UI window: HWND={self.hwnd.value}, "
+                    f"PID={self._ui_pid}, Exe={self._process_image_name(self._ui_pid)}"
+                )
                 self._close_duplicate_ui_windows(hwnd)
                 self._init_win32_attributes()
                 self._set_click_through(True)
@@ -639,6 +760,57 @@ class WindowManager(QObject):
 
         return 1920, 1080
 
+    def _poll_screen_metrics(self):
+        """Re-docks the panel when the display mode changes (the hook lowered it to the game resolution)."""
+        try:
+            w = int(user32.GetSystemMetrics(0))
+            h = int(user32.GetSystemMetrics(1))
+        except Exception:
+            return
+        if w < 320 or h < 240:
+            return
+        if (w, h) == (self.screen_w, self.screen_h):
+            return
+        logger.info(
+            f"[WINDOW-GEOMETRY] Display mode changed {self.screen_w}x{self.screen_h} -> {w}x{h}; re-applying panel geometry"
+        )
+        self.update_geometry(self.width_setting)
+        self.display_mode_changed.emit()
+        # Resizing a hidden window does not refresh the Flutter engine's view metrics, so the
+        # UI keeps its old layout ("zoomed") until something forces a fresh WM_SIZE. A 1px
+        # nudge while visible reproduces the manual width +1/-1 trick automatically.
+        self._needs_metrics_nudge = True
+        if self.is_visible:
+            self._nudge_window_metrics()
+
+    def _nudge_window_metrics(self):
+        """Applies a 1px size change and reverts it so Flutter refreshes its view metrics."""
+        if not (self.hwnd and self.hwnd.value):
+            return
+        try:
+            rect = wintypes.RECT()
+            user32.GetWindowRect(self.hwnd, ctypes.byref(rect))
+            x, y = rect.left, rect.top
+            w, h = rect.right - rect.left, rect.bottom - rect.top
+            safe_set_window_pos(
+                self.hwnd, HWND_TOPMOST, x, y, w + 1, h,
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER
+            )
+
+            def _restore():
+                if self.hwnd and self.hwnd.value:
+                    safe_set_window_pos(
+                        self.hwnd, HWND_TOPMOST, x, y, w, h,
+                        SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER
+                    )
+                    self._reassert_topmost()
+
+            QTimer.singleShot(80, _restore)
+            self._needs_metrics_nudge = False
+            logger.info("[WINDOW-GEOMETRY] Nudge 1px để Flutter nạp lại metrics của cửa sổ")
+        except Exception as e:
+            logger.debug(f"[WINDOW-GEOMETRY] nudge failed: {e}")
+
     @Slot(int)
     def update_geometry(self, width: int):
         self.width_setting = width
@@ -699,6 +871,97 @@ class WindowManager(QObject):
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
         )
 
+    def _ensure_ui_alive(self):
+        """Respawns the Flutter UI process if it exited, so the next hotkey press is instant."""
+        if getattr(self, "_is_closing", False):
+            return
+        if self._is_own_ui_window(self.hwnd):
+            return
+        self.hwnd = wintypes.HWND(0)
+        self._ui_pid = 0
+        logger.info("[SEAMLESS] Flutter UI không còn sống; spawn lại để hotkey mở tức thì")
+        self.ensure_flutter_ui()
+
+    def _schedule_show_retry(self):
+        """Retries a pending show request until the (cold-starting) UI window exists."""
+        if self._pending_show_retries >= 40:
+            logger.error("[SEAMLESS] Bỏ yêu cầu show: Flutter UI không xuất hiện sau ~8 giây")
+            self._pending_show_retries = 0
+            return
+        self._pending_show_retries += 1
+        QTimer.singleShot(200, self._retry_show)
+
+    def _retry_show(self):
+        if not self.is_visible:
+            self._pending_show_retries = 0
+            return
+        if self.ensure_flutter_ui():
+            self._pending_show_retries = 0
+            logger.info("[SEAMLESS] UI đã sẵn sàng; hiển thị panel")
+            self.show()
+        else:
+            self._schedule_show_retry()
+
+    def _reassert_topmost(self):
+        """Re-raises the panel above other topmost windows (e.g. Cloudflare One) without activating it."""
+        if not (self.is_visible and self.hwnd and self.hwnd.value):
+            return
+        try:
+            safe_set_window_pos(
+                self.hwnd,
+                HWND_TOPMOST,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
+            )
+        except Exception as e:
+            logger.debug(f"[SEAMLESS] reassert topmost failed: {e}")
+
+    def _set_ui_priority(self, idle: bool) -> None:
+        """Lowers the Flutter UI process priority while the panel is hidden.
+
+        A hidden Flutter window can still keep its raster thread busy (animations keep the
+        widget tree dirty), and on a 15W APU that GPU/CPU time comes straight out of the
+        running game's frame budget.
+        """
+        pid = self._ui_pid
+        if not pid:
+            return
+        try:
+            PROCESS_SET_INFORMATION = 0x0200
+            IDLE_PRIORITY_CLASS = 0x00000040
+            NORMAL_PRIORITY_CLASS = 0x00000020
+            handle = kernel32.OpenProcess(PROCESS_SET_INFORMATION, False, int(pid))
+            if handle:
+                kernel32.SetPriorityClass(handle, IDLE_PRIORITY_CLASS if idle else NORMAL_PRIORITY_CLASS)
+                kernel32.CloseHandle(handle)
+                logger.info(f"[SEAMLESS] UI process PID={pid} priority -> {'IDLE' if idle else 'NORMAL'}")
+        except Exception as e:
+            logger.debug(f"[SEAMLESS] SetPriorityClass failed: {e}")
+
+    def _sweep_stale_ui_processes(self) -> None:
+        """Terminates Flutter UI processes left over from a previous host process.
+
+        Without this the backend attaches to the UI of the previous build (wrong version,
+        cold respawn later), which also delays the first hotkey press by several seconds.
+        """
+        if self._ui_swept:
+            return
+        self._ui_swept = True
+        try:
+            import psutil
+        except Exception:
+            return
+        for proc in psutil.process_iter(["pid", "name"]):
+            try:
+                if (proc.info.get("name") or "").lower() != "windows_handheld_ui.exe":
+                    continue
+                if proc.pid == os.getpid():
+                    continue
+                logger.info(f"[SEAMLESS] Killing stale Flutter UI process PID={proc.pid}")
+                proc.kill()
+            except Exception:
+                continue
+
     @Slot()
     def show(self):
         self._hide_timer.stop()
@@ -706,7 +969,14 @@ class WindowManager(QObject):
         self.is_visible = True
 
         logger.info("[SEAMLESS] Show overlay requested")
-        self.ensure_flutter_ui()
+        self._pending_show_retries = 0
+        if not self.ensure_flutter_ui():
+            # Cold start: the HWND does not exist yet. Defer instead of half-showing the
+            # panel (which left whatever window was on top in front of the user).
+            logger.info("[SEAMLESS] UI window chưa sẵn sàng (cold start); sẽ show ngay khi cửa sổ xuất hiện")
+            self._schedule_show_retry()
+            return
+        self._set_ui_priority(idle=False)
         self.preserve_foreground_window()
         if self.last_foreground_hwnd and self.last_foreground_hwnd.value:
             self.game_compat.restore_if_minimized(self.last_foreground_hwnd.value)
@@ -717,6 +987,14 @@ class WindowManager(QObject):
         if self.hwnd and self.hwnd.value:
             user32.ShowWindow(self.hwnd, SW_SHOWNOACTIVATE)
             logger.info(f"[SEAMLESS-1.4] ShowWindow(SW_SHOWNOACTIVATE): HWND={self.hwnd.value}")
+            # Another topmost window (Cloudflare One, overlays...) may raise itself right
+            # after we show; re-assert our z-order a few times without stealing focus.
+            for _delay in (150, 400, 800):
+                QTimer.singleShot(_delay, self._reassert_topmost)
+            # The window may have been resized while hidden (display mode change); Flutter only
+            # picks up the new size once a real WM_SIZE arrives while visible.
+            if getattr(self, "_needs_metrics_nudge", False):
+                QTimer.singleShot(120, self._nudge_window_metrics)
         try:
             user32.ClipCursor(None)
         except Exception:
@@ -752,6 +1030,7 @@ class WindowManager(QObject):
 
         logger.info("[SEAMLESS] Physical hide overlay requested")
         self._set_click_through(True)
+        self._set_ui_priority(idle=True)
 
         if self.hwnd and self.hwnd.value:
             user32.ShowWindow(self.hwnd, SW_HIDE)

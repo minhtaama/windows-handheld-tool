@@ -65,6 +65,12 @@ class HotkeyService:
         self.keyboard_hk = "Ctrl+Alt+K"
         self._last_overlay_trigger_time = 0.0
         self._last_keyboard_trigger_time = 0.0
+        # Latched until the hotkey key is physically released: the low-level hook, the
+        # RegisterHotKey message and the GetAsyncKeyState poll loop all fire for the SAME
+        # press, and key auto-repeat keeps the key down for seconds, which used to toggle
+        # the panel open and closed immediately (one press = 2-3 toggles).
+        self._overlay_latched = False
+        self._keyboard_latched = False
         self._initialized = True
 
     def start(
@@ -208,6 +214,18 @@ class HotkeyService:
         import time
 
         def _ll_keyboard_proc(nCode: int, wParam: wintypes.WPARAM, lParam: wintypes.LPARAM) -> int:
+            if nCode >= 0 and wParam in (WM_KEYUP, WM_SYSKEYUP):
+                # Nhả phím mới cho phép kích hoạt lần tiếp theo
+                try:
+                    vk_up = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents.vkCode
+                    if self.overlay_hk and vk_up == self._parse_hotkey(self.overlay_hk)[1]:
+                        self._overlay_latched = False
+                    if self.keyboard_hk and vk_up == self._parse_hotkey(self.keyboard_hk)[1]:
+                        self._keyboard_latched = False
+                except Exception:
+                    pass
+                return user32.CallNextHookEx(self.hook_handle, nCode, wParam, lParam)
+
             if nCode >= 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
                 try:
                     kb_data = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
@@ -218,7 +236,8 @@ class HotkeyService:
                     if self.overlay_hk:
                         o_mod, o_vk = self._parse_hotkey(self.overlay_hk)
                         if vk == o_vk and self._check_modifiers_match(user32, o_mod):
-                            if now - self._last_overlay_trigger_time > 0.35:
+                            if not self._overlay_latched and now - self._last_overlay_trigger_time > 0.35:
+                                self._overlay_latched = True
                                 self._last_overlay_trigger_time = now
                                 logger.info(f"[SEAMLESS-HOTKEY] WH_KEYBOARD_LL bắt thành công Overlay Hotkey ({self.overlay_hk})!")
                                 if self.on_overlay_toggle:
@@ -229,7 +248,8 @@ class HotkeyService:
                     if self.keyboard_hk:
                         k_mod, k_vk = self._parse_hotkey(self.keyboard_hk)
                         if vk == k_vk and self._check_modifiers_match(user32, k_mod):
-                            if now - self._last_keyboard_trigger_time > 0.35:
+                            if not self._keyboard_latched and now - self._last_keyboard_trigger_time > 0.35:
+                                self._keyboard_latched = True
                                 self._last_keyboard_trigger_time = now
                                 logger.info(f"[SEAMLESS-HOTKEY] WH_KEYBOARD_LL bắt thành công Keyboard Hotkey ({self.keyboard_hk})!")
                                 if self.on_keyboard_toggle:
@@ -273,13 +293,15 @@ class HotkeyService:
             elif msg.message == WM_HOTKEY:
                 now = time.time()
                 if msg.wParam == HOTKEY_OVERLAY_ID:
-                    if now - self._last_overlay_trigger_time > 0.35:
+                    if not self._overlay_latched and now - self._last_overlay_trigger_time > 0.35:
+                        self._overlay_latched = True
                         self._last_overlay_trigger_time = now
                         logger.info(f"[SEAMLESS-HOTKEY] Phát hiện nhấn phím nóng Overlay ({self.overlay_hk}) qua WM_HOTKEY.")
                         if self.on_overlay_toggle:
                             self.on_overlay_toggle()
                 elif msg.wParam == HOTKEY_KEYBOARD_ID:
-                    if now - self._last_keyboard_trigger_time > 0.35:
+                    if not self._keyboard_latched and now - self._last_keyboard_trigger_time > 0.35:
+                        self._keyboard_latched = True
                         self._last_keyboard_trigger_time = now
                         logger.info(f"[SEAMLESS-HOTKEY] Phát hiện nhấn phím nóng Bàn phím ảo ({self.keyboard_hk}) qua WM_HOTKEY.")
                         if self.on_keyboard_toggle:
@@ -300,21 +322,34 @@ class HotkeyService:
         while self.running:
             try:
                 now = time.time()
+
+                # Nhả phím -> mở khoá latch để lần nhấn sau mới kích hoạt lại
+                if self.overlay_hk:
+                    o_mod, o_vk = self._parse_hotkey(self.overlay_hk)
+                    if o_vk and not (user32.GetAsyncKeyState(o_vk) & 0x8000):
+                        self._overlay_latched = False
+                if self.keyboard_hk:
+                    k_mod, k_vk = self._parse_hotkey(self.keyboard_hk)
+                    if k_vk and not (user32.GetAsyncKeyState(k_vk) & 0x8000):
+                        self._keyboard_latched = False
+
                 # 1. Thăm dò tổ hợp phím Overlay
-                if self.overlay_hk and (now - self._last_overlay_trigger_time > 0.4):
+                if self.overlay_hk and not self._overlay_latched and (now - self._last_overlay_trigger_time > 0.4):
                     o_mod, o_vk = self._parse_hotkey(self.overlay_hk)
                     if o_vk and bool(user32.GetAsyncKeyState(o_vk) & 0x8000):
                         if self._check_modifiers_match(user32, o_mod):
+                            self._overlay_latched = True
                             self._last_overlay_trigger_time = now
                             logger.info(f"[SEAMLESS-HOTKEY] Hardware Polling bắt thành công Overlay Hotkey ({self.overlay_hk})!")
                             if self.on_overlay_toggle:
                                 self.on_overlay_toggle()
 
                 # 2. Thăm dò tổ hợp phím Virtual Keyboard
-                if self.keyboard_hk and (now - self._last_keyboard_trigger_time > 0.4):
+                if self.keyboard_hk and not self._keyboard_latched and (now - self._last_keyboard_trigger_time > 0.4):
                     k_mod, k_vk = self._parse_hotkey(self.keyboard_hk)
                     if k_vk and bool(user32.GetAsyncKeyState(k_vk) & 0x8000):
                         if self._check_modifiers_match(user32, k_mod):
+                            self._keyboard_latched = True
                             self._last_keyboard_trigger_time = now
                             logger.info(f"[SEAMLESS-HOTKEY] Hardware Polling bắt thành công Keyboard Hotkey ({self.keyboard_hk})!")
                             if self.on_keyboard_toggle:

@@ -124,6 +124,39 @@ Cập nhật lần cuối: 26/10/2026 23:29
     Đánh đổi: Overlay không còn ở Band 2 nên không đè được exclusive fullscreen thật; game đã bị `dxgi_hook` ép borderless nên `TOPMOST` vẫn nổi trên game. Nếu sau này cần exclusive fullscreen, phải tách cửa sổ Flutter khỏi tiến trình UIAccess.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+  + [27/10/2026 00:40] Cloudflare One che panel / panel mở chậm ~5s sau khi bấm hotkey hoặc tray icon:
+    Hiện tượng: Máy đang chạy Cloudflare One client, bấm hotkey hoặc icon khay hệ thống thì cửa sổ Cloudflare hiện lên thay vì panel; tắt Cloudflare đi thì khoảng 5 giây sau panel mới hiện.
+    Nguyên nhân:
+      - `ensure_flutter_ui()` chỉ chờ tối đa **300ms** cho cửa sổ UI sau khi `ShellExecuteW` rồi bỏ cuộc ("binding will finalize on WebSocket handshake"). Trong suốt ~5s cold start đó `self.hwnd` rỗng nên `show()` không gọi được `ShowWindow`, còn `restore_foreground_window()`/thứ tự z-order lại để cửa sổ đang topmost khác (Cloudflare One) nằm trên.
+      - Không có cơ chế giữ tiến trình UI "ấm", nên mỗi lần UI đã thoát là mỗi lần trả giá cold start.
+    Code thực tế:
+      - `backend/src/overlay/window_manager.py`: `show()` rẽ nhánh — nếu `ensure_flutter_ui()` chưa bind được HWND thì **hoãn** yêu cầu show và hẹn lại (`_schedule_show_retry`/`_retry_show`, 200ms một lần, tối đa ~8s) thay vì nửa-show.
+      - Thêm watchdog `_ui_watchdog` (5 giây/lần) gọi `_ensure_ui_alive()`: nếu cửa sổ UI không còn thì spawn lại → hotkey mở tức thì.
+      - `_reassert_topmost()` được hẹn ở 150/400/800ms sau `ShowWindow` để giành lại z-order trên các cửa sổ topmost khác (Cloudflare One) mà không cướp focus.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [27/10/2026 22:20] Truy ra nguyên nhân gốc "tắt bật sang Cloudflare One Client": host bắt nhầm cửa sổ Flutter của Cloudflare do trùng class runner, rồi điều khiển chính cửa sổ đó:
+    Hiện tượng: Sau bản sửa 00:40, bấm hotkey/tray icon vẫn hiện cửa sổ Cloudflare One Client thay vì panel; log phiên 21:37–21:56 không có dòng `WS Client connected` nào, mọi broadcast ghi `[WS] Visibility=... but no Flutter UI client is connected`, và panel hiện rồi ẩn ngay (21:55:56 hide → 21:55:58 show → 21:55:59 hide).
+    Nguyên nhân kỹ thuật:
+      - Cloudflare One Client (`C:\Program Files\Cloudflare\Cloudflare WARP\Cloudflare WARP.exe`) cũng là app Flutter Windows, dùng chung class `FLUTTER_RUNNER_WIN32_WINDOW` (quét UTF-16 trong binary thấy cả class này lẫn `Cloudflare One`).
+      - `ensure_flutter_ui()` fallback `FindWindowW("FLUTTER_RUNNER_WIN32_WINDOW", None)` nên khi UI của tool chưa chạy, nó lấy cửa sổ Flutter **đầu tiên** trên desktop — chính là cửa sổ Cloudflare (`HWND=132120`, PID `11668`, `cloudflare warp.exe`).
+      - Bằng chứng: log 21:37:50 `[SEAMLESS] Attached to existing Flutter UI window: HWND=132120` + `Init Extended Styles: Old=0x100` (WS_EX_WINDOWEDGE — cửa sổ có viền, không phải overlay `WS_POPUP` của tool) và rect (17,17,1948x1108)/(1152,0,1312x1043) không phải side-dock 768x1080.
+      - Sau khi bind nhầm, `show()`/`_set_click_through()`/`_perform_physical_hide()` áp ExStyle `0x80001a8`, đổi geometry và Show/Hide lên cửa sổ Cloudflare → đúng hiện tượng "tắt bật sang Cloudflare". Nguy cơ phụ: `_close_duplicate_ui_windows()` cũ có thể `_terminate_process()` nhầm tiến trình app Flutter khác.
+    Code thực tế:
+      - `backend/src/overlay/window_manager.py`: thêm `UI_WINDOW_CLASS`/`UI_WINDOW_TITLE`/`UI_WINDOW_EXE`, prototype `EnumWindows`/`QueryFullProcessImageNameW`, các helper `_hwnd_int()`, `_process_image_name()`, `_is_own_ui_window()`, `_find_own_ui_window()`.
+      - `ensure_flutter_ui()` bỏ hẳn fallback theo class: chỉ attach khi đúng title `WindowsHandheldOverlay` **và** image name `windows_handheld_ui.exe`; vòng poll sau `ShellExecuteW` cũng dùng `_find_own_ui_window()`.
+      - `_ensure_ui_alive()`, `_close_duplicate_ui_windows()` dùng `_is_own_ui_window()`; `_terminate_process()` có guard từ chối kill tiến trình không phải `windows_handheld_ui.exe`.
+      - Sửa `_get_window_process_id()` bị wrap `wintypes.HWND` hai lần (TypeError im lặng → trả PID 0) bằng `_hwnd_int()`.
+    Kiểm chứng (27/10 22:05, probe ctypes): liệt kê 2 cửa sổ class runner — overlay `own=True`, Cloudflare `own=False`; `_find_own_ui_window()` trả đúng HWND overlay.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [27/10/2026 22:55] Build PyInstaller hỏng vì Windows Defender cách ly `WinRing0x64.sys`:
+    Hiện tượng: `scripts/deploy/deploy_test.bat` dừng ở bước COLLECT với `OSError: [Errno 22] Invalid argument: 'D:\\dev-projects\\windows-handheld-tool\\backend\\bin\\WinRing0x64.sys'`.
+    Nguyên nhân: Defender xếp WinRing0 vào nhóm vulnerable driver và đã cách ly **mọi** bản sao: `backend\bin\WinRing0x64.sys` (git báo `D backend/bin/WinRing0x64.sys`), bản trong `dist`, `dist_build\_internal\bin` và cả trong `C:\Program Files\WindowsHandheldTools`. PyInstaller đọc TOC có file rồi copy lại đúng lúc file đã biến mất nên báo lỗi trên.
+    Khắc phục: thêm Defender exclusion cho `D:\dev-projects\windows-handheld-tool` và `C:\Program Files\WindowsHandheldTools`; khôi phục `backend\bin\WinRing0x64.sys` (14.544 bytes) từ git rồi copy lại vào thư mục cài; rebuild lại thành công (`_internal` đủ 218 file, `_internal\bin\WinRing0x64.sys` có mặt).
+    Lưu ý: bản cài hiện tại đang thiếu `_internal` (chỉ còn `VCRUNTIME140*.dll`) nên phải chạy lại `deploy_test.bat` trước khi dùng.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
 - [x] **Can thiệp đồ họa DirectX nội tiến trình (DXGI Hook Engine)**
   + [Initial] Code thực tế: `backend/native/dxgi_hook/src/dxgi_hook.cpp` (MinHook x64) can thiệp bảng VMT SwapChain. `Hooked_SetFullscreenState` chặn `Fullscreen = TRUE`, ép `FALSE`, gọi `ForceBorderlessWindow` chuẩn hóa style Win32 (xóa `WS_CAPTION`, `WS_THICKFRAME`...) và trả về `S_OK`. `Hooked_GetFullscreenState` ép báo cáo `*pFullscreen = FALSE` để engine (Unreal Slate UI, Unity) dùng nhánh tọa độ chuột chuẩn Client Rect của Borderless Windowed. `Hooked_ResizeBuffers` & `Hooked_ResizeTarget` xóa cờ `ALLOW_MODE_SWITCH` và chặn game co rút cửa sổ Win32 khi render nhỏ hơn màn hình. Hook Factory (`CreateSwapChain`, `CreateSwapChainForHwnd`, `D3D11CreateDeviceAndSwapChain`) tự động xóa `ALLOW_MODE_SWITCH`, ép `Windowed = TRUE`, ép `Scaling = DXGI_SCALING_ASPECT_RATIO_STRETCH`.
     Tình trạng: Hoạt động ổn định.
@@ -275,6 +308,41 @@ Cập nhật lần cuối: 26/10/2026 23:29
     Tổng hợp 4 nút thắt đã gỡ trong ngày: (1) `ChangeDisplaySettingsExW` cũ gây lệch DPI 1,75× / FPS 15-30 → revert; (2) thiếu `ALLOW_TEARING` → bị khoá nhịp 60 ↔ 30; (3) buffer ≠ cửa sổ → DWM scale mỗi frame; (4) mô hình TDP sai (`apu_slow` + mất burst + bị ghi đè 15W lúc khởi động) — chi tiết ở mục "Quản lý công suất TDP & Cảm biến phần cứng" phần 3.
     Tình trạng: Hoạt động ổn định (đã xác nhận thực chiến).
 
+  + [26/10/2026 23:59] FPS giảm ~16% sau khi chuyển sang Flutter Desktop (Dead Island 2: 56,9 → 47,7 fps ở cùng 15W):
+    Hiện tượng: Dead Island 2 hôm qua 56,9 fps (n=553 mẫu hook đo) → hôm nay 47,7 fps (n=44) dù cùng 720p, `Scale=1.000`, tearing bật, cùng 15W, nhiệt còn thấp hơn (62°C vs 65°C), CPU thấp hơn.
+    Nguyên nhân:
+      - Panel giờ là tiến trình Flutter Desktop riêng (commit 0787978). Khi ẩn panel, cửa sổ bị `SW_HIDE` nhưng Flutter vẫn tick animation và raster 60 khung/giây; trên APU 15W phần GPU/CPU đó lấy thẳng từ ngân sách frame của game (đo được: −16% FPS).
+      - Thêm một ca `Scale=1.5` (PID 17832: cửa sổ game 1920×1080 nhưng buffer 1280×720) do `RestoreDisplayMode()` của một tiến trình game vừa thoát khôi phục mode về 1080p trong khi tiến trình còn lại vẫn render 720p.
+    Code thực tế:
+      - `frontend/lib/main.dart`: bọc `OverlayScreen` trong `AnimatedBuilder(OverlayController.instance)` + `TickerMode(enabled: visible)` + `Offstage(offstage: !visible)` → panel ẩn thì không ticker, không paint.
+      - `backend/src/overlay/window_manager.py`: `_set_ui_priority()` hạ tiến trình UI xuống `IDLE_PRIORITY_CLASS` khi ẩn và trả `NORMAL` khi hiện; `_sweep_stale_ui_processes()` kill `windows_handheld_ui.exe` còn sót của lần chạy trước trước khi attach/spawn (hết bám UI bản cũ + hết cold start 5 giây).
+      - `backend/src/input/hotkey_service.py`: thêm latch theo trạng thái phím (`_overlay_latched`/`_keyboard_latched`, phải nhả phím mới mở khoá) cho cả 3 đường (LL hook, `WM_HOTKEY`, `GetAsyncKeyState`) — hết cảnh một lần bấm toggle 2-3 lần làm panel mở rồi đóng ngay.
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp`: luồng chẩn đoán (1 giây/lần) tự gọi `MatchDisplayModeToBuffer()` khi cửa sổ game đang foreground → tự chữa `Scale != 1.0` trong tối đa 1 giây thay vì kẹt ở 1.5.
+      - `backend/native/dxgi_hook/build.bat`: đổi `vcvars64.bat` sang `D:\dev-tools\VS` (VS 2026 Build Tools cài lại) và build lại `backend/bin/dxgi_hook.dll`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [27/10/2026 00:15] Panel không tự đổi kích thước theo resolution game + TDP Auto kẹt 15W:
+    Hiện tượng: (1) Vào game (hook hạ mode xuống 720p) panel bị zoom to sai tỉ lệ, phải kéo thanh Width mới về bình thường; (2) để TDP Auto thì máy vẫn chỉ 15W, Metro vẫn thấp FPS.
+    Nguyên nhân:
+      - `window_manager` chỉ re-dock khi Qt phát `screen.geometryChanged`, nhưng mode bị hạ bằng `ChangeDisplaySettingsExW` từ trong tiến trình game nên Qt không phát sự kiện → panel giữ kích thước tính theo 1920×1080.
+      - `tdp.auto = true` trước đó là **no-op** (bỏ qua ghi giới hạn), nên SMU giữ nguyên giá trị cũ 15W sau reboot.
+    Code thực tế:
+      - `backend/src/overlay/window_manager.py`: thêm `_poll_screen_metrics()` (QTimer 1 giây, so `GetSystemMetrics(0/1)` với kích thước đã lưu) → khi mode đổi thì `update_geometry()` + re-assert topmost.
+      - `backend/src/bridge/web_bridge.py`: `_apply_persisted_tdp()` khi `auto = true` giờ **áp mức mặc định** `hardware.tdp.auto_watts` (mặc định 25W, clamp theo `min`/`max`) thay vì bỏ qua.
+      - `backend/src/core/config.py` + `backend/config.json`: thêm khoá `hardware.tdp.auto_watts = 25`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+  + [27/10/2026 00:20] Tìm ra nguyên nhân thật của việc Metro khoá đúng 30,0 fps (không phải TDP):
+    Bằng chứng đối chiếu hai phiên Metro:
+      - 25/10 09:53 (PID 15936): **không** có bước ép borderless, desktop 1920×1080, cửa sổ game 1304×784 windowed → **74,6–91,3 fps**.
+      - 26/10 23:52 (PID 11060): `convert_to_borderless` ép cửa sổ thành 1920×1080 (23:52:05) rồi hook hạ mode xuống 1280×720 **cùng giây** nhưng cửa sổ không được co lại → cửa sổ 1920×1080 trên màn hình 1280×720 → DWM composite mỗi frame, frame time 33,3ms → **đúng 30,0 fps**.
+      - 26/10 23:46 (Dead Island): cùng cơ chế, 47,7 fps (thấp hơn 56,9 của phiên 25/10 22:50).
+    Code thực tế:
+      - `backend/native/dxgi_hook/src/dxgi_hook.cpp`: thêm `SyncGameWindowToBuffer()` — sau khi hạ mode (và cả khi mode đã khớp sẵn) gọi `SetWindowPos(..., bufW, bufH, SWP_NOACTIVATE|SWP_NOZORDER)` nếu cửa sổ khác buffer; log `[DISPMODE] Resize cửa sổ game ... -> ...`.
+      - Self-heal 1 giây/lần trong luồng chẩn đoán sẽ gọi lại hàm này, nên nếu game tự đổi cửa sổ thì được chỉnh về 1:1 ngay.
+      - Build lại `backend/bin/dxgi_hook.dll` (46.080 bytes).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
 - [ ] **Xung đột phần cứng EC & Đồng bộ tọa độ chuột khi render lệch phân giải**
   + [Initial] Code thực tế: Vô hiệu hóa hoàn toàn lệnh ghi mù cổng EC I/O `0x6C / 0x68` trong `FanService` (loại bỏ dứt điểm hiện tượng nghẽn bus phần cứng gây giật lag máy, đơ GPU và Black Screen Kernel-Power Event 41). Đồng bộ tọa độ chuột đa tỉ lệ Client / Buffer: `dxgi_hook.cpp` duy trì hook 4 điểm (`Hooked_GetCursorPos`, `Hooked_SetCursorPos`, `Hooked_GetMessagePos` và ánh xạ `lParam` trong `PeekMessageW`/`GetMessageW`) theo ma trận `Buffer / Client`. `window_manager.py` gọi `ClipCursor(None)` khi mở panel.
     Tình trạng thực tế: Trên *Dead Island 2* và game DirectX chuẩn: Hoạt động hoàn toàn ổn định; Trên *Ready Or Not* (Unreal Engine): **Vẫn chưa khắc phục được** (con trỏ chuột và vùng tương tác hit-test của Slate UI vẫn bị lệch nhau, rê chuột lệch vị trí thì nút mới sáng và thao tác click menu chưa ăn khớp).
@@ -291,6 +359,33 @@ Cập nhật lần cuối: 26/10/2026 23:29
   + [23/10/2026 22:28] Sửa lỗi phát tín hiệu đổi kích thước:
     Code thực tế: Bổ sung `self.requestWidthChange.emit(width)` trong `setPanelWidth` tại `backend/src/bridge/web_bridge.py`, kết nối trực tiếp đến hàm `update_geometry` trong `backend/src/overlay/window_manager.py`.
     Tình trạng: Đã sửa xong trong code (Đã hoạt động ổn định).
+  + [27/10/2026 00:30] Panel không tự canh lại bố cục khi vào/thoát game (sau khi chuyển sang Flutter Desktop):
+    Hiện tượng: Hook hạ mode xuống 1280×720 khi vào game / trả về 1920×1080 khi thoát, cửa sổ panel **đã** được auto-dock (log `Display mode changed 1920x1080 -> 1280x720`), nhưng nội dung Flutter vẫn giữ bố cục cũ nên trông bị zoom, phải kéo thanh Width mới về bình thường.
+    Nguyên nhân: `update_geometry()` chỉ đổi kích thước cửa sổ Win32; phía Dart không có ai lắng nghe thay đổi metrics của cửa sổ nên widget tree không rebuild (việc kéo Width tình cờ tạo rebuild thông qua `BridgeService.config`).
+    Code thực tế:
+      - `frontend/lib/ui/quick_panel/quick_panel.dart`: `_OverlayScreenState` dùng `with WidgetsBindingObserver`, đăng ký `WidgetsBinding.instance.addObserver(this)` trong `initState`, huỷ trong `dispose`, và `didChangeMetrics()` gọi `setState({})` → mỗi lần cửa sổ đổi kích thước (do đổi display mode) panel tự relayout ngay.
+      - Build lại `frontend/build/windows/x64/runner/Release` (app.so 00:29).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [27/10/2026 00:50] Ép UI rebuild khi display mode đổi (thay vì phải kéo Width thủ công):
+    Nguyên nhân: `configUpdated` của `WebBridge` được khai báo nhưng **chưa từng emit**, nên khi hook đổi display mode, backend chỉ resize cửa sổ Win32; phía Dart không nhận được message nào để rebuild. Việc kéo thanh Width "chữa được" vì đường đó đi qua `ConfigManager.set` → listener Dart → `setState`.
+    Code thực tế:
+      - `backend/src/overlay/window_manager.py`: thêm signal `display_mode_changed = Signal()`, emit ngay sau `update_geometry()` trong `_poll_screen_metrics()`.
+      - `backend/main.py`: nối `win_mgr.display_mode_changed` → `AppController._on_display_mode_changed()` phát `bridge.configUpdated.emit(json.dumps(ConfigManager().data))`; WS server broadcast `{"type":"config"}` → Dart `config.value = data` → `_OverlayScreenState._onConfigUpdated` → `setState` → relayout theo kích thước panel mới.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [27/10/2026 00:50] UI bị tràn/cụt khi panel chuyển sang 720p (KHÔNG phải lỗi geometry):
+    Đo thực tế cửa sổ panel trên desktop 1280×720: `hwnd=1638888 dpi=144 (scale=1.50) win=512x720 client=512x720 child[FLUTTERVIEW]=512x720` → cửa sổ và view **đúng**, nhưng vùng logic chỉ còn 341×480 (DPI vẫn 150%) trong khi UI ở mức 120% cần ~512 px logic → tràn, chữ to, mất tab "Cài đặt". Vì vậy tăng Width thủ công lại "chữa được".
+    Code thực tế:
+      - `frontend/lib/ui/quick_panel/quick_panel.dart`: trong `build()`, tính `physicalHeight = media.size.height * media.devicePixelRatio` và `modeFactor = (physicalHeight / 1080).clamp(0.6, 1.3)`; đặt `AppTheme.uiScale = _scale * modeFactor`. Ở 720p: 120% × 0,667 = 80% → vừa khít; về 1080p tự trả lại 120%. **Không đổi logic width** (`overlay.width_percent` giữ nguyên).
+      - Build lại `frontend/build/windows/x64/runner/Release/data/app.so` (00:49).
+    Phương án thay thế (chưa làm): giữ nguyên cỡ chữ và tự tăng Width % (40% → ~60% ở 720p) — che nhiều game hơn.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+  + [27/10/2026 00:55] Đính chính mốc 00:50 — không dùng hệ số scale UI, dùng nudge 1px:
+    Hiện tượng thực tế người dùng mô tả: **chỉ cần tăng Width +1 rồi giảm -1** (net bằng 0, vẫn trong game resolution) là panel trở về đúng kích thước chuẩn. Nghĩa là geometry luôn đúng; chỉ có việc Flutter **bỏ sót WM_SIZE khi cửa sổ bị resize lúc đang ẩn**.
+    Code thực tế:
+      - Đã **bỏ** `modeFactor` (hệ số scale theo `physicalHeight/1080`) khỏi `frontend/lib/ui/quick_panel/quick_panel.dart` — không dùng nữa vì làm thay đổi cỡ chữ ngoài ý muốn.
+      - `backend/src/overlay/window_manager.py`: thêm `_nudge_window_metrics()` — đổi kích thước cửa sổ **+1px rồi hoàn lại sau 80ms** (đúng thao tác Width +1/-1), qua đó phát WM_SIZE thật cho Flutter khi cửa sổ đang hiện. Cờ `_needs_metrics_nudge` được bật trong `_poll_screen_metrics()` (khi display mode đổi) và được xử lý ở `show()` sau `ShowWindow` (hẹn 120ms).
+      - Build lại `frontend/build/windows/x64/runner/Release/data/app.so` (00:53).
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
 - [ ] **Điều hướng bảng điều khiển bằng Gamepad (Gamepad Navigation)**
   + [Initial] Code thực tế: `frontend/lib/input/gamepad_service.dart` tiếp nhận và giải mã tín hiệu nút bấm từ tay cầm để duyệt qua các tab và widget trên giao diện Flutter.
@@ -776,4 +871,14 @@ Cập nhật lần cuối: 26/10/2026 23:29
       - `backend/windows_handheld_tool.spec`: Xóa bỏ đường dẫn cứng tuyệt đối `D:/dev-projects/.../Release` khỏi `datas` (ngăn đóng gói trùng lặp ~40MB vào `_internal/ui`), khôi phục `datas=[('config.json', '.'), ('assets', 'assets'), ('bin', 'bin')]` và `hiddenimports=['win32com', 'win32com.client', 'wmi', 'pythoncom']`.
       - `frontend/lib/services/bridge_service.dart` & `scripts/deploy/deploy_test.bat`: Chuyển toàn bộ comment, docstring và thông báo log còn sót sang 100% tiếng Anh theo đúng tiêu chuẩn mã nguồn.
       - Kiểm thử E2E xác nhận: `flutter analyze` đạt 0 issues; `flutter build windows --release` biên dịch thành công `windows_handheld_ui.exe`; kiểm thử runtime xác nhận DPI Awareness (`Context=0x22, Awareness=2`), trạng thái ẩn (`Alpha=0, Flags=2`), trạng thái hiện (`Alpha=255, Flags=2`) và sự kiện bấm nút `B` tay cầm qua WebSocket đóng panel trả về `Alpha=0, is_visible=False`.
+    Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
+
+- [ ] **Kịch bản dọn dẹp build tập trung (scripts/deploy/clean.bat)**
+  + [27/10/2026 23:40] Tách bước dọn `build`/`dist` thành script riêng có tự nâng quyền:
+    Hiện tượng: Sau mỗi lần chạy `deploy_test.bat` (đã elevate), hai thư mục `build` và `dist` thuộc owner `BUILTIN\Administrators` nên shell thường không xóa được, báo `Access to the path is denied` / `Failed processing 1 files`; muốn dọn phải tự mở cmd Administrator.
+    Code thực tế:
+      - `scripts/deploy/clean.bat` (mới): kiểm tra `net session`, nếu chưa elevated thì tự `Start-Process cmd -Verb RunAs` rồi thoát; xóa `build` và `dist` ở gốc project, in cảnh báo `[!] Could not remove ...` nếu thư mục vẫn tồn tại sau khi xóa (đang bị process giữ).
+      - `scripts/deploy/deploy_test.bat`: gọi `clean.bat` ngay sau `cd /d "%PROJECT_ROOT%"` để dọn trước khi build, đồng thời gỡ 2 dòng `rmdir /S /Q` trùng lặp ở bước PyInstaller.
+      - Không đưa các thư mục build tạm của phiên làm việc (`dist_build`, `build_build`) vào script vì chúng do shell thường tạo và đã được dọn tay.
+    Kiểm chứng (27/10 23:38): chạy bản `clean.bat` bỏ khối elevate trên cây mẫu `.tmp_cleantest` → xóa sạch `build` + `dist`, in đúng 2 đường dẫn, mã thoát 0.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).

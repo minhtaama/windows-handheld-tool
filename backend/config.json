@@ -32,6 +32,7 @@
             "step": 1,
             "current": 15,
             "auto": true,
+            "auto_watts": 25,
             "stapm": 15,
             "fast": 18,
             "slow": 15

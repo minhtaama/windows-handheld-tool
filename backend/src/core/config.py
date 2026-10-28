@@ -39,6 +39,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "step": 1,
             "current": 15,
             "auto": False,
+            "auto_watts": 25,
             "stapm": 15,
             "fast": 18,
             "slow": 15,
