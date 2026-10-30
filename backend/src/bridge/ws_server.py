@@ -150,6 +150,11 @@ class WsServer(QObject):
                 self.bridge.installRtss()
             elif action == "setOsdMetric":
                 self.bridge.setOsdMetric(str(req.get("metric", "fps")), bool(req.get("enabled", True)))
+            elif action == "setOsdLayout":
+                self.bridge.setOsdLayout(
+                    int(req.get("zoom", 1)),
+                    str(req.get("position", "topLeft")),
+                )
             elif action == "setPanelWidth":
                 self.bridge.setPanelWidth(int(req.get("width", 420)))
             elif action == "setPanelScale":

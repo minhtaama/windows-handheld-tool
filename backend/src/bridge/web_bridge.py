@@ -1,4 +1,5 @@
 import json
+import threading
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 from src.core.config import ConfigManager
 from src.hardware.tdp_service import TdpService
@@ -44,6 +45,7 @@ class WebBridge(QObject):
         self.bright_svc = BrightnessService()
         self.touch_svc = TouchscreenService()
         self.rtss_svc = RtssService()
+        self._apply_persisted_osd_layout()
         self.telemetry_svc = SystemTelemetryService()
         self.gamepad_svc = GamepadService()
         # Read once at startup, then updated from setAutostart: polling the Task
@@ -137,6 +139,18 @@ class WebBridge(QObject):
         except Exception as e:
             logger.warning(f"[Bridge] Không thể áp TDP lúc khởi động: {e}")
 
+    def _apply_persisted_osd_layout(self):
+        """Đẩy Zoom/Position đã lưu xuống RTSS ngay khi khởi động để OSD đúng ngay từ frame đầu."""
+        try:
+            position = str(self.config.get("hardware", "rtss", "osd_position", default="topLeft"))
+            self.rtss_svc.set_osd_position(position)
+            zoom = self.config.get("hardware", "rtss", "osd_zoom")
+            if zoom is None:
+                return
+            self.rtss_svc.set_osd_layout(int(zoom), position)
+        except Exception as e:
+            logger.warning(f"[Bridge] Không thể áp layout OSD lúc khởi động: {e}")
+
     @Slot(int)
     def setTdp(self, watts: int):
         watts = max(5, min(35, watts))
@@ -207,6 +221,12 @@ class WebBridge(QObject):
     @Slot(str, bool)
     def setOsdMetric(self, metric_key: str, enabled: bool):
         self.config.set(enabled, "hardware", "rtss", f"osd_show_{metric_key}")
+
+    @Slot(int, str)
+    def setOsdLayout(self, zoom: int, position: str):
+        self.rtss_svc.set_osd_layout(zoom, position)
+        self.config.set(int(zoom), "hardware", "rtss", "osd_zoom")
+        self.config.set(str(position), "hardware", "rtss", "osd_position")
 
     @Slot(int)
     def setPanelWidth(self, width: int):

@@ -1,5 +1,5 @@
 # Trạng thái hiện tại của dự án (Project Status)
-Cập nhật lần cuối: 26/10/2026 23:29
+Cập nhật lần cuối: 30/10/2026 20:05
 
 > [!IMPORTANT]
 > **Quy tắc duy trì tài liệu**:
@@ -641,6 +641,53 @@ Cập nhật lần cuối: 26/10/2026 23:29
       - `frontend/lib/ui/tabs/performance_tab.dart`: `shouldShowSlider: !_tdpAuto`; `navigationLayout` bỏ ô slider khi TDP tự động; `_toggleTdpAuto()` đưa focus về ô đầu nếu đang đứng ở slider, tránh focus trỏ vào control đã biến mất.
     Tình trạng: Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định).
 
+- [ ] **Chuyển tầng Ring 0 sang PawnIO (bỏ WinRing0 + ryzenadj)**
+  + [Initial] Hiện trạng: `backend/src/hardware/tdp_service.py` nạp driver Ring 0 `WinRing0x64.sys` rồi can thiệp TDP qua `libryzenadj.dll` (STAPM/Fast/Slow), kèm fallback CLI `ryzenadj.exe`; telemetry nhiệt độ/công suất đọc từ PMTable của ryzenadj. Toàn bộ binary Ring 0 nằm trong `backend/bin` (`WinRing0x64.sys/.dll`, `libryzenadj.dll/.lib`, `ryzenadj.dll`, `ryzenadj.exe`, `inpoutx64.dll`, `readjust.py`, `readjustService.ps1`, `pmtable-example.py`, `demo.bat`, `installServiceTask.bat`, `uninstallServiceTask.bat`, `RyzenAdjServiceTask.xml.template`, `ryzenadj.h`).
+    Tình trạng: **Còn tồn đọng** — `WinRing0x64.sys` bị Windows Defender xếp vào nhóm vulnerable driver và bị Windows 11 Memory Integrity (HVCI) chặn nạp; trên Ryzen 7 6800U (Rembrandt) `init_table()` trả `-5` nên PMTable không đọc được, telemetry phải fallback số ước lượng.
+
+  + [30/10/2026 20:05] Lập Implementation Plan phương án C: PawnIO client + module Pawn SMU tự viết (chưa thay đổi mã nguồn).
+    Bối cảnh & mục tiêu: Thay toàn bộ đường Ring 0 hiện tại bằng driver PawnIO (driver kernel **có chữ ký Microsoft**, không bị Defender/HVCI chặn) + một module Pawn do dự án tự viết để đọc/ghi SMU. Kết quả kỳ vọng: bỏ hẳn WinRing0/ryzenadj, đổi được TDP **kể cả khi bật HVCI**, và không vướng giấy phép GPL cho phần mềm chính (lý do chọn phương án C thay vì copy HandheldCompanion CC BY-NC-SA hoặc nhúng `RyzenSMU.bin` nguồn ZenStates-Core GPL-3.0).
+    Hiện trạng đã xác minh:
+      - CPU máy đích: **AMD Ryzen 7 6800U = Rembrandt (Zen3+)** ⇒ mailbox MP1 `cmd = 0x03B10528`, `rsp = 0x03B10578`, `args = 0x03B10998`; mã lệnh STAPM/FAST/SLOW = `0x14/0x15/0x16`.
+      - PawnIO **chưa cài** trên máy (không có service, không có `PawnIO.sys`, không có device) ⇒ phải có bước phát hiện + hướng dẫn cài.
+      - Không có ACPI thermal zone (`MSAcpi_ThermalZoneTemperature` rỗng) ⇒ không có nguồn nhiệt độ thay thế qua WMI, phải đọc SMN `THM_TCON_CUR_TMP = 0x59800`.
+      - Toolchain máy dev: `docker` ✗, `cl` ✗, `pawncc` ✗, `wsl` có nhưng chưa có distro; **winget có `Compuphase.Pawn 4.1.7152`** — đúng phiên bản PawnIO.Modules dùng trong CI.
+      - `backend/windows_handheld_tool.spec:8` bundle nguyên thư mục `bin` (`datas=[('config.json', '.'), ('assets', 'assets'), ('bin', 'bin')]`) ⇒ đặt module vào `backend/bin/pawnio/` là tự động vào bản build.
+      - Hằng ABI đã đối chứng với `PawnIOLib.h` và source HandheldCompanion: device `\\?\GLOBALROOT\Device\PawnIO` (PawnIO ≥ 2.1.0.0), fallback `\\.\PawnIO`; `IOCTL_PIO_LOAD_BINARY = 0xA1B22084` (blob = raw AMX); `IOCTL_PIO_EXECUTE_FN = 0xA1B22104` (buffer vào = **32 byte tên hàm + mảng ULONG64**, buffer ra = mảng ULONG64).
+    Kiến trúc đích (3 tầng, đúng SoC):
+      - `backend/src/hardware/tdp_service.py` — policy: clamp watt, persist, reapply 5s, shape telemetry (giữ chữ ký `set_tdp`/`get_telemetry`).
+      - `backend/src/hardware/ryzen_smu.py` — protocol: codename → mailbox, probe SMU, STAPM/FAST/SLOW, đổi W→mW, verify read-back, mutex SMU.
+      - `backend/src/hardware/pawnio_client.py` — transport: `CreateFile` / `DeviceIoControl` / `load module` / `execute function`, không chứa business logic.
+      - `backend/bin/pawnio/RyzenSmu.amx` — module Pawn: đọc/ghi SMN + Tctl, chạy trong driver PawnIO.
+    Danh sách file:
+      - Tạo mới: `backend/src/hardware/pawnio_client.py`; `backend/src/hardware/ryzen_smu.py`; `backend/src/hardware/pawnio_modules/RyzenSmu.p`; `backend/src/hardware/pawnio_modules/include/{core,extra,native,pawnio,ntstatus,util}.inc` (vendor header **0BSD** từ `namazso/PawnIO.Modules`); `backend/src/hardware/pawnio_modules/LICENSE` (**LGPL-2.1** cho module — PawnIO yêu cầu module nạp vào phải GPL-compatible, app Python không bị lây nhờ IOCTL exception); `backend/bin/pawnio/RyzenSmu.amx` (build output, commit để máy khác không cần compiler); `scripts/build/build_pawnio_module.bat` (`pawncc RyzenSmu.p -iinclude -C64 -;+ -(+ -p`).
+      - Sửa: `backend/src/hardware/tdp_service.py` (thay lõi); `backend/src/services/system_telemetry.py` (bỏ fallback nhiệt độ giả `42 + cpu_usage * 0.35` ở dòng 52-53, đổi field trạng thái driver); `backend/src/bridge/web_bridge.py:112` (payload trạng thái driver); `frontend/lib/services/bridge_service.dart:216` (đọc field mới); `frontend/lib/ui/tabs/performance_tab.dart:290` & `frontend/lib/ui/tabs/settings_tab.dart:387` (text "WinRing0/HVCI" → "PawnIO"); `scripts/deploy/deploy_test.bat:100-116` (bỏ danh sách copy driver cũ); `scripts/deploy/uninstall_test.bat:31-35` (bỏ service WinRing0); `README.md:83-84` (hướng dẫn cài PawnIO thay `ryzenadj.dll`).
+      - Xóa hẳn (theo nguyên tắc Cấm Backward Compatibility): toàn bộ danh sách binary Ring 0 cũ nêu ở mốc `+ [Initial]`.
+    Các phase thực hiện:
+      - **Phase 0 — Spike bắt buộc (0.5–1 ngày)**: `winget install Compuphase.Pawn` (pin 4.1.7152) + người dùng cài `PawnIO_setup.exe`; viết module tối giản `spike.p` (`ioctl_cpuid`, `ioctl_smn_read`, `ioctl_smn_write`, `ioctl_read_tctl`); script spike probe mailbox (SMU_TEST_MSG `0x1`), đọc SMU version, đọc Tctl, set 15W rồi đọc lại; **so Tctl với số đo `libryzenadj` hiện tại** để chốt công thức. Cổng quyết định: nếu SMN qua `pci_config_*` không chạy thì thử `io_space_map` + `virtual_read/write_dword`; vẫn thất bại thì **dừng và báo lại** trước khi refactor.
+      - **Phase 1 — `pawnio_client.py` (0.5 ngày)**: singleton với `is_installed()`, `load_module(key, path)` (cache handle theo module), `execute(key, fn, args_in, out_count)`, `close()`; mọi lỗi NTSTATUS/HRESULT đổi thành log tiếng Việt + `False`/`None`, không raise xuyên tầng.
+      - **Phase 2 — module `RyzenSmu.p` (1 ngày)**: dùng `DEFINE_IOCTL_SIZED` để validate `in_size`/`out_size`; `ioctl_cpuid` trả CPUID leaf `1` và `0x80000001` để user-space tự map codename; `ioctl_smn_read(addr)` = `pci_config_write_dword(0,0,0,0x60,addr)` → `pci_config_read_dword(0,0,0,0x64,&v)`; `ioctl_smn_write(addr,value)` ghi index `0x60` rồi data `0x64`; `ioctl_read_tctl` đọc SMN `0x59800` trả raw (công thức áp ở Python theo kết quả Phase 0).
+      - **Phase 3 — `ryzen_smu.py` (1 ngày)**: bảng `{codename: (cmd, rsp, args)}` (Rembrandt/Phoenix/HawkPoint/StrixPoint/DragonRange…), `SMU_RETRIES_MAX = 8096`; probe đúng thứ tự chờ ready → `rsp = 0` → ghi `0x47` vào args → đọc lại phải `0x47` → ghi cmd `0x1` → chờ `rsp ≠ 0` → status phải `1`; `set_stapm/fast/slow(watts)` = `watts * 1000` mW kèm verify read-back; giữ quyết định **không** gọi `set_apu_slow_limit`; mutex `Global\Access_PCI` (`CreateMutexW` + `WaitForSingleObject(5000)`) và `threading.Lock`.
+      - **Phase 4 — refactor `tdp_service.py` (0.5 ngày)**: xóa `_ensure_winring0_driver`, `_load_library`, `cli_path`, `_invoke_set`, `lib`, `ry_handle`; đổi `is_hvci_blocked` → `is_driver_blocked` + `driver_status` (`pawnio_missing | smu_probe_failed | ok`) và đồng bộ ở `web_bridge.py:112`, `system_telemetry.py:80`, `bridge_service.dart:216`, text 2 tab; giữ nguyên `FAST_BURST_OFFSET_W = 3`, `%LOCALAPPDATA%\WindowsHandheldTools\tdp_state.json`, `_reapply_worker` 5s.
+      - **Phase 5 — nhiệt độ & công suất**: nhiệt độ từ `smu.read_tctl()` (SMN `0x59800`), công suất vẫn ưu tiên RAPL (`rapl_service.py`); xóa fallback nhiệt độ giả; không đọc được thì trả `None` (UI hiện `--`, `fan_service.py` đã có guard `temp is None`).
+      - **Phase 6 — dọn dẹp, đóng gói, tài liệu, kiểm thử (0.5–1 ngày)**: xóa binary Ring 0 cũ, sửa `deploy_test.bat`/`uninstall_test.bat`/`README.md`, cập nhật `CHECKLIST.md`; kiểm thử `dart analyze` (cần quyền đầy đủ vì sandbox chặn analysis server), `python -B -c ast.parse` + import, chạy app thật set 15/18/25W.
+    Tiêu chí nghiệm thu:
+      - Set 15/18/25W → read-back khớp tuyệt đối; `last_set_tdp`, persist và reapply hoạt động.
+      - **Bật Memory Integrity (HVCI) vẫn set được TDP** (điểm khác biệt cốt lõi so với WinRing0).
+      - Defender không còn cảnh báo `VulnerableDriver:WinNT/Winring0`; thư mục cài không còn file WinRing0/ryzenadj.
+      - Nhiệt độ sai lệch ≤ 2°C so với giá trị ryzenadj đo cùng thời điểm; không còn số bịa.
+      - Fan curve chạy đúng với nguồn nhiệt mới; reboot vẫn áp lại TDP đã lưu.
+    Rủi ro & đối sách:
+      - SMN qua PCI config bị driver filter chặn → Phase 0 thử `io_space_map` + `virtual_read/write_dword`.
+      - Công thức Tctl khác theo family → chỉ nhận công thức đã đối chứng, không chắc thì trả `None` thay vì số sai.
+      - Build module lệch phiên bản compiler → pin `Compuphase.Pawn 4.1.7152`, commit `.amx` + script build tái lập.
+      - PawnIO chưa cài trên máy người dùng → detect, disable tính năng TDP + banner hướng dẫn; **không tự cài driver im lặng**.
+      - License PawnIO → module riêng cấp LGPL-2.1 + commit source; app vẫn tự do nhờ IOCTL exception.
+      - Treo/hang SMU → timeout + retry giới hạn, clamp 5–35W, không ghi khi probe fail.
+    Ước lượng: Phase 0: 0.5–1 ngày; Phase 1: 0.5; Phase 2: 1; Phase 3: 1; Phase 4: 0.5; Phase 5–6: 0.5–1 ⇒ **tổng 4–5.5 ngày**.
+    Cần chốt trước khi code: (1) cho phép cài PawnIO (driver kernel có chữ ký Microsoft) + pawn compiler qua winget trên máy này? (2) chấp nhận vẫn cần Administrator để đổi TDP (device ACL của PawnIO), đổi lại **không phải tắt HVCI**? (3) nếu không đối chứng được công thức Tctl thì chấp nhận hiển thị `--` thay vì số đoán? (4) chỉ port STAPM/FAST/SLOW hay mở rộng luôn GPU clock và các setter khác?
+    Tình trạng: **Chưa thực hiện** — plan đã ghi nhận, chưa thay đổi mã nguồn; đang chờ duyệt `Proceed`.
+
 ---
 
 ## 4. Hiển thị OSD thông số in-game qua RivaTuner (RTSS Overlay)
@@ -716,6 +763,22 @@ Cập nhật lần cuối: 26/10/2026 23:29
 - [ ] **Tùy biến kích thước OSD (Zoom) và Vị trí hiển thị (Position)**
   + [Initial] Code thực tế: UI Flutter đã có các nút chọn Zoom (1x-4x) và Position.
     Tình trạng: **Còn tồn đọng** (Chưa nối luồng WebSocket IPC để gửi cấu hình Zoom/Position xuống backend và chưa ghi vào file cấu hình của RTSS; cần kiểm tra hiển thị thực tế in-game trên máy handheld).
+  + [28/10/2026 22:31] Nối luồng IPC và ghi cấu hình Zoom/Position thật xuống RTSS:
+    Hiện tượng: Chọn cỡ chữ OSD (Zoom) và đổi vị trí góc (Position) không có tác dụng in-game; bấm "Cài RTSS" cũng lỗi.
+    Nguyên nhân kỹ thuật:
+      - `frontend/lib/hardware/rtss_service.dart:49-59`: `setOsdZoom()`/`setOsdPosition()` chỉ gán biến local `_osdZoom`/`_osdPosition`, không gửi lệnh nào xuống backend.
+      - Backend thiếu hẳn đường nhận: không có action `setOsdLayout` trong `backend/src/bridge/ws_server.py` và không có slot tương ứng trong `backend/src/bridge/web_bridge.py`.
+      - Struct `RTSS_SHARED_MEMORY_OSD_ENTRY` (SDK `RTSSSharedMemory.h`) không có trường zoom/position. RTSS lấy cỡ chữ từ profile `[OSD] ZoomRatio` (1..8), còn vị trí phải khai báo bằng tag sticky layer ngay trong chuỗi OSD: `<P0><L0>+` = góc trên-trái, `<P2>` = trên-phải, `<P6>` = dưới-trái, `<P8>` = dưới-phải (lưới 3x3, tham chiếu sample `RTSSSharedMemorySampleDlg.cpp:657-676`).
+      - `backend/src/bridge/web_bridge.py:204`: gọi `threading.Thread(...)` nhưng tệp chưa `import threading` nên bấm cài RTSS ném `NameError`.
+    Code thực tế:
+      - `backend/src/hardware/rtss_service.py`: Thêm `OSD_POSITION_GRID`, `OSD_VERSION_LAYER_TAGS`, lưu `mem_version` khi đọc header shared memory; thêm `set_osd_layout(zoom, position)` và `_osd_layout_prefix()` (tự bỏ tag nếu shared memory < `0x0002000C`); mọi lần ghi OSD đều chèn prefix `<P..><L0>+`. Tách 2 helper dùng chung: `_write_profile_props()` (LoadProfile → SetProfileProperty → SaveProfile → UpdateProfiles → đọc lại xác nhận, tự báo thất bại khi RTSS chưa chạy nên không lưu được) và `_write_global_profile_keys()` (gộp key vào đúng section của `Profiles\Global`, không phân biệt hoa/thường, tạo section nếu thiếu); refactor `set_fps_limit()` dùng lại chính 2 helper này thay cho 70 dòng lặp thủ công.
+      - `backend/src/bridge/web_bridge.py`: Bổ sung `import threading`; thêm slot `setOsdLayout(zoom, position)` (ghi RTSS + lưu `hardware.rtss.osd_zoom`/`osd_position`); thêm `_apply_persisted_osd_layout()` áp lại cấu hình đã lưu ngay lúc khởi động nên OSD đúng cỡ/đúng góc từ frame đầu.
+      - `backend/src/bridge/ws_server.py`: Thêm nhánh `action == "setOsdLayout"`.
+      - `frontend/lib/services/bridge_service.dart`: Thêm `setOsdLayout(int zoom, String position)` gửi `{action: setOsdLayout, zoom, position}`.
+      - `frontend/lib/hardware/rtss_service.dart`: `setOsdZoom()`/`setOsdPosition()` gọi `_pushLayout()` để đẩy cặp giá trị xuống backend; enum `RtssOsdPosition` bỏ cặp `(x, y)` không dùng ở đâu, chỉ còn `label`; việc ánh xạ sang ô lưới 3x3 do backend đảm nhận (một nguồn sự thật duy nhất).
+      - `frontend/lib/ui/tabs/rtss_tab.dart`: Không phải sửa (switch preview dùng enum trực tiếp, preset vẫn là 1x-4x).
+    Kiểm thử đã chạy: probe trên bản sao `Profiles\Global` (thay giá trị tại chỗ, chèn key thiếu vào section, tạo section mới, merge không phân biệt hoa/thường) và probe gọi thật `RTSSHooks64.dll` để xác nhận API nhận `ZoomRatio`. Máy test chưa bật `RTSS.exe` và app chưa chạy elevated nên `SaveProfile` chỉ trả True mà không ghi được vào `C:\Program Files (x86)\RivaTuner Statistics Server\Profiles\Global` — đây là lý do phải chạy app bằng quyền Administrator (giống TDP/Fan) để tính năng lưu được cấu hình.
+    Tình trạng: **Đã sửa xong trong code (Đang chờ test thực tế để xác nhận hoạt động ổn định)**
 
 ---
 

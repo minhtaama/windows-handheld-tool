@@ -355,6 +355,10 @@ class BridgeService {
     _send({'action': 'setOsdMetric', 'metric': metric, 'enabled': enabled});
   }
 
+  void setOsdLayout(int zoom, String position) {
+    _send({'action': 'setOsdLayout', 'zoom': zoom, 'position': position});
+  }
+
   void setPanelWidth(int width) {
     panelWidth.value = width;
     _send({'action': 'setPanelWidth', 'width': width});

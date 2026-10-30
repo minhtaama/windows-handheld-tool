@@ -48,6 +48,7 @@ class RtssService {
 
   bool setOsdZoom(int zoom) {
     _osdZoom = zoom;
+    _pushLayout();
     return true;
   }
 
@@ -55,7 +56,14 @@ class RtssService {
 
   bool setOsdPosition(RtssOsdPosition pos) {
     _osdPosition = pos;
+    _pushLayout();
     return true;
+  }
+
+  /// Đẩy cặp Zoom/Position xuống backend (ghi ZoomRatio vào profile RTSS + ghim tag vị trí).
+  void _pushLayout() {
+    BridgeService.instance.setOsdLayout(_osdZoom, _osdPosition.name);
+    _logger.info('Đã gửi layout OSD: ${_osdZoom}x @ ${_osdPosition.name}');
   }
 
   bool updateOsdText(String text) {
@@ -70,17 +78,17 @@ class RtssService {
 }
 
 /// Các vị trí neo góc màn hình hiển thị Overlay OSD của RTSS.
+///
+/// Tên enum (`name`) là khóa gửi xuống backend; backend tự ánh xạ sang ô của lưới 3x3 RTSS.
 enum RtssOsdPosition {
-  topLeft(1, 1, 'Trái trên'),
-  topRight(-1, 1, 'Phải trên'),
-  bottomLeft(1, -1, 'Trái dưới'),
-  bottomRight(-1, -1, 'Phải dưới');
+  topLeft('Trái trên'),
+  topRight('Phải trên'),
+  bottomLeft('Trái dưới'),
+  bottomRight('Phải dưới');
 
-  final int x;
-  final int y;
   final String label;
 
-  const RtssOsdPosition(this.x, this.y, this.label);
+  const RtssOsdPosition(this.label);
 }
 
 /// Bộ điều khiển phần cứng cho RTSS FPS Limit & OSD Overlay.

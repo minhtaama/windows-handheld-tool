@@ -16,6 +16,19 @@ logger = setup_logger("RtssService")
 RTSS_SIGNATURES = (0x53535452, 0x52545353)  # 'RTSS' trong little-endian / big-endian
 OSD_APP_OWNER = "WindowsHandheldTool"
 
+# RTSS anchors OSD text on a 3x3 sticky grid; the tag value is the row-major cell index.
+OSD_POSITION_GRID = {
+    "topLeft": 0,
+    "topRight": 2,
+    "bottomLeft": 6,
+    "bottomRight": 8,
+}
+OSD_ZOOM_MIN = 1
+OSD_ZOOM_MAX = 8
+OSD_LAYER_INDEX = 0
+# Sticky layer position tags (<Pnn><Lnn>) require shared memory >= 2.12.
+OSD_VERSION_LAYER_TAGS = 0x0002000C
+
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel32.OpenFileMappingW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
 kernel32.OpenFileMappingW.restype = wintypes.HANDLE
@@ -37,9 +50,11 @@ class RtssService:
             return
         self.is_connected = False
         self.mm: Optional[mmap.mmap] = None
+        self.mem_version: int = 0
         self.app_arr_offset: int = 0
         self.app_arr_size: int = 0
         self.app_entry_size: int = 0
+        self._osd_position: str = "topLeft"
         self.rtss_dir: Optional[str] = self._detect_rtss_dir()
         self.hooks_dll = None
         self._last_launch_attempt: float = 0.0
@@ -101,6 +116,7 @@ class RtssService:
             except Exception:
                 pass
             self.mm = None
+        self.mem_version = 0
         self.is_connected = False
 
     def _init_shared_memory(self):
@@ -135,6 +151,7 @@ class RtssService:
             self.app_arr_offset = app_arr_offset
             self.app_arr_size = app_arr_size
             self.app_entry_size = app_entry_size
+            self.mem_version = ver
 
             # Bao phủ toàn bộ cả mảng OSD slots và mảng App entries
             total_size = max(
@@ -321,6 +338,8 @@ class RtssService:
             if sig not in RTSS_SIGNATURES:
                 return False
 
+            self.mem_version = ver
+
             target_slot = -1
 
             # 1st pass: Tìm slot đã thuộc quyền sở hữu của app
@@ -367,7 +386,7 @@ class RtssService:
                 self.mm.seek(entry_offset + 256)
                 self.mm.write(owner_encoded)
 
-                text_bytes = text.encode("utf-8")
+                text_bytes = f"{self._osd_layout_prefix()}{text}".encode("utf-8")
                 if ver >= 0x00020007:
                     # Chuẩn RTSS v2.7+: szOSD[0] = 0 (tránh render lặp lại 2 lần)
                     self.mm.seek(entry_offset)
@@ -501,76 +520,148 @@ class RtssService:
                 logger.debug(f"Lỗi đọc FramerateLimit qua RTSSHooks64: {e}")
         return 0
 
+    def _write_profile_props(self, props: dict) -> bool:
+        """
+        Ghi các thuộc tính số nguyên vào profile Global qua RTSSHooks64.dll API.
+        Trả về False nếu RTSS.exe chưa chạy: khi đó API nhận lệnh nhưng không lưu ra tệp profile,
+        nên caller phải fallback sang ghi trực tiếp tệp Global.
+        """
+        if not (self.hooks_dll and hasattr(self.hooks_dll, "SetProfileProperty")):
+            return False
+        try:
+            self.hooks_dll.LoadProfile(b"")
+            for name, value in props.items():
+                val = ctypes.c_uint32(int(value))
+                if not self.hooks_dll.SetProfileProperty(name.encode("utf-8"), ctypes.byref(val), ctypes.sizeof(val)):
+                    logger.warning(f"RTSSHooks64 SetProfileProperty('{name}') trả về False.")
+                    return False
+            self.hooks_dll.SaveProfile(b"")
+            if hasattr(self.hooks_dll, "UpdateProfiles"):
+                self.hooks_dll.UpdateProfiles()
+            return self._verify_profile_props(props)
+        except Exception as e:
+            logger.warning(f"Lỗi khi ghi thuộc tính profile RTSS qua DLL: {e}")
+            return False
+
+    def _verify_profile_props(self, props: dict) -> bool:
+        """Đọc lại profile Global để chắc chắn giá trị vừa ghi đã thực sự được RTSS lưu."""
+        if not hasattr(self.hooks_dll, "GetProfileProperty"):
+            return True
+        try:
+            self.hooks_dll.LoadProfile(b"")
+            for name, value in props.items():
+                read_back = ctypes.c_uint32(0)
+                if not self.hooks_dll.GetProfileProperty(name.encode("utf-8"), ctypes.byref(read_back), 4):
+                    return False
+                if int(read_back.value) != int(value):
+                    logger.info(
+                        f"RTSS chưa lưu {name}={value} (đọc lại được {read_back.value}) "
+                        "-> dùng fallback ghi tệp profile."
+                    )
+                    return False
+            return True
+        except Exception as e:
+            logger.debug(f"Lỗi đọc lại thuộc tính profile RTSS: {e}")
+            return False
+
+    def _write_global_profile_keys(self, section: str, values: dict) -> bool:
+        """Fallback: gộp các cặp key=value vào một section của tệp profile Global."""
+        if not self.rtss_dir:
+            return False
+
+        profile_path = os.path.join(self.rtss_dir, "Profiles", "Global")
+        header = f"[{section}]"
+        try:
+            lines = []
+            if os.path.isfile(profile_path):
+                with open(profile_path, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = f.readlines()
+
+            out = []
+            pending = dict(values)
+            inside = False
+            section_found = False
+
+            def flush_pending():
+                nonlocal pending
+                out.extend(f"{key}={val}\n" for key, val in pending.items())
+                pending = {}
+
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    if inside:
+                        flush_pending()
+                    inside = stripped.lower() == header.lower()
+                    section_found = section_found or inside
+                    out.append(line)
+                    continue
+                if inside:
+                    key = stripped.split("=", 1)[0].strip()
+                    match = next((k for k in pending if k.lower() == key.lower()), None)
+                    if match:
+                        out.append(f"{match}={pending.pop(match)}\n")
+                        continue
+                out.append(line)
+
+            if inside:
+                flush_pending()
+            if not section_found:
+                out.append(f"\n{header}\n")
+                flush_pending()
+
+            os.makedirs(os.path.dirname(profile_path), exist_ok=True)
+            with open(profile_path, "w", encoding="utf-8") as f:
+                f.writelines(out)
+            logger.info(f"Đã ghi {values} vào section {header} của {profile_path} (Fallback)")
+
+            if self.hooks_dll and hasattr(self.hooks_dll, "UpdateProfiles"):
+                self.hooks_dll.UpdateProfiles()
+            return True
+        except PermissionError:
+            logger.warning(
+                f"Không đủ quyền ghi {profile_path} - cần chạy ứng dụng bằng quyền Administrator "
+                "để lưu cấu hình RTSS khi RTSS chưa khởi động."
+            )
+            return False
+        except Exception as e:
+            logger.error(f"Lỗi khi ghi profile RTSS {header} (fallback): {e}")
+            return False
+
     def set_fps_limit(self, limit: int) -> bool:
         """Thiết lập giới hạn FPS qua RTSSHooks64 DLL API hoặc fallback ghi tệp cấu hình profile Global"""
         limit = max(0, min(360, limit))
         logger.info(f"Đặt giới hạn FPS RTSS: {limit} FPS")
 
-        # 1. Ưu tiên hàng đầu: Sử dụng API chính thức của RTSSHooks64.dll
-        if self.hooks_dll and hasattr(self.hooks_dll, "SetProfileProperty"):
-            try:
-                self.hooks_dll.LoadProfile(b"")
-                val = ctypes.c_uint32(limit)
-                res = self.hooks_dll.SetProfileProperty(b"FramerateLimit", ctypes.byref(val), 4)
-                if res:
-                    self.hooks_dll.SaveProfile(b"")
-                    self.hooks_dll.UpdateProfiles()
-                    logger.info(f"Đã cập nhật FramerateLimit={limit} qua RTSSHooks64 API thành công.")
-                    return True
-                else:
-                    logger.warning("RTSSHooks64 SetProfileProperty trả về False.")
-            except Exception as e:
-                logger.warning(f"Lỗi khi cập nhật FramerateLimit qua DLL: {e}")
+        if self._write_profile_props({"FramerateLimit": limit}):
+            logger.info(f"Đã cập nhật FramerateLimit={limit} qua RTSSHooks64 API thành công.")
+            return True
 
-        # 2. Cơ chế Fallback: Ghi trực tiếp vào tệp cấu hình Global của RTSS nếu DLL lỗi
-        if self.rtss_dir:
-            profile_path = os.path.join(self.rtss_dir, "Profiles", "Global")
-            try:
-                lines = []
-                if os.path.isfile(profile_path):
-                    with open(profile_path, "r", encoding="utf-8", errors="ignore") as f:
-                        lines = f.readlines()
+        return self._write_global_profile_keys("Framerate", {"Limit": limit})
 
-                framerate_sec_found = False
-                limit_found = False
-                new_lines = []
+    def set_osd_position(self, position: str) -> None:
+        """Chỉ đổi góc neo cho chuỗi text OSD (không đụng tới profile RTSS)."""
+        self._osd_position = position if position in OSD_POSITION_GRID else "topLeft"
 
-                for line in lines:
-                    stripped = line.strip()
-                    if stripped.lower() == "[framerate]":
-                        framerate_sec_found = True
-                        new_lines.append(line)
-                        continue
-                    if framerate_sec_found and stripped.startswith("["):
-                        if not limit_found:
-                            new_lines.append(f"Limit={limit}\n")
-                            limit_found = True
-                        framerate_sec_found = False
-                    if framerate_sec_found and stripped.lower().startswith("limit="):
-                        new_lines.append(f"Limit={limit}\n")
-                        limit_found = True
-                        continue
-                    new_lines.append(line)
+    def set_osd_layout(self, zoom: int, position: str) -> bool:
+        """Áp dụng cỡ chữ (profile ZoomRatio) và vị trí góc (tag sticky layer trong chuỗi OSD)."""
+        zoom = max(OSD_ZOOM_MIN, min(OSD_ZOOM_MAX, int(zoom)))
+        self.set_osd_position(position)
+        logger.info(f"Đặt layout OSD RTSS: zoom={zoom}x, vị trí={self._osd_position}")
 
-                if not framerate_sec_found and not limit_found:
-                    new_lines.append("\n[Framerate]\n")
-                    new_lines.append(f"Limit={limit}\n")
-                elif framerate_sec_found and not limit_found:
-                    new_lines.append(f"Limit={limit}\n")
+        if self._write_profile_props({"ZoomRatio": zoom}):
+            return True
+        return self._write_global_profile_keys("OSD", {"ZoomRatio": zoom})
 
-                os.makedirs(os.path.dirname(profile_path), exist_ok=True)
-                with open(profile_path, "w", encoding="utf-8") as f:
-                    f.writelines(new_lines)
-                logger.info(f"Đã ghi Framerate Limit={limit} vào {profile_path} (Fallback)")
-
-                if self.hooks_dll and hasattr(self.hooks_dll, "UpdateProfiles"):
-                    self.hooks_dll.UpdateProfiles()
-
-                return True
-            except Exception as e:
-                logger.error(f"Lỗi khi ghi profile RTSS fallback: {e}")
-
-        return False
+    def _osd_layout_prefix(self) -> str:
+        """
+        Tag mở đầu chuỗi OSD ghim layer 0 vào ô tương ứng của lưới 3x3.
+        RTSS cũ không hỗ trợ tag layer nên trả về chuỗi rỗng.
+        """
+        if self.mem_version < OSD_VERSION_LAYER_TAGS:
+            return ""
+        grid = OSD_POSITION_GRID.get(self._osd_position, 0)
+        return f"<P{grid}><L{OSD_LAYER_INDEX}>+"
 
     def install_rtss_silent(self) -> bool:
         """Tự động cài đặt RTSS ngầm qua winget hoặc tải bộ cài đặt chính thức"""
